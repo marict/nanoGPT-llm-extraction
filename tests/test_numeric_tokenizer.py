@@ -1,4 +1,8 @@
-from numeric_tokenizer import NumericTokenizer
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import numeric_tokenizer
+NumericTokenizer = numeric_tokenizer.NumericTokenizer
 
 
 def test_numeric_encoding():

@@ -2,6 +2,7 @@ import torch
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import dag_model
 from dag_model import (
     DAGGPT,
     DAGGPTConfig,
@@ -23,7 +24,7 @@ def test_dag_gpt_forward():
     assert dag_out.shape[-1] == config.n_embd
 
 
-def test_dag_node_growth_regression():
+def test_dag_node_growth_regression(monkeypatch):
     class DummyController(DAGController):
         def forward(self, nodes):
             input1 = nodes[-1]
@@ -31,6 +32,7 @@ def test_dag_node_growth_regression():
             op_weights = torch.tensor([1.0, 0.0])
             return input1, input2, op_weights
 
+    monkeypatch.setattr(dag_model, "op_funcs", dag_model.op_funcs[:2])
     dag = DifferentiableDAG(hidden_dim=4, num_ops=2, num_steps=2)
     dag.controller = DummyController(4, 2)
     out = dag([torch.ones(4)])
