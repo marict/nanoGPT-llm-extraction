@@ -1,0 +1,20 @@
+Q: 2+2?	A: 4
+Q: 3*5?	A: 15
+Q: 12/4?	A: 3
+Q: 2^3?	A: 8
+Q: sqrt(16)?	A: 4
+Q: derivative of x^2?	A: 2x
+Q: integral of 1/x dx?	A: ln|x| + C
+Q: limit of (x^2-4)/(x-2) as x->2?	A: 4
+Q: 7 choose 2?	A: 21
+Q: 0 factorial?	A: 1
+Q: solve for x: 2x+5=13?	A: x=4
+Q: area of circle with radius 3?	A: 9π
+Q: perimeter of square with side 5?	A: 20
+Q: 5th Fibonacci number?	A: 5
+Q: sin(π/2)?	A: 1
+Q: cos(0)?	A: 1
+Q: log base 10 of 1000?	A: 3
+Q: 150f 200?	A: 30
+Q: 9 * 9?	A: 81
+Q: convert 0.25 to fraction?	A: 1/4

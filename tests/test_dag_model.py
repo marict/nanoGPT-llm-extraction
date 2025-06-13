@@ -15,7 +15,7 @@ from dag_model import (
 
 
 def test_dag_gpt_forward():
-    config = DAGGPTConfig(vocab_size=20, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_steps=2)
+    config = DAGGPTConfig(vocab_size=20, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=2)
     model = DAGGPT(config)
     x = torch.randint(0, 20, (1, 4))
     binary = torch.zeros(1, 4, 33)
@@ -46,3 +46,16 @@ def test_op_functions():
     assert torch.allclose(multiply(x, y), x * y)
     assert torch.allclose(subtract(x, y), x - y)
     assert torch.allclose(divide(x, y), x / y)
+
+
+def test_dag_backward_flow():
+    config = DAGGPTConfig(vocab_size=20, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=2)
+    model = DAGGPT(config)
+    x = torch.randint(0, 20, (1, 4))
+    binary = torch.zeros(1, 4, 33)
+    _, _, dag_out = model(x, binary=binary)
+    loss = dag_out.sum()
+    loss.backward()
+    grad = model.dag.controller.op_selector.weight.grad
+    assert grad is not None
+    assert torch.any(grad != 0)
