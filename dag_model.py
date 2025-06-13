@@ -1,0 +1,107 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+# -----------------------------------------------------------------------------
+# Differentiable DAG components
+# -----------------------------------------------------------------------------
+
+
+def add(x, y):
+    return x + y
+
+
+def identity(x, _unused=None):
+    return x
+
+
+op_funcs = [add, identity]
+
+
+class DAGController(nn.Module):
+    """Selects inputs from previous nodes and operation via attention."""
+
+    def __init__(self, hidden_dim, num_ops):
+        super().__init__()
+        self.query_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.key_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.op_selector = nn.Linear(hidden_dim, num_ops)
+
+    def forward(self, nodes):
+        t = nodes.size(0)
+        query = self.query_proj(nodes[-1])
+        keys = self.key_proj(nodes[:-1])
+        att = torch.matmul(keys, query) / (nodes.size(1) ** 0.5)
+        attn = F.softmax(att, dim=0)
+        input1 = torch.sum(attn.unsqueeze(-1) * nodes[:-1], dim=0)
+        input2 = input1.clone()
+        op_logits = self.op_selector(input1)
+        op_weights = F.softmax(op_logits, dim=0)
+        return input1, input2, op_weights
+
+
+class DifferentiableDAG(nn.Module):
+    """Engine that grows a differentiable DAG of intermediate nodes."""
+
+    def __init__(self, hidden_dim, num_ops, num_steps):
+        super().__init__()
+        self.num_steps = num_steps
+        self.controller = DAGController(hidden_dim, num_ops)
+
+    def forward(self, initial_nodes):
+        nodes = [n for n in initial_nodes]
+        for _ in range(self.num_steps):
+            node_tensor = torch.stack(nodes)
+            input1, input2, op_weights = self.controller(node_tensor)
+            results = []
+            for i, op in enumerate(op_funcs):
+                out = op(input1, input2 if i == 0 else None)
+                results.append(op_weights[i] * out)
+            new_node = sum(results)
+            nodes.append(new_node)
+        return torch.stack(nodes)
+
+
+# -----------------------------------------------------------------------------
+# GPT wrapper with DAG
+# -----------------------------------------------------------------------------
+from dataclasses import dataclass
+from model import GPT, GPTConfig
+from binary_embedding import BinaryAwareEmbedding
+
+
+@dataclass
+class DAGGPTConfig(GPTConfig):
+    dag_steps: int = 4
+    dag_hidden_dim: int = 16
+    dag_num_ops: int = 2
+
+
+class DAGGPT(GPT):
+    """GPT model augmented with differentiable DAG reasoning."""
+
+    def __init__(self, config: DAGGPTConfig):
+        super().__init__(config)
+        # replace the token embedding with binary-aware embedding
+        self.transformer.wte = BinaryAwareEmbedding(config.vocab_size, config.n_embd)
+        self.transformer.wte.apply(self._init_weights)
+        self.dag = DifferentiableDAG(config.n_embd, config.dag_num_ops, config.dag_steps)
+
+    def forward(self, idx, binary=None, targets=None):
+        if binary is None:
+            binary = torch.zeros(idx.size(0), idx.size(1), 9, device=idx.device)
+        device = idx.device
+        b, t = idx.size()
+        pos = torch.arange(0, t, dtype=torch.long, device=device)
+        tok_emb = self.transformer.wte(idx, binary)
+        pos_emb = self.transformer.wpe(pos)
+        x = self.transformer.drop(tok_emb + pos_emb)
+        for block in self.transformer.h:
+            x = block(x)
+        hidden = self.transformer.ln_f(x)
+        logits = self.lm_head(hidden)
+        loss = None
+        last_hidden = hidden[:, -1, :].squeeze(0)
+        dag_nodes = self.dag([last_hidden, last_hidden])
+        dag_output = dag_nodes[-1]
+        return logits, loss, dag_output
