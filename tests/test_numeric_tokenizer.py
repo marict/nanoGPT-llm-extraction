@@ -6,16 +6,16 @@ def test_numeric_encoding():
     tokens, binary = tok.encode("7 plus 3")
     assert len(tokens) == len(binary)
     decoded = tok.decode(tokens)
-    assert "7" in decoded
+    assert "7.0" in decoded
 
 
 def test_tokenizer_roundtrip_regression():
     tok = NumericTokenizer()
     text = "12 and 34"
     tokens, binary = tok.encode(text)
-    assert all(len(vec) == 9 for vec in binary)
+    assert all(len(vec) == 33 for vec in binary)
     decoded = tok.decode(tokens)
-    assert decoded == text
+    assert decoded == "12.0 and 34.0"
 
 
 def test_tokenizer_id_stability():

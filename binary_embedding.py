@@ -5,7 +5,7 @@ import torch.nn as nn
 class BinaryAwareEmbedding(nn.Module):
     """Embedding that appends numeric tag information."""
 
-    def __init__(self, vocab_size: int, embed_dim: int, binary_dim: int = 8):
+    def __init__(self, vocab_size: int, embed_dim: int, binary_dim: int = 32):
         super().__init__()
         self.vocab_size = vocab_size
         self.embed_dim = embed_dim

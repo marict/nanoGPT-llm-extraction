@@ -11,11 +11,23 @@ def add(x, y):
     return x + y
 
 
+def multiply(x, y):
+    return x * y
+
+
+def subtract(x, y):
+    return x - y
+
+
+def divide(x, y, eps: float = 1e-8):
+    return x / (y + eps)
+
+
 def identity(x, _unused=None):
     return x
 
 
-op_funcs = [add, identity]
+op_funcs = [add, identity, multiply, subtract, divide]
 
 
 class DAGController(nn.Module):
@@ -55,7 +67,7 @@ class DifferentiableDAG(nn.Module):
             input1, input2, op_weights = self.controller(node_tensor)
             results = []
             for i, op in enumerate(op_funcs):
-                out = op(input1, input2 if i == 0 else None)
+                out = op(input1, input2)
                 results.append(op_weights[i] * out)
             new_node = sum(results)
             nodes.append(new_node)
@@ -74,7 +86,7 @@ from binary_embedding import BinaryAwareEmbedding
 class DAGGPTConfig(GPTConfig):
     dag_steps: int = 4
     dag_hidden_dim: int = 16
-    dag_num_ops: int = 2
+    dag_num_ops: int = 5
 
 
 class DAGGPT(GPT):
@@ -89,7 +101,7 @@ class DAGGPT(GPT):
 
     def forward(self, idx, binary=None, targets=None):
         if binary is None:
-            binary = torch.zeros(idx.size(0), idx.size(1), 9, device=idx.device)
+            binary = torch.zeros(idx.size(0), idx.size(1), 33, device=idx.device)
         device = idx.device
         b, t = idx.size()
         pos = torch.arange(0, t, dtype=torch.long, device=device)
