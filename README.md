@@ -225,3 +225,39 @@ For more questions/discussions feel free to stop by **#nanoGPT** on Discord:
 ## acknowledgements
 
 All nanoGPT experiments are powered by GPUs on [Lambda labs](https://lambdalabs.com), my favorite Cloud GPU provider. Thank you Lambda labs for sponsoring nanoGPT!
+
+## RunPod cloud jobs
+
+RunPod offers cheap and fast GPUs for training and inference. First install the
+`runpod` Python package:
+
+```sh
+pip install runpod
+```
+
+Set your API key as an environment variable:
+
+```sh
+export RUNPOD_API_KEY="<your key>"
+```
+
+### Training
+
+Launch a training pod with a config file:
+
+```sh
+python runpod_service.py train config/my_config.py
+```
+
+Use `--gpu` to choose a GPU type id if you want something other than the default
+NVIDIA A100.
+
+### Inference
+
+Once you deploy an inference endpoint on RunPod, run:
+
+```sh
+python runpod_service.py infer "Hello" --endpoint <ENDPOINT_ID>
+```
+
+If `--endpoint` is omitted, the script reads `RUNPOD_ENDPOINT_ID`.
