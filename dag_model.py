@@ -84,7 +84,7 @@ from binary_embedding import BinaryAwareEmbedding
 
 @dataclass
 class DAGGPTConfig(GPTConfig):
-    dag_steps: int = 4
+    dag_depth: int = 4
     dag_hidden_dim: int = 16
     dag_num_ops: int = 5
 
@@ -97,7 +97,7 @@ class DAGGPT(GPT):
         # replace the token embedding with binary-aware embedding
         self.transformer.wte = BinaryAwareEmbedding(config.vocab_size, config.n_embd)
         self.transformer.wte.apply(self._init_weights)
-        self.dag = DifferentiableDAG(config.n_embd, config.dag_num_ops, config.dag_steps)
+        self.dag = DifferentiableDAG(config.n_embd, config.dag_num_ops, config.dag_depth)
 
     def forward(self, idx, binary=None, targets=None):
         if binary is None:
