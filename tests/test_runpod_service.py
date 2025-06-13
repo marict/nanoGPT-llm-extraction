@@ -1,6 +1,9 @@
 import types
 import os
 import sys
+import pytest
+
+runpod = pytest.importorskip("runpod", reason="runpod package required")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import runpod_service as rp
