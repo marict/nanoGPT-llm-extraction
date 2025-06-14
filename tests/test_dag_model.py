@@ -12,11 +12,17 @@ from dag_model import (
     subtract,
     divide,
 )
+import pytest
 
 
-def test_dag_gpt_forward():
+@pytest.fixture(scope="module")
+def small_dag_gpt():
     config = DAGGPTConfig(vocab_size=20, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=2)
-    model = DAGGPT(config)
+    return DAGGPT(config), config
+
+
+def test_dag_gpt_forward(small_dag_gpt):
+    model, config = small_dag_gpt
     x = torch.randint(0, 20, (1, 4))
     binary = torch.zeros(1, 4, 33)
     logits, loss, dag_out = model(x, binary=binary)
@@ -48,9 +54,8 @@ def test_op_functions():
     assert torch.allclose(divide(x, y), x / y)
 
 
-def test_dag_backward_flow():
-    config = DAGGPTConfig(vocab_size=20, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=2)
-    model = DAGGPT(config)
+def test_dag_backward_flow(small_dag_gpt):
+    model, _ = small_dag_gpt
     x = torch.randint(0, 20, (1, 4))
     binary = torch.zeros(1, 4, 33)
     _, _, dag_out = model(x, binary=binary)
