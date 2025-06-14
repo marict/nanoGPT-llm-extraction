@@ -124,7 +124,7 @@ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.4
 
 It is a good idea to benchmark your interconnect (e.g. iperf3). In particular, if you don't have Infiniband then also prepend `NCCL_IB_DISABLE=1` to the above launches. Your multinode training will work, but most likely _crawl_. By default checkpoints are periodically written to the `--out_dir`. We can sample from the model by simply `python sample.py`.
 
-Finally, to train on a single GPU simply run the `python train.py` script. Have a look at all of its args, the script tries to be very readable, hackable and transparent. You'll most likely want to tune a number of those variables depending on your needs.
+Finally, to train on a single GPU simply run the `python train.py` script. When no configuration file is supplied it defaults to `config/train_default.py`. Have a look at all of its args, the script tries to be very readable, hackable and transparent. You'll most likely want to tune a number of those variables depending on your needs.
 
 ## baselines
 
@@ -252,7 +252,14 @@ export RUNPOD_API_KEY="<your key>"
 Launch a training pod with the default config:
 
 ```sh
-python runpod_service.py train config/train_chatgpt2.py
+python runpod_service.py train config/train_default.py
+```
+
+Or simply use `train.py` with `--use-runpod`. Any extra arguments are forwarded
+to the cloud job. Without a config argument this uses `config/train_default.py`:
+
+```sh
+python train.py --use-runpod --dag-depth 4
 ```
 
 Use `--gpu` to choose a GPU type id if you want something other than the default

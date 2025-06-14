@@ -11,11 +11,11 @@ class RunpodError(Exception):
     """Custom exception for RunPod operations."""
 
 
-def start_cloud_training(config_path: str, gpu_type: str = DEFAULT_GPU) -> str:
+def start_cloud_training(train_args: str, gpu_type: str = DEFAULT_GPU) -> str:
     """Launch a training job on RunPod and stream status to the console.
 
     Args:
-        config_path: Path to the training config file.
+        train_args: Arguments to pass to ``train.py`` in the pod.
         gpu_type: GPU type to request.
 
     Returns:
@@ -33,7 +33,7 @@ def start_cloud_training(config_path: str, gpu_type: str = DEFAULT_GPU) -> str:
         gpu_type_id=gpu_type,
         gpu_count=1,
         start_ssh=True,
-        docker_args=f"python train.py {config_path}",
+        docker_args=f"python train.py {train_args}",
     )
     pod_id = pod.get("id")
     if not pod_id:
