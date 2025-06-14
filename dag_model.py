@@ -42,7 +42,7 @@ class DAGController(nn.Module):
         self.last_op_weights: torch.Tensor | None = None
 
     def forward(self, nodes):
-        t = nodes.size(0)
+        """Select two inputs and operation weights for the next DAG node."""
         query = self.query_proj(nodes[-1])
         keys = self.key_proj(nodes[:-1])
         att = torch.matmul(keys, query) / (nodes.size(1) ** 0.5)
@@ -65,6 +65,12 @@ class DifferentiableDAG(nn.Module):
         self.controller = DAGController(hidden_dim, num_ops)
 
     def forward(self, initial_nodes, return_info: bool = False):
+        """Build the DAG and return all nodes.
+
+        Args:
+            initial_nodes: List of starting tensors.
+            return_info: If True, also return attention and op weight history.
+        """
         nodes = [n for n in initial_nodes]
         attn_history = []
         op_history = []
@@ -112,6 +118,7 @@ class DAGGPT(GPT):
         self.dag = DifferentiableDAG(config.n_embd, config.dag_num_ops, config.dag_depth)
 
     def forward(self, idx, binary=None, targets=None, return_dag_info: bool = False):
+        """Run the model and optionally return DAG attention info."""
         if binary is None:
             binary = torch.zeros(idx.size(0), idx.size(1), 33, device=idx.device)
         device = idx.device

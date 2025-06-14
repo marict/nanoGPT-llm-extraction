@@ -2,11 +2,6 @@ import os
 import time
 from typing import Sequence
 
-import torch
-import matplotlib.pyplot as plt
-
-from numeric_tokenizer import NumericTokenizer
-from dag_model import DAGGPT
 runpod = None
 
 
@@ -89,8 +84,8 @@ def run_inference(prompt: str, endpoint_id: str | None = None):
 
 
 def visualize_dag_attention(
-    model: DAGGPT,
-    tokenizer: NumericTokenizer,
+    model,
+    tokenizer,
     prompt: str,
     save_path: str = "dag_attention.png",
 ):
@@ -106,12 +101,22 @@ def visualize_dag_attention(
         The path to the saved image.
     """
 
+    import torch
+    import matplotlib.pyplot as plt
+    from dag_model import DAGGPT
+    from numeric_tokenizer import NumericTokenizer
+
+    if not isinstance(model, DAGGPT):
+        raise TypeError("model must be DAGGPT")
+    if not isinstance(tokenizer, NumericTokenizer):
+        raise TypeError("tokenizer must be NumericTokenizer")
+
     tokens, binary = tokenizer.encode(prompt)
     x = torch.tensor(tokens).unsqueeze(0)
     b = torch.tensor(binary).unsqueeze(0)
     model.eval()
     with torch.no_grad():
-        logits, _, _, dag_info = model(x, binary=b, return_dag_info=True)
+        _, _, _, dag_info = model(x, binary=b, return_dag_info=True)
 
     attn_history: Sequence[torch.Tensor] = dag_info["attn"]
     max_len = max(t.numel() for t in attn_history)
