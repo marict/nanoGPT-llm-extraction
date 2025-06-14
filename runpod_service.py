@@ -1,6 +1,15 @@
 import os
 import time
-import runpod
+runpod = None
+
+
+def _get_runpod():
+    """Lazy import for the ``runpod`` module."""
+    global runpod
+    if runpod is None:
+        import runpod as rp_mod  # type: ignore
+        runpod = rp_mod
+    return runpod
 
 
 DEFAULT_IMAGE = "runpod/pytorch:2.2.1-cuda12.1-devel"
@@ -25,9 +34,10 @@ def start_cloud_training(train_args: str, gpu_type: str = DEFAULT_GPU) -> str:
     if not api_key:
         raise RunpodError("RUNPOD_API_KEY environment variable is required")
 
-    runpod.api_key = api_key
+    rp = _get_runpod()
+    rp.api_key = api_key
 
-    pod = runpod.create_pod(
+    pod = rp.create_pod(
         name="nanogpt-training",
         image_name=DEFAULT_IMAGE,
         gpu_type_id=gpu_type,
@@ -42,7 +52,7 @@ def start_cloud_training(train_args: str, gpu_type: str = DEFAULT_GPU) -> str:
     print(f"Created pod {pod_id}")
 
     while True:
-        info = runpod.get_pod(pod_id)
+        info = rp.get_pod(pod_id)
         status = info.get("desiredStatus") or info.get("podStatus") or info.get("state")
         print(f"Training status: {status}")
         if status in {"COMPLETED", "STOPPED", "FAILED", "TERMINATED"}:
@@ -62,8 +72,9 @@ def run_inference(prompt: str, endpoint_id: str | None = None):
     if not api_key:
         raise RunpodError("RUNPOD_API_KEY environment variable is required")
 
-    runpod.api_key = api_key
-    endpoint = runpod.Endpoint(endpoint_id)
+    rp = _get_runpod()
+    rp.api_key = api_key
+    endpoint = rp.Endpoint(endpoint_id)
     result = endpoint.run_sync({"input": prompt})
     output = result.get("output", result)
     print(output)
