@@ -1,5 +1,12 @@
 import os
 import time
+from typing import Sequence
+
+import torch
+import matplotlib.pyplot as plt
+
+from numeric_tokenizer import NumericTokenizer
+from dag_model import DAGGPT
 runpod = None
 
 
@@ -79,6 +86,49 @@ def run_inference(prompt: str, endpoint_id: str | None = None):
     output = result.get("output", result)
     print(output)
     return output
+
+
+def visualize_dag_attention(
+    model: DAGGPT,
+    tokenizer: NumericTokenizer,
+    prompt: str,
+    save_path: str = "dag_attention.png",
+):
+    """Run ``model`` on ``prompt`` and save a DAG attention heatmap.
+
+    Args:
+        model: ``DAGGPT`` instance to run.
+        tokenizer: Tokenizer used to encode the prompt.
+        prompt: Input text to the model.
+        save_path: Where to save the generated plot.
+
+    Returns:
+        The path to the saved image.
+    """
+
+    tokens, binary = tokenizer.encode(prompt)
+    x = torch.tensor(tokens).unsqueeze(0)
+    b = torch.tensor(binary).unsqueeze(0)
+    model.eval()
+    with torch.no_grad():
+        logits, _, _, dag_info = model(x, binary=b, return_dag_info=True)
+
+    attn_history: Sequence[torch.Tensor] = dag_info["attn"]
+    max_len = max(t.numel() for t in attn_history)
+    mat = torch.zeros(len(attn_history), max_len)
+    for i, att in enumerate(attn_history):
+        mat[i, : att.numel()] = att
+
+    fig, ax = plt.subplots()
+    im = ax.imshow(mat.numpy(), aspect="auto", cmap="viridis")
+    ax.set_xlabel("Node")
+    ax.set_ylabel("DAG Step")
+    plt.colorbar(im, ax=ax)
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close(fig)
+    print(f"Saved DAG attention visualization to {save_path}")
+    return save_path
 
 
 if __name__ == "__main__":

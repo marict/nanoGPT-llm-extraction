@@ -38,6 +38,8 @@ class DAGController(nn.Module):
         self.query_proj = nn.Linear(hidden_dim, hidden_dim)
         self.key_proj = nn.Linear(hidden_dim, hidden_dim)
         self.op_selector = nn.Linear(hidden_dim, num_ops)
+        self.last_attn: torch.Tensor | None = None
+        self.last_op_weights: torch.Tensor | None = None
 
     def forward(self, nodes):
         t = nodes.size(0)
@@ -49,6 +51,8 @@ class DAGController(nn.Module):
         input2 = input1.clone()
         op_logits = self.op_selector(input1)
         op_weights = F.softmax(op_logits, dim=0)
+        self.last_attn = attn.detach()
+        self.last_op_weights = op_weights.detach()
         return input1, input2, op_weights
 
 
@@ -60,18 +64,26 @@ class DifferentiableDAG(nn.Module):
         self.num_steps = num_steps
         self.controller = DAGController(hidden_dim, num_ops)
 
-    def forward(self, initial_nodes):
+    def forward(self, initial_nodes, return_info: bool = False):
         nodes = [n for n in initial_nodes]
+        attn_history = []
+        op_history = []
         for _ in range(self.num_steps):
             node_tensor = torch.stack(nodes)
             input1, input2, op_weights = self.controller(node_tensor)
+            if return_info:
+                attn_history.append(self.controller.last_attn)
+                op_history.append(self.controller.last_op_weights)
             results = []
             for i, op in enumerate(op_funcs):
                 out = op(input1, input2)
                 results.append(op_weights[i] * out)
             new_node = sum(results)
             nodes.append(new_node)
-        return torch.stack(nodes)
+        stacked = torch.stack(nodes)
+        if return_info:
+            return stacked, attn_history, op_history
+        return stacked
 
 
 # -----------------------------------------------------------------------------
@@ -99,7 +111,7 @@ class DAGGPT(GPT):
         self.transformer.wte.apply(self._init_weights)
         self.dag = DifferentiableDAG(config.n_embd, config.dag_num_ops, config.dag_depth)
 
-    def forward(self, idx, binary=None, targets=None):
+    def forward(self, idx, binary=None, targets=None, return_dag_info: bool = False):
         if binary is None:
             binary = torch.zeros(idx.size(0), idx.size(1), 33, device=idx.device)
         device = idx.device
@@ -114,6 +126,13 @@ class DAGGPT(GPT):
         logits = self.lm_head(hidden)
         loss = None
         last_hidden = hidden[:, -1, :].squeeze(0)
-        dag_nodes = self.dag([last_hidden, last_hidden])
+        dag_result = self.dag([last_hidden, last_hidden], return_info=return_dag_info)
+        if return_dag_info:
+            dag_nodes, attn_hist, op_hist = dag_result
+        else:
+            dag_nodes = dag_result
+            attn_hist = op_hist = None
         dag_output = dag_nodes[-1]
+        if return_dag_info:
+            return logits, loss, dag_output, {"attn": attn_hist, "op": op_hist}
         return logits, loss, dag_output
