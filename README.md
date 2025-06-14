@@ -108,7 +108,7 @@ python data/openwebtext/prepare.py
 This downloads and tokenizes the [OpenWebText](https://huggingface.co/datasets/openwebtext) dataset. It will create a `train.bin` and `val.bin` which holds the GPT2 BPE token ids in one sequence, stored as raw uint16 bytes. Then we're ready to kick off training. To reproduce GPT-2 (124M) you'll want at least an 8X A100 40GB node and run:
 
 ```sh
-torchrun --standalone --nproc_per_node=8 train.py config/train_gpt2.py
+torchrun --standalone --nproc_per_node=8 train.py config/train_chatgpt2.py
 ```
 
 This will run for about 4 days using PyTorch Distributed Data Parallel (DDP) and go down to loss of ~2.85. Now, a GPT-2 model just evaluated on OWT gets a val loss of about 3.11, but if you finetune it it will come down to ~2.85 territory (due to an apparent domain gap), making the two models ~match.
@@ -235,7 +235,13 @@ RunPod offers cheap and fast GPUs for training and inference. First install the
 pip install runpod
 ```
 
-Set your API key as an environment variable:
+Set your API key as an environment variable. You can do this manually or run the helper script:
+
+```sh
+bash scripts/runpod_setup.sh <RUNPOD_API_KEY>
+```
+
+Or set it yourself:
 
 ```sh
 export RUNPOD_API_KEY="<your key>"
@@ -243,10 +249,10 @@ export RUNPOD_API_KEY="<your key>"
 
 ### Training
 
-Launch a training pod with a config file:
+Launch a training pod with the default config:
 
 ```sh
-python runpod_service.py train config/my_config.py
+python runpod_service.py train config/train_chatgpt2.py
 ```
 
 Use `--gpu` to choose a GPU type id if you want something other than the default
@@ -261,3 +267,5 @@ python runpod_service.py infer "Hello" --endpoint <ENDPOINT_ID>
 ```
 
 If `--endpoint` is omitted, the script reads `RUNPOD_ENDPOINT_ID`.
+
+For additional help with RunPod, visit <https://www.runpod.io> or email `support@runpod.io`.

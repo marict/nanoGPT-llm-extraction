@@ -55,3 +55,32 @@ def test_start_cloud_training(monkeypatch):
     pod_id = rp.start_cloud_training("config.py")
     assert pod_id == "pod123"
     assert "docker_args" in created and "config.py" in created["docker_args"]
+
+
+def test_start_cloud_training_default_config(monkeypatch):
+    created = {}
+
+    def fake_create_pod(**kwargs):
+        created.update(kwargs)
+        return {"id": "pod123"}
+
+    statuses = [{"state": "STARTING"}, {"state": "STOPPED"}]
+
+    def fake_get_pod(pod_id):
+        return statuses.pop(0)
+
+    monkeypatch.setenv("RUNPOD_API_KEY", "key")
+    monkeypatch.setattr(
+        rp,
+        "runpod",
+        types.SimpleNamespace(
+            create_pod=fake_create_pod,
+            get_pod=fake_get_pod,
+            Endpoint=None,
+            api_key=None,
+        ),
+    )
+    monkeypatch.setattr(rp.time, "sleep", lambda x: None)
+    pod_id = rp.start_cloud_training("config/train_chatgpt2.py")
+    assert pod_id == "pod123"
+    assert "config/train_chatgpt2.py" in created.get("docker_args", "")
