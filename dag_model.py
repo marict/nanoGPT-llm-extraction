@@ -41,16 +41,20 @@ class DAGController(nn.Module):
         self.last_attn: torch.Tensor | None = None
         self.last_op_weights: torch.Tensor | None = None
 
-    def forward(self, nodes):
-        """Select two inputs and operation weights for the next DAG node."""
-        query = self.query_proj(nodes[-1])
-        keys = self.key_proj(nodes[:-1])
-        att = torch.matmul(keys, query) / (nodes.size(1) ** 0.5)
-        attn = F.softmax(att, dim=0)
-        input1 = torch.sum(attn.unsqueeze(-1) * nodes[:-1], dim=0)
+    def forward(self, nodes: torch.Tensor):
+        """Select two inputs and operation weights for the next DAG node.
+
+        Args:
+            nodes: Tensor of shape ``(batch, num_nodes, hidden_dim)``.
+        """
+        query = self.query_proj(nodes[:, -1, :])
+        keys = self.key_proj(nodes[:, :-1, :])
+        att = torch.einsum("bij,bj->bi", keys, query) / (nodes.size(-1) ** 0.5)
+        attn = F.softmax(att, dim=1)
+        input1 = torch.sum(attn.unsqueeze(-1) * nodes[:, :-1, :], dim=1)
         input2 = input1.clone()
         op_logits = self.op_selector(input1)
-        op_weights = F.softmax(op_logits, dim=0)
+        op_weights = F.softmax(op_logits, dim=-1)
         self.last_attn = attn.detach()
         self.last_op_weights = op_weights.detach()
         return input1, input2, op_weights
@@ -68,14 +72,14 @@ class DifferentiableDAG(nn.Module):
         """Build the DAG and return all nodes.
 
         Args:
-            initial_nodes: List of starting tensors.
+            initial_nodes: Sequence of ``(batch, hidden_dim)`` tensors.
             return_info: If True, also return attention and op weight history.
         """
         nodes = [n for n in initial_nodes]
         attn_history = []
         op_history = []
         for _ in range(self.num_steps):
-            node_tensor = torch.stack(nodes)
+            node_tensor = torch.stack(nodes, dim=1)
             input1, input2, op_weights = self.controller(node_tensor)
             if return_info:
                 attn_history.append(self.controller.last_attn)
@@ -83,10 +87,10 @@ class DifferentiableDAG(nn.Module):
             results = []
             for i, op in enumerate(op_funcs):
                 out = op(input1, input2)
-                results.append(op_weights[i] * out)
+                results.append(op_weights[:, i].unsqueeze(-1) * out)
             new_node = sum(results)
             nodes.append(new_node)
-        stacked = torch.stack(nodes)
+        stacked = torch.stack(nodes, dim=1)
         if return_info:
             return stacked, attn_history, op_history
         return stacked
@@ -132,14 +136,14 @@ class DAGGPT(GPT):
         hidden = self.transformer.ln_f(x)
         logits = self.lm_head(hidden)
         loss = None
-        last_hidden = hidden[:, -1, :].squeeze(0)
+        last_hidden = hidden[:, -1, :]
         dag_result = self.dag([last_hidden, last_hidden], return_info=return_dag_info)
         if return_dag_info:
             dag_nodes, attn_hist, op_hist = dag_result
         else:
             dag_nodes = dag_result
             attn_hist = op_hist = None
-        dag_output = dag_nodes[-1]
+        dag_output = dag_nodes[:, -1, :]
         if return_dag_info:
             return logits, loss, dag_output, {"attn": attn_hist, "op": op_hist}
         return logits, loss, dag_output

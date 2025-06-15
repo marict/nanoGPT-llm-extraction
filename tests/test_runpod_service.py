@@ -92,10 +92,10 @@ def test_visualize_dag_attention(tmp_path):
 
     class DummyController(DAGController):
         def forward(self, nodes):
-            self.last_attn = torch.tensor([1.0, 0.0])
-            input1 = nodes[0]
-            input2 = nodes[1]
-            self.last_op_weights = torch.tensor([0.0, 0.0, 1.0, 0.0, 0.0])
+            self.last_attn = torch.tensor([[1.0, 0.0]])
+            input1 = nodes[:, 0, :]
+            input2 = nodes[:, 1, :]
+            self.last_op_weights = torch.tensor([[0.0, 0.0, 1.0, 0.0, 0.0]])
             return input1, input2, self.last_op_weights
 
     tok = NumericTokenizer()
@@ -114,6 +114,6 @@ def test_visualize_dag_attention(tmp_path):
     out_path = tmp_path / "viz.png"
     result = rp.visualize_dag_attention(model, tok, prompt, save_path=str(out_path))
     assert os.path.exists(result)
-    assert torch.allclose(model.dag.controller.last_attn, torch.tensor([1.0, 0.0]))
+    assert torch.allclose(model.dag.controller.last_attn.squeeze(), torch.tensor([1.0, 0.0]))
     assert torch.argmax(model.dag.controller.last_op_weights).item() == 2
 
