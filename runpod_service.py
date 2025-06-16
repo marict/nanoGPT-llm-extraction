@@ -104,19 +104,15 @@ def visualize_dag_attention(
     import torch
     import matplotlib.pyplot as plt
     from dag_model import DAGGPT
-    from numeric_tokenizer import NumericTokenizer
 
     if not isinstance(model, DAGGPT):
         raise TypeError("model must be DAGGPT")
-    if not isinstance(tokenizer, NumericTokenizer):
-        raise TypeError("tokenizer must be NumericTokenizer")
 
-    tokens, binary = tokenizer.encode(prompt)
+    tokens = tokenizer.encode(prompt)
     x = torch.tensor(tokens).unsqueeze(0)
-    b = torch.tensor(binary).unsqueeze(0)
     model.eval()
     with torch.no_grad():
-        _, _, _, dag_info = model(x, binary=b, return_dag_info=True)
+        _, _, _, dag_info = model(x, return_dag_info=True)
 
     attn_history: Sequence[torch.Tensor] = dag_info["attn"]
     max_len = max(t.numel() for t in attn_history)

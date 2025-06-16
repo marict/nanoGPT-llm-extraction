@@ -11,7 +11,6 @@ from dag_model import (
     DAGGPTConfig,
     DifferentiableDAG,
     DAGController,
-    binary_to_float,
     multiply,
     subtract,
     divide,
@@ -28,8 +27,7 @@ def small_dag_gpt():
 def test_dag_gpt_forward(small_dag_gpt):
     model, config = small_dag_gpt
     x = torch.randint(0, 20, (2, 4))
-    binary = torch.zeros(2, 4, 33)
-    logits, loss, dag_out = model(x, binary=binary)
+    logits, loss, dag_out = model(x)
     assert logits.shape == (2, 4, 20)
     assert dag_out.shape == (2, config.n_embd)
 
@@ -61,62 +59,20 @@ def test_op_functions():
 def test_dag_backward_flow(small_dag_gpt):
     model, _ = small_dag_gpt
     x = torch.randint(0, 20, (2, 4))
-    binary = torch.zeros(2, 4, 33)
-    _, _, dag_out = model(x, binary=binary)
+    _, _, dag_out = model(x)
     loss = dag_out.sum()
     loss.backward()
     grad = model.dag.controller.op_selector.weight.grad
     assert grad is not None
 
 
-def test_predict_number(monkeypatch):
-    from numeric_tokenizer import NumericTokenizer
-
-    tok = NumericTokenizer()
-    tokens, binary = tok.encode("7")
-
-    cfg = DAGGPTConfig(
-        vocab_size=tok.next_id,
-        block_size=len(tokens),
-        n_layer=1,
-        n_head=1,
-        n_embd=8,
-        dag_depth=1,
-    )
-    model = DAGGPT(cfg)
-
-    class DummyHead(nn.Module):
-        def __init__(self, token_id, vocab_size):
-            super().__init__()
-            self.token_id = token_id
-            self.vocab_size = vocab_size
-
-        def forward(self, x):
-            b = x.size(0)
-            logits = torch.zeros(b, self.vocab_size)
-            logits[:, self.token_id] = 5.0
-            return logits
-
-    model.lm_head = DummyHead(tokens[0], cfg.vocab_size)
-
-    number = model.predict_number(
-        torch.tensor(tokens).unsqueeze(0),
-        binary=torch.tensor(binary).unsqueeze(0),
-        tokenizer=tok,
-    )
-
-    assert number == 7.0
 
 
 def test_dag_initial_nodes_all_tokens(monkeypatch):
-    from numeric_tokenizer import NumericTokenizer
-
-    tok = NumericTokenizer()
-    text = "the cat was 10 years old"
-    tokens, binary = tok.encode(text)
+    tokens = [0, 1, 2, 3]
 
     cfg = DAGGPTConfig(
-        vocab_size=tok.next_id,
+        vocab_size=10,
         block_size=len(tokens),
         n_layer=1,
         n_head=1,
@@ -146,30 +102,21 @@ def test_dag_initial_nodes_all_tokens(monkeypatch):
     monkeypatch.setattr(DifferentiableDAG, "forward", capture_forward)
 
     x = torch.tensor(tokens).unsqueeze(0)
-    b = torch.tensor(binary).unsqueeze(0)
-    model(x, binary=b)
+    model(x)
 
     assert "nodes" in captured
     init_nodes = captured["nodes"]
     assert len(init_nodes) == len(tokens)
-    numeric_vals = torch.tensor([
-        binary_to_float(torch.tensor(bits[:32])) if bits[-1] == 1.0 else 3.0
-        for bits in binary
-    ])
-    expected = numeric_vals.unsqueeze(-1).expand(len(tokens), 8)
+    expected = torch.full((len(tokens), 8), 3.0)
     for node, exp in zip(init_nodes, expected):
         assert torch.allclose(node.squeeze(0), exp)
 
 
 def test_dag_attention_for_non_numeric(monkeypatch):
-    from numeric_tokenizer import NumericTokenizer
-
-    tok = NumericTokenizer()
-    text = "hello 5"
-    tokens, binary = tok.encode(text)
+    tokens = [5, 6, 7]
 
     cfg = DAGGPTConfig(
-        vocab_size=tok.next_id,
+        vocab_size=10,
         block_size=len(tokens),
         n_layer=1,
         n_head=1,
@@ -200,28 +147,24 @@ def test_dag_attention_for_non_numeric(monkeypatch):
     monkeypatch.setattr(DifferentiableDAG, "forward", capture_forward)
 
     x = torch.tensor(tokens).unsqueeze(0)
-    b = torch.tensor(binary).unsqueeze(0)
-    model(x, binary=b)
+    model(x)
 
     init_nodes = captured["nodes"]
     assert len(init_nodes) == len(tokens)
     expected0 = torch.full((8,), 1.0)
     expected1 = torch.full((8,), 2.0)
-    expected2 = torch.full((8,), binary_to_float(torch.tensor(binary[2][:32])))
+    expected2 = torch.full((8,), 3.0)
     assert torch.allclose(init_nodes[0].squeeze(0), expected0)
     assert torch.allclose(init_nodes[1].squeeze(0), expected1)
     assert torch.allclose(init_nodes[2].squeeze(0), expected2)
 
 
 def test_zero_padding_single_token(monkeypatch):
-    from numeric_tokenizer import NumericTokenizer
-
-    tok = NumericTokenizer()
-    tokens, binary = tok.encode("7")
+    tokens = [7]
     assert len(tokens) == 1
 
     cfg = DAGGPTConfig(
-        vocab_size=tok.next_id,
+        vocab_size=10,
         block_size=len(tokens),
         n_layer=1,
         n_head=1,
@@ -240,11 +183,25 @@ def test_zero_padding_single_token(monkeypatch):
     monkeypatch.setattr(DifferentiableDAG, "forward", capture_forward)
 
     x = torch.tensor(tokens).unsqueeze(0)
-    b = torch.tensor(binary).unsqueeze(0)
-    model(x, binary=b)
+    model(x)
 
     init_nodes = captured["nodes"]
     assert len(init_nodes) == 2
-    expected_val = torch.full((8,), binary_to_float(torch.tensor(binary[0][:32])))
-    assert torch.allclose(init_nodes[0].squeeze(0), expected_val)
-    assert torch.allclose(init_nodes[1].squeeze(0), torch.zeros(8))
+    assert init_nodes[1].squeeze(0).abs().sum() == 0
+
+
+def test_post_dag_block_called(monkeypatch):
+    cfg = DAGGPTConfig(vocab_size=10, block_size=2, n_layer=1, n_head=1, n_embd=8, dag_depth=1)
+    model = DAGGPT(cfg)
+
+    called = {}
+
+    def fake_forward(self, x):
+        called["used"] = True
+        return x
+
+    monkeypatch.setattr(model.post_dag_block, "forward", fake_forward.__get__(model.post_dag_block, type(model.post_dag_block)))
+
+    x = torch.randint(0, 10, (1, 2))
+    model(x)
+    assert called.get("used")

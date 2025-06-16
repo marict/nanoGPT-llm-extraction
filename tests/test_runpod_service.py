@@ -88,7 +88,6 @@ def test_start_cloud_training_default_config(monkeypatch):
 
 def test_visualize_dag_attention(tmp_path):
     from dag_model import DAGGPT, DAGGPTConfig, DAGController
-    from numeric_tokenizer import NumericTokenizer
     import torch
 
     class DummyController(DAGController):
@@ -99,11 +98,10 @@ def test_visualize_dag_attention(tmp_path):
             self.last_op_weights = torch.tensor([[0.0, 0.0, 1.0, 0.0, 0.0]])
             return input1, input2, self.last_op_weights
 
-    tok = NumericTokenizer()
     prompt = "2 3"
-    tokens, binary = tok.encode(prompt)
+    tokens = [2, 3]
     cfg = DAGGPTConfig(
-        vocab_size=tok.next_id,
+        vocab_size=10,
         block_size=len(tokens),
         n_layer=1,
         n_head=1,
@@ -113,7 +111,11 @@ def test_visualize_dag_attention(tmp_path):
     model = DAGGPT(cfg)
     model.dag.controller = DummyController(cfg.n_embd, cfg.dag_num_ops)
     out_path = tmp_path / "viz.png"
-    result = rp.visualize_dag_attention(model, tok, prompt, save_path=str(out_path))
+    class SimpleTokenizer:
+        def encode(self, text):
+            return tokens
+
+    result = rp.visualize_dag_attention(model, SimpleTokenizer(), prompt, save_path=str(out_path))
     assert Path(result).exists()
     assert torch.allclose(model.dag.controller.last_attn.squeeze(), torch.tensor([1.0, 0.0]))
     assert torch.argmax(model.dag.controller.last_op_weights).item() == 2
