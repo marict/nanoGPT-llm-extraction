@@ -1,5 +1,4 @@
 """Minimal CPU configuration used by default when running ``train.py``."""
-import torch
 
 # evaluate every step and run a single iteration by default
 out_dir = "out"
