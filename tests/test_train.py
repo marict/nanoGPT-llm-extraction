@@ -7,7 +7,11 @@ import pickle
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_train_script_runs(tmp_path: Path):
+import pytest
+
+
+@pytest.mark.parametrize("batch_size", [1, 2])
+def test_train_script_runs(tmp_path: Path, batch_size: int):
     """Run ``train.py`` on a tiny synthetic dataset to ensure the script works."""
     # Create a minimal dataset locally to avoid network downloads from prepare.py
     data_dir = tmp_path / "data" / "shakespeare_char"
@@ -44,7 +48,7 @@ def test_train_script_runs(tmp_path: Path):
         "--log_interval=1",
         "--max_iters=0",
         "--dataset=shakespeare_char",
-        "--batch_size=2",
+        f"--batch_size={batch_size}",
         "--n_layer=1",
         "--n_head=1",
         "--n_embd=32",
