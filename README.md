@@ -124,7 +124,13 @@ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.4
 
 It is a good idea to benchmark your interconnect (e.g. iperf3). In particular, if you don't have Infiniband then also prepend `NCCL_IB_DISABLE=1` to the above launches. Your multinode training will work, but most likely _crawl_. By default checkpoints are periodically written to the `--out_dir`. We can sample from the model by simply `python sample.py`.
 
-Finally, to train on a single GPU simply run the `python train.py` script. When no configuration file is supplied it defaults to `config/train_default.py`. Have a look at all of its args, the script tries to be very readable, hackable and transparent. You'll most likely want to tune a number of those variables depending on your needs.
+Finally, you can quickly test things by simply running `python train.py`.
+When no configuration file is supplied it defaults to `config/train_default.py`,
+a tiny CPU-based configuration that mirrors the settings used in the tests.
+Have a look at all of its args&mdash;the script tries to be very readable,
+hackable and transparent. You'll most likely want to tune a number of those
+variables depending on your needs or switch to a GPU oriented config for serious
+training.
 
 ## baselines
 
@@ -249,14 +255,15 @@ export RUNPOD_API_KEY="<your key>"
 
 ### Training
 
-Launch a training pod with the default config:
+Launch a training pod with the default CPU config:
 
 ```sh
 python runpod_service.py train config/train_default.py
 ```
 
 Or simply use `train.py` with `--use-runpod`. Any extra arguments are forwarded
-to the cloud job. Without a config argument this uses `config/train_default.py`:
+to the cloud job. Without a config argument this uses `config/train_default.py`
+(the tiny CPU setup):
 
 ```sh
 python train.py --use-runpod --dag-depth 4
