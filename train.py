@@ -25,7 +25,7 @@ from contextlib import nullcontext
 import argparse
 from dataclasses import dataclass, fields
 from ast import literal_eval
-import runpy
+import importlib.util
 
 import numpy as np
 import torch
@@ -89,11 +89,13 @@ class TrainConfig:
 
 
 def load_config_file(path: str) -> dict:
-    cfg_dict = runpy.run_path(path)
-    return {k: v for k, v in cfg_dict.items() if not k.startswith("_")}
+    spec = importlib.util.spec_from_file_location("cfg_module", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return {k: getattr(module, k) for k in dir(module) if not k.startswith("_")}
 
 
-def update_config(cfg: TrainConfig, data: dict) -> None:
+def update_config_from_dict(cfg: TrainConfig, data: dict) -> None:
     for f in fields(cfg):
         if f.name in data:
             setattr(cfg, f.name, data[f.name])
@@ -124,13 +126,55 @@ parser.add_argument("--gpu-type")
 args, overrides = parser.parse_known_args()
 
 cfg = TrainConfig()
-update_config(cfg, load_config_file(args.config))
+update_config_from_dict(cfg, load_config_file(args.config))
 apply_overrides(cfg, overrides)
 if args.dag_depth is not None:
     cfg.dag_depth = args.dag_depth
 
-# expose config variables as globals for the rest of the script
-globals().update(vars(cfg))
+# unpack config dataclass into local variables
+out_dir = cfg.out_dir
+eval_interval = cfg.eval_interval
+log_interval = cfg.log_interval
+eval_iters = cfg.eval_iters
+eval_only = cfg.eval_only
+always_save_checkpoint = cfg.always_save_checkpoint
+init_from = cfg.init_from
+
+wandb_log = cfg.wandb_log
+wandb_project = cfg.wandb_project
+wandb_run_name = cfg.wandb_run_name
+
+dataset = cfg.dataset
+gradient_accumulation_steps = cfg.gradient_accumulation_steps
+batch_size = cfg.batch_size
+block_size = cfg.block_size
+
+n_layer = cfg.n_layer
+n_head = cfg.n_head
+n_embd = cfg.n_embd
+dropout = cfg.dropout
+bias = cfg.bias
+
+dag_depth = cfg.dag_depth
+dag_hidden_dim = cfg.dag_hidden_dim
+dag_num_ops = cfg.dag_num_ops
+
+learning_rate = cfg.learning_rate
+max_iters = cfg.max_iters
+weight_decay = cfg.weight_decay
+beta1 = cfg.beta1
+beta2 = cfg.beta2
+grad_clip = cfg.grad_clip
+
+decay_lr = cfg.decay_lr
+warmup_iters = cfg.warmup_iters
+lr_decay_iters = cfg.lr_decay_iters
+min_lr = cfg.min_lr
+
+backend = cfg.backend
+device = cfg.device
+dtype = cfg.dtype
+compile = cfg.compile
 
 _use_runpod_flag = args.use_runpod
 _dag_depth_override = args.dag_depth
