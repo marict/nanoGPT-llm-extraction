@@ -44,3 +44,47 @@ python bench.py
 ```
 
 This benchmarks a minimal model forward and backward pass.
+
+## RunPod
+
+Set up a virtual environment and install the RunPod SDK:
+
+```bash
+python3 -m venv env
+source env/bin/activate
+python -m pip install runpod
+```
+
+Check the installed version:
+
+```bash
+pip show runpod
+python3 -c "import runpod; print(runpod.__version__)"
+```
+
+Configure your API key in code:
+
+```python
+import runpod
+import os
+
+runpod.api_key = os.getenv("RUNPOD_API_KEY")
+```
+
+Launch training in the cloud:
+
+```bash
+python runpod_service.py train config/train_default.py --gpu "NVIDIA A100 40GB PCIe"
+```
+
+Or run inference using an existing endpoint:
+
+```bash
+python runpod_service.py infer "a math question" --endpoint ENDPOINT_ID
+```
+
+### Troubleshooting tips
+
+* **502 errors** – ensure your pod has a GPU attached and inspect its logs for errors.
+* **Storage full** – check disk usage with `df -h` and remove large files or mount a network volume.
+* **Leaked API keys** – disable or revoke the compromised key from the console.
