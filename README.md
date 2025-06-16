@@ -22,10 +22,16 @@ flowchart TD
     B --> C[Add Position Embeddings]
     C --> D[Transformer Blocks]
     D --> E[LayerNorm]
-    C --> |all tokens| F[Differentiable DAG]
-    E --> G[Gate]
-    F --> G
-    G --> H[LM Head]
+    B --> F{Numeric?}
+    F -->|yes| G[Binary bits to float]
+    F -->|no| H[Token Attention]
+    H --> I[Project to float & round]
+    G --> J[Initial DAG Nodes]
+    I --> J
+    J --> K[Differentiable DAG]
+    E --> L[Gate]
+    K --> L
+    L --> M[LM Head]
 ```
 
 The model processes tokens normally through the transformer to produce logits. In parallel, the DAG builds a numeric reasoning path from the raw token embeddings. A gating layer at the end chooses between the transformer state and the DAG output before decoding the final token.
