@@ -9,6 +9,26 @@ its final node is decoded back to a numeric token.
 The module implements basic ops (`add`, `multiply`, `subtract`, `divide`, `identity`) and learns to compose them via attention.
 The experiment evaluates whether this reasoning layer improves performance on small arithmetic problems.
 
+## Architecture
+
+The figure below illustrates how the differentiable DAG layer plugs into the regular GPT pipeline. The DAG receives the
+initial token embeddings and operates independently from the transformer. At the final step a gate mixes the
+transformer state with the DAG output.
+
+```mermaid
+flowchart TD
+    A[Input Tokens] --> B[BinaryAwareEmbedding]
+    B --> C[Add Position Embeddings]
+    C --> D[Transformer Blocks]
+    D --> E[LayerNorm]
+    C --> |last token| F[Differentiable DAG]
+    E --> G[Gate]
+    F --> G
+    G --> H[LM Head]
+```
+
+The model processes tokens normally through the transformer to produce logits. In parallel, the DAG builds a numeric reasoning path from the raw token embeddings. A gating layer at the end chooses between the transformer state and the DAG output before decoding the final token.
+
 ## Installation
 
 ```bash
