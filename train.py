@@ -23,6 +23,9 @@ import pickle
 import sys
 from contextlib import nullcontext
 import argparse
+from dataclasses import dataclass, fields
+from ast import literal_eval
+import runpy
 
 import numpy as np
 import torch
@@ -33,34 +36,112 @@ from model import GPTConfig, GPT
 from dag_model import DAGGPT, DAGGPTConfig
 import runpod_service
 
-parser = argparse.ArgumentParser(add_help=False)
+
+@dataclass
+class TrainConfig:
+    out_dir: str = "out"
+    eval_interval: int = 250
+    log_interval: int = 1
+    eval_iters: int = 200
+    eval_only: bool = False
+    always_save_checkpoint: bool = True
+    init_from: str = "scratch"
+
+    wandb_log: bool = False
+    wandb_project: str = "owt"
+    wandb_run_name: str = "gpt2"
+
+    dataset: str = "openwebtext"
+    gradient_accumulation_steps: int = 5 * 8
+    batch_size: int = 12
+    block_size: int = 1024
+
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
+    dropout: float = 0.0
+    bias: bool = False
+
+    dag_depth: int = 0
+    dag_hidden_dim: int = 16
+    dag_num_ops: int = 5
+
+    learning_rate: float = 6e-4
+    max_iters: int = 600000
+    weight_decay: float = 1e-1
+    beta1: float = 0.9
+    beta2: float = 0.95
+    grad_clip: float = 1.0
+
+    decay_lr: bool = True
+    warmup_iters: int = 2000
+    lr_decay_iters: int = 600000
+    min_lr: float = 6e-5
+
+    backend: str = "nccl"
+    device: str = "cuda"
+    dtype: str = (
+        "bfloat16"
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        else "float16"
+    )
+    compile: bool = True
+
+
+def load_config_file(path: str) -> dict:
+    cfg_dict = runpy.run_path(path)
+    return {k: v for k, v in cfg_dict.items() if not k.startswith("_")}
+
+
+def update_config(cfg: TrainConfig, data: dict) -> None:
+    for f in fields(cfg):
+        if f.name in data:
+            setattr(cfg, f.name, data[f.name])
+
+
+def apply_overrides(cfg: TrainConfig, overrides: list[str]) -> None:
+    for arg in overrides:
+        if not arg.startswith("--") or "=" not in arg:
+            raise ValueError(f"Invalid override: {arg}")
+        key, val = arg[2:].split("=", 1)
+        if not hasattr(cfg, key):
+            raise ValueError(f"Unknown config key: {key}")
+        cur = getattr(cfg, key)
+        try:
+            lit = literal_eval(val)
+        except Exception:
+            lit = val
+        if not isinstance(lit, type(cur)):
+            raise ValueError(f"Invalid type for {key}")
+        setattr(cfg, key, lit)
+
+
+parser = argparse.ArgumentParser(description="nanoGPT Trainer")
 parser.add_argument("config", nargs="?", default="config/train_default.py")
-parser.add_argument("--use-runpod", action="store_true", dest="use_runpod")
-parser.add_argument("--use_runpod", action="store_true", dest="use_runpod")
-parser.add_argument("--dag-depth", type=int, dest="dag_depth")
-parser.add_argument("--dag_depth", type=int, dest="dag_depth")
-parser.add_argument("--gpu-type", dest="gpu_type")
-parser.add_argument("--gpu_type", dest="gpu_type")
-known_args, remaining = parser.parse_known_args()
-sys.argv = [sys.argv[0], known_args.config] + remaining
+parser.add_argument("--use-runpod", action="store_true")
+parser.add_argument("--dag-depth", type=int)
+parser.add_argument("--gpu-type")
+args, overrides = parser.parse_known_args()
 
-_use_runpod_flag = known_args.use_runpod
-_dag_depth_override = known_args.dag_depth
-_gpu_type_flag = known_args.gpu_type or runpod_service.DEFAULT_GPU
-config_path = known_args.config
+cfg = TrainConfig()
+update_config(cfg, load_config_file(args.config))
+apply_overrides(cfg, overrides)
+if args.dag_depth is not None:
+    cfg.dag_depth = args.dag_depth
 
-# -----------------------------------------------------------------------------
-exec(open('configurator.py').read())  # load config_path and overrides
-config_keys = [k for k, v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
-config = {k: globals()[k] for k in config_keys}  # will be useful for logging
+# expose config variables as globals for the rest of the script
+globals().update(vars(cfg))
 
-if _dag_depth_override is not None:
-    dag_depth = _dag_depth_override
+_use_runpod_flag = args.use_runpod
+_dag_depth_override = args.dag_depth
+_gpu_type_flag = args.gpu_type or runpod_service.DEFAULT_GPU
+config_path = args.config
+config = vars(cfg)
 
 if _use_runpod_flag:
     remote_args = config_path
-    if remaining:
-        remote_args += " " + " ".join(remaining)
+    for ov in overrides:
+        remote_args += f" {ov}"
     if _dag_depth_override is not None:
         remote_args += f" --dag_depth={_dag_depth_override}"
     runpod_service.start_cloud_training(remote_args, _gpu_type_flag)
