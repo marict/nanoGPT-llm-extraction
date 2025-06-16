@@ -192,7 +192,8 @@ if _use_runpod_flag:
     for ov in overrides:
         remote_args += f" {ov}"
     if _dag_depth_override is not None:
-        remote_args += f" --dag_depth={_dag_depth_override}"
+        # use the public argument name with dash, not underscore
+        remote_args += f" --dag-depth={_dag_depth_override}"
     runpod_service.start_cloud_training(remote_args, _gpu_type_flag, api_key=os.getenv("RUNPOD_API_KEY"))
     raise SystemExit
 # -----------------------------------------------------------------------------
