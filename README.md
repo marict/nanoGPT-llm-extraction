@@ -39,8 +39,6 @@ flowchart TD
     L --> M[LM Head]
 ```
 
-The model processes tokens normally through the transformer to produce logits. In parallel, the DAG builds a numeric reasoning path from the raw token embeddings. Its final node is run through a transformer block to convert back to the semantic space. A gating layer then chooses between the transformer state and this transformed DAG output before decoding the final token.
-
 ## Installation
 
 ```bash
