@@ -11,11 +11,12 @@ The experiment evaluates whether this reasoning layer improves performance on sm
 
 ## Architecture
 
-The figure below illustrates how the differentiable DAG layer plugs into the regular GPT pipeline. The model processes
-tokens normally through the transformer and then snaps each token to a numeric value predicted from the final hidden
-states. These numeric values seed a differentiable DAG that performs lightweight arithmetic. The DAG output is passed
-through a small transformer block to return it to the semantic space before a gating layer mixes this result with the
-transformer state prior to decoding the final token.
+The figure below illustrates how the differentiable DAG layer plugs into the regular GPT pipeline. After the final layer
+normalization, the model splits into three branches. One path "snaps" each token to a numeric value used to seed a
+differentiable DAG. Two additional attention blocks derive operand and operation context vectors from the same hidden
+states. The DAG uses these contexts to choose its inputs and operations. Its final node is passed through a small
+transformer block to return to the semantic space before a gating layer mixes this result with the transformer state prior
+to decoding the final token.
 
 ```mermaid
 flowchart TD
@@ -27,7 +28,11 @@ flowchart TD
     F --> G[Token Attention]
     G --> H[Project to float & round]
     H --> I[Initial DAG Nodes]
+    E --> O[Operand Attention]
+    E --> P[Operation Attention]
     I --> J[Differentiable DAG]
+    O --> J
+    P --> J
     J --> K[Post-DAG Block]
     E --> L[Gate]
     K --> L
