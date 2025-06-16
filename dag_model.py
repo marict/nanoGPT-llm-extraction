@@ -30,13 +30,6 @@ def identity(x, _unused=None):
 op_funcs = [add, identity, multiply, subtract, divide]
 
 
-def binary_to_float(bits: torch.Tensor) -> torch.Tensor:
-    """Convert 32 binary bits to a float32 tensor."""
-    weights = 1 << torch.arange(31, -1, -1, device=bits.device)
-    int_vals = torch.sum(bits.long() * weights, dim=-1).to(torch.int32)
-    return int_vals.view(torch.float32)
-
-
 class DAGController(nn.Module):
     """Selects inputs from previous nodes and operation via attention."""
 
@@ -111,8 +104,7 @@ class DifferentiableDAG(nn.Module):
 # GPT wrapper with DAG
 # -----------------------------------------------------------------------------
 from dataclasses import dataclass
-from model import GPT, GPTConfig
-from binary_embedding import BinaryAwareEmbedding
+from model import GPT, GPTConfig, Block
 
 
 @dataclass
@@ -127,27 +119,23 @@ class DAGGPT(GPT):
 
     def __init__(self, config: DAGGPTConfig):
         super().__init__(config)
-        # replace the token embedding with binary-aware embedding
-        self.transformer.wte = BinaryAwareEmbedding(config.vocab_size, config.n_embd)
-        self.transformer.wte.apply(self._init_weights)
-        # tie embedding weights with language model head
-        self.transformer.wte.embedding.weight = self.lm_head.weight
+        # initialize DAG components
         self.dag = DifferentiableDAG(config.n_embd, config.dag_num_ops, config.dag_depth)
         self.mix_gate = nn.Linear(config.n_embd * 2, 1)
         self.token_attn = nn.MultiheadAttention(config.n_embd, config.n_head, batch_first=True)
         self.attn_to_num = nn.Linear(config.n_embd, 1)
+        self.snap_block = Block(config)
+        self.post_dag_block = Block(config)
 
-    def forward(self, idx, binary=None, targets=None, return_dag_info: bool = False):
+    def forward(self, idx, targets=None, return_dag_info: bool = False):
         """Run the model and optionally return DAG attention info."""
-        if binary is None:
-            binary = torch.zeros(idx.size(0), idx.size(1), 33, device=idx.device)
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, (
             f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         )
         pos = torch.arange(0, t, dtype=torch.long, device=device)
-        tok_emb = self.transformer.wte(idx, binary)
+        tok_emb = self.transformer.wte(idx)
         pos_emb = self.transformer.wpe(pos)
         emb = tok_emb + pos_emb
         x = self.transformer.drop(emb)
@@ -156,11 +144,9 @@ class DAGGPT(GPT):
         hidden = self.transformer.ln_f(x)
         loss = None
 
-        numeric_mask = binary[:, :, -1] > 0.5
-        attn_out, _ = self.token_attn(tok_emb, tok_emb, tok_emb)
-        non_numeric_vals = torch.round(self.attn_to_num(attn_out).squeeze(-1))
-        numeric_vals = binary_to_float(binary[:, :, :32])
-        all_vals = torch.where(numeric_mask, numeric_vals, non_numeric_vals)
+        snap_hidden = self.snap_block(hidden)
+        attn_out, _ = self.token_attn(snap_hidden, snap_hidden, snap_hidden)
+        all_vals = torch.round(self.attn_to_num(attn_out).squeeze(-1))
         all_nodes = all_vals.unsqueeze(-1).expand(-1, -1, tok_emb.size(-1))
         initial_nodes = [all_nodes[:, i, :] for i in range(t)]
         zero_node = torch.zeros_like(tok_emb[:, 0, :])
@@ -174,22 +160,13 @@ class DAGGPT(GPT):
             dag_nodes = dag_result
             attn_hist = op_hist = None
         dag_output = dag_nodes[:, -1, :]
+        dag_sem = self.post_dag_block(dag_output.unsqueeze(1)).squeeze(1)
         gate = torch.sigmoid(
-            self.mix_gate(torch.cat([hidden[:, -1, :], dag_output], dim=-1))
+            self.mix_gate(torch.cat([hidden[:, -1, :], dag_sem], dim=-1))
         )
         hidden = hidden.clone()
-        hidden[:, -1, :] = (1 - gate) * hidden[:, -1, :] + gate * dag_output
+        hidden[:, -1, :] = (1 - gate) * hidden[:, -1, :] + gate * dag_sem
         logits = self.lm_head(hidden)
         if return_dag_info:
             return logits, loss, dag_output, {"attn": attn_hist, "op": op_hist}
         return logits, loss, dag_output
-
-    def predict_number(self, idx, binary, tokenizer):
-        """Run a forward pass and decode the DAG output as a float."""
-        logits, _, dag_out = self(idx, binary=binary)
-        token_logits = self.lm_head(dag_out)
-        pred_id = torch.argmax(token_logits, dim=-1)
-        if pred_id.numel() != 1:
-            raise ValueError("predict_number only supports batch size 1")
-        token_int = pred_id.item()
-        return tokenizer.id_to_num.get(token_int)

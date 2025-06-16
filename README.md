@@ -11,30 +11,30 @@ The experiment evaluates whether this reasoning layer improves performance on sm
 
 ## Architecture
 
-The figure below illustrates how the differentiable DAG layer plugs into the regular GPT pipeline. The DAG now starts
-from numeric values for **all** tokens. Numeric tokens are decoded from their binary tag while non-numeric tokens first
-pass through an attention block that predicts a float value which is then rounded. These values seed the DAG, which
-operates independently from the transformer. At the final step a gate mixes the transformer state with the DAG output.
+The figure below illustrates how the differentiable DAG layer plugs into the regular GPT pipeline. The model processes
+tokens normally through the transformer and then snaps each token to a numeric value predicted from the final hidden
+states. These numeric values seed a differentiable DAG that performs lightweight arithmetic. The DAG output is passed
+through a small transformer block to return it to the semantic space before a gating layer mixes this result with the
+transformer state prior to decoding the final token.
 
 ```mermaid
 flowchart TD
-    A[Input Tokens] --> B[BinaryAwareEmbedding]
+    A[Input Tokens] --> B[Embedding]
     B --> C[Add Position Embeddings]
     C --> D[Transformer Blocks]
     D --> E[LayerNorm]
-    B --> F{Numeric?}
-    F -->|yes| G[Binary bits to float]
-    F -->|no| H[Token Attention]
-    H --> I[Project to float & round]
-    G --> J[Initial DAG Nodes]
-    I --> J
-    J --> K[Differentiable DAG]
+    E --> F[Snap Block]
+    F --> G[Token Attention]
+    G --> H[Project to float & round]
+    H --> I[Initial DAG Nodes]
+    I --> J[Differentiable DAG]
+    J --> K[Post-DAG Block]
     E --> L[Gate]
     K --> L
     L --> M[LM Head]
 ```
 
-The model processes tokens normally through the transformer to produce logits. In parallel, the DAG builds a numeric reasoning path from the raw token embeddings. A gating layer at the end chooses between the transformer state and the DAG output before decoding the final token.
+The model processes tokens normally through the transformer to produce logits. In parallel, the DAG builds a numeric reasoning path from the raw token embeddings. Its final node is run through a transformer block to convert back to the semantic space. A gating layer then chooses between the transformer state and this transformed DAG output before decoding the final token.
 
 ## Installation
 
@@ -59,10 +59,7 @@ Any option in `TrainConfig` can be overridden on the command line, e.g.
 pytest
 ```
 
-The tests cover the tokenizer, DAG logic and the training script.
-
-After running inference you can decode the DAG prediction to a float using
-``DAGGPT.predict_number`` together with ``NumericTokenizer``.
+The tests cover the DAG logic and the training script.
 
 ## Benchmark
 
