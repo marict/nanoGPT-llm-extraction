@@ -1,11 +1,10 @@
 # nanoGPT DAG Experiment
 
-This repository extends [nanoGPT](https://github.com/karpathy/nanoGPT) with a differentiable
-DAG module for lightweight numeric reasoning. The DAG controller attends over
-previous nodes and chooses simple operations such as addition and subtraction
-(see `dag_model.py`). The `DAGGPT` model runs the transformer while preserving a
-copy of the input embeddings. A separate DAG stream operates on this copy and
-its final node is decoded back to a numeric token.
+This repository adds a differentiable DAG layer to [nanoGPT](https://github.com/karpathy/nanoGPT)
+for lightweight numeric reasoning. The DAG controller attends over earlier nodes
+and selects simple arithmetic operations (see `dag_model.py`). `DAGGPT` keeps a
+copy of the input embeddings for the DAG stream and mixes the resulting value
+back with the transformer state before decoding the final token.
 The module implements basic ops (`add`, `multiply`, `subtract`, `divide`, `identity`,
 `power`, `log`, `max`, `min`) and learns to compose them via attention.
 The experiment evaluates whether this reasoning layer improves performance on small arithmetic problems.
@@ -90,19 +89,11 @@ pip show runpod
 python3 -c "import runpod; print(runpod.__version__)"
 ```
 
-Configure your API key in code:
-
-```python
-import runpod
-import os
-
-runpod.api_key = os.getenv("RUNPOD_API_KEY")
-```
-
-Launch training in the cloud:
+Set the API key via an environment variable or command line argument. Launch training in the cloud:
 
 ```bash
-python runpod_service.py train config/train_default.py --gpu "NVIDIA A100 40GB PCIe"
+export RUNPOD_API_KEY=YOUR_KEY
+python runpod_service.py train config/train_default.py --gpu "NVIDIA A100 40GB PCIe" --api-key $RUNPOD_API_KEY
 ```
 
 Or run inference using an existing endpoint:

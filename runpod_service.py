@@ -22,7 +22,9 @@ class RunpodError(Exception):
     """Custom exception for RunPod operations."""
 
 
-def start_cloud_training(train_args: str, gpu_type: str = DEFAULT_GPU) -> str:
+def start_cloud_training(
+    train_args: str, gpu_type: str = DEFAULT_GPU, api_key: str | None = None
+) -> str:
     """Launch a training job on RunPod and stream status to the console.
 
     Args:
@@ -32,9 +34,9 @@ def start_cloud_training(train_args: str, gpu_type: str = DEFAULT_GPU) -> str:
     Returns:
         The created pod ID.
     """
-    api_key = os.getenv("RUNPOD_API_KEY")
+    api_key = api_key or os.getenv("RUNPOD_API_KEY")
     if not api_key:
-        raise RunpodError("RUNPOD_API_KEY environment variable is required")
+        raise RunpodError("RunPod API key is required")
 
     rp = _get_runpod()
     rp.api_key = api_key
@@ -141,6 +143,7 @@ if __name__ == "__main__":
     t = sub.add_parser("train", help="Start training job")
     t.add_argument("config", help="Training config file")
     t.add_argument("--gpu", default=DEFAULT_GPU, help="GPU type id")
+    t.add_argument("--api-key", help="RunPod API key")
 
     i = sub.add_parser("infer", help="Run inference")
     i.add_argument("prompt", help="Prompt text")
@@ -148,6 +151,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     if args.cmd == "train":
-        start_cloud_training(args.config, args.gpu)
+        start_cloud_training(args.config, args.gpu, api_key=args.api_key)
     else:
         run_inference(args.prompt, args.endpoint)
