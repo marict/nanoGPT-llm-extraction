@@ -86,6 +86,7 @@ class DifferentiableDAG(nn.Module):
         super().__init__()
         self.num_steps = num_steps
         self.controller = DAGController(hidden_dim, num_ops)
+        self.step_emb = nn.Embedding(num_steps, hidden_dim)
 
     def forward(
         self,
@@ -103,10 +104,14 @@ class DifferentiableDAG(nn.Module):
         nodes = [n for n in initial_nodes]
         attn_history = []
         op_history = []
-        for _ in range(self.num_steps):
+        step_embs = self.step_emb.weight[: self.num_steps]
+        for step in range(self.num_steps):
             node_tensor = torch.stack(nodes, dim=1)
+            emb = step_embs[step].unsqueeze(0).expand(node_tensor.size(0), -1)
             input1, input2, op_weights = self.controller(
-                node_tensor, operand_ctx, op_ctx
+                node_tensor,
+                operand_ctx + emb,
+                op_ctx + emb,
             )
             if return_info:
                 attn_history.append(self.controller.last_attn)
