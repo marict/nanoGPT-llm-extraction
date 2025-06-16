@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import sys
-import os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -206,3 +205,32 @@ def test_post_dag_block_called(monkeypatch):
     x = torch.randint(0, 10, (1, 2))
     model(x)
     assert called.get("used")
+
+
+def test_step_contexts_added(monkeypatch):
+    monkeypatch.setattr(dag_model, "op_funcs", dag_model.op_funcs[:2])
+    dag = DifferentiableDAG(hidden_dim=4, num_ops=2, num_steps=3)
+
+    step_vals = torch.stack([torch.full((4,), float(i)) for i in range(3)])
+    dag.step_emb = nn.Embedding.from_pretrained(step_vals, freeze=True)
+
+    captured = []
+
+    class RecController(DAGController):
+        def forward(self, nodes, operand_ctx, op_ctx):
+            captured.append((operand_ctx.clone(), op_ctx.clone()))
+            return nodes[:, 0, :], nodes[:, 0, :], torch.tensor([[1.0, 0.0]])
+
+    dag.controller = RecController(4, 2)
+
+    init = [torch.zeros(1, 4), torch.ones(1, 4)]
+    op_ctx = torch.ones(1, 4)
+    operand_ctx = torch.zeros(1, 4)
+    dag(init, operand_ctx, op_ctx)
+
+    assert len(captured) == 3
+    for i, (oc, oc2) in enumerate(captured):
+        expect = step_vals[i].unsqueeze(0)
+        assert torch.allclose(oc, operand_ctx + expect)
+        assert torch.allclose(oc2, op_ctx + expect)
+        assert oc.shape == (1, 4) and oc2.shape == (1, 4)

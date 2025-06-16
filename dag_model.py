@@ -101,7 +101,7 @@ class DifferentiableDAG(nn.Module):
             initial_nodes: Sequence of ``(batch, hidden_dim)`` tensors.
             return_info: If True, also return attention and op weight history.
         """
-        nodes = [n for n in initial_nodes]
+        nodes = list(initial_nodes)
         attn_history = []
         op_history = []
         step_embs = self.step_emb.weight[: self.num_steps]
@@ -116,11 +116,9 @@ class DifferentiableDAG(nn.Module):
             if return_info:
                 attn_history.append(self.controller.last_attn)
                 op_history.append(self.controller.last_op_weights)
-            results = []
-            for i, op in enumerate(op_funcs):
-                out = op(input1, input2)
-                results.append(op_weights[:, i].unsqueeze(-1) * out)
-            new_node = sum(results)
+            outs = [op(input1, input2) for op in op_funcs]
+            stack = torch.stack(outs, dim=1)
+            new_node = torch.sum(op_weights.unsqueeze(-1) * stack, dim=1)
             nodes.append(new_node)
         stacked = torch.stack(nodes, dim=1)
         if return_info:
@@ -172,7 +170,6 @@ class DAGGPT(GPT):
         for block in self.transformer.h:
             x = block(x)
         hidden = self.transformer.ln_f(x)
-        loss = None
 
         snap_hidden = self.snap_block(hidden)
         attn_out, _ = self.token_attn(snap_hidden, snap_hidden, snap_hidden)
@@ -202,5 +199,5 @@ class DAGGPT(GPT):
         hidden[:, -1, :] = (1 - gate) * hidden[:, -1, :] + gate * dag_sem
         logits = self.lm_head(hidden)
         if return_dag_info:
-            return logits, loss, dag_output, {"attn": attn_hist, "op": op_hist}
-        return logits, loss, dag_output
+            return logits, None, dag_output, {"attn": attn_hist, "op": op_hist}
+        return logits, None, dag_output
