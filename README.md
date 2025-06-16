@@ -11,9 +11,10 @@ The experiment evaluates whether this reasoning layer improves performance on sm
 
 ## Architecture
 
-The figure below illustrates how the differentiable DAG layer plugs into the regular GPT pipeline. The DAG receives the
-initial token embeddings and operates independently from the transformer. At the final step a gate mixes the
-transformer state with the DAG output.
+The figure below illustrates how the differentiable DAG layer plugs into the regular GPT pipeline. The DAG now starts
+from numeric values for **all** tokens. Numeric tokens are decoded from their binary tag while non-numeric tokens first
+pass through an attention block that predicts a float value which is then rounded. These values seed the DAG, which
+operates independently from the transformer. At the final step a gate mixes the transformer state with the DAG output.
 
 ```mermaid
 flowchart TD
@@ -21,7 +22,7 @@ flowchart TD
     B --> C[Add Position Embeddings]
     C --> D[Transformer Blocks]
     D --> E[LayerNorm]
-    C --> |last token| F[Differentiable DAG]
+    C --> |all tokens| F[Differentiable DAG]
     E --> G[Gate]
     F --> G
     G --> H[LM Head]

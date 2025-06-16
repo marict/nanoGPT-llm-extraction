@@ -30,6 +30,13 @@ def identity(x, _unused=None):
 op_funcs = [add, identity, multiply, subtract, divide]
 
 
+def binary_to_float(bits: torch.Tensor) -> torch.Tensor:
+    """Convert 32 binary bits to a float32 tensor."""
+    weights = 1 << torch.arange(31, -1, -1, device=bits.device)
+    int_vals = torch.sum(bits.long() * weights, dim=-1).to(torch.int32)
+    return int_vals.view(torch.float32)
+
+
 class DAGController(nn.Module):
     """Selects inputs from previous nodes and operation via attention."""
 
@@ -127,6 +134,8 @@ class DAGGPT(GPT):
         self.transformer.wte.embedding.weight = self.lm_head.weight
         self.dag = DifferentiableDAG(config.n_embd, config.dag_num_ops, config.dag_depth)
         self.mix_gate = nn.Linear(config.n_embd * 2, 1)
+        self.token_attn = nn.MultiheadAttention(config.n_embd, config.n_head, batch_first=True)
+        self.attn_to_num = nn.Linear(config.n_embd, 1)
 
     def forward(self, idx, binary=None, targets=None, return_dag_info: bool = False):
         """Run the model and optionally return DAG attention info."""
@@ -146,8 +155,19 @@ class DAGGPT(GPT):
             x = block(x)
         hidden = self.transformer.ln_f(x)
         loss = None
-        start_node = tok_emb[:, -1, :]
-        dag_result = self.dag([start_node, start_node], return_info=return_dag_info)
+
+        numeric_mask = binary[:, :, -1] > 0.5
+        attn_out, _ = self.token_attn(tok_emb, tok_emb, tok_emb)
+        non_numeric_vals = torch.round(self.attn_to_num(attn_out).squeeze(-1))
+        numeric_vals = binary_to_float(binary[:, :, :32])
+        all_vals = torch.where(numeric_mask, numeric_vals, non_numeric_vals)
+        all_nodes = all_vals.unsqueeze(-1).expand(-1, -1, tok_emb.size(-1))
+        initial_nodes = [all_nodes[:, i, :] for i in range(t)]
+        zero_node = torch.zeros_like(tok_emb[:, 0, :])
+        while len(initial_nodes) < 2:
+            initial_nodes.append(zero_node)
+
+        dag_result = self.dag(initial_nodes, return_info=return_dag_info)
         if return_dag_info:
             dag_nodes, attn_hist, op_hist = dag_result
         else:
