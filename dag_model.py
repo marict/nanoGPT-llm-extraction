@@ -35,7 +35,8 @@ class DAGController(nn.Module):
 
     def __init__(self, hidden_dim, num_ops):
         super().__init__()
-        self.query_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.query_proj1 = nn.Linear(hidden_dim, hidden_dim)
+        self.query_proj2 = nn.Linear(hidden_dim, hidden_dim)
         self.key_proj = nn.Linear(hidden_dim, hidden_dim)
         self.op_selector = nn.Linear(hidden_dim, num_ops)
         self.last_attn: torch.Tensor | None = None
@@ -47,15 +48,18 @@ class DAGController(nn.Module):
         Args:
             nodes: Tensor of shape ``(batch, num_nodes, hidden_dim)``.
         """
-        query = self.query_proj(nodes[:, -1, :])
+        query1 = self.query_proj1(nodes[:, -1, :])
+        query2 = self.query_proj2(nodes[:, -1, :])
         keys = self.key_proj(nodes[:, :-1, :])
-        att = torch.einsum("bij,bj->bi", keys, query) / (nodes.size(-1) ** 0.5)
-        attn = F.softmax(att, dim=1)
-        input1 = torch.sum(attn.unsqueeze(-1) * nodes[:, :-1, :], dim=1)
-        input2 = input1.clone()
+        att1 = torch.einsum("bij,bj->bi", keys, query1) / (nodes.size(-1) ** 0.5)
+        attn1 = F.softmax(att1, dim=1)
+        input1 = torch.sum(attn1.unsqueeze(-1) * nodes[:, :-1, :], dim=1)
+        att2 = torch.einsum("bij,bj->bi", keys, query2) / (nodes.size(-1) ** 0.5)
+        attn2 = F.softmax(att2, dim=1)
+        input2 = torch.sum(attn2.unsqueeze(-1) * nodes[:, :-1, :], dim=1)
         op_logits = self.op_selector(input1)
         op_weights = F.softmax(op_logits, dim=-1)
-        self.last_attn = attn.detach()
+        self.last_attn = attn1.detach()
         self.last_op_weights = op_weights.detach()
         return input1, input2, op_weights
 
@@ -119,6 +123,8 @@ class DAGGPT(GPT):
         # replace the token embedding with binary-aware embedding
         self.transformer.wte = BinaryAwareEmbedding(config.vocab_size, config.n_embd)
         self.transformer.wte.apply(self._init_weights)
+        # tie embedding weights with language model head
+        self.transformer.wte.embedding.weight = self.lm_head.weight
         self.dag = DifferentiableDAG(config.n_embd, config.dag_num_ops, config.dag_depth)
 
     def forward(self, idx, binary=None, targets=None, return_dag_info: bool = False):
@@ -127,6 +133,9 @@ class DAGGPT(GPT):
             binary = torch.zeros(idx.size(0), idx.size(1), 33, device=idx.device)
         device = idx.device
         b, t = idx.size()
+        assert t <= self.config.block_size, (
+            f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+        )
         pos = torch.arange(0, t, dtype=torch.long, device=device)
         tok_emb = self.transformer.wte(idx, binary)
         pos_emb = self.transformer.wpe(pos)
