@@ -1,13 +1,14 @@
 import os
 import sys
+from pathlib import Path
 import subprocess
 import numpy as np
 import pickle
 
-REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_train_script_runs(tmp_path):
+def test_train_script_runs(tmp_path: Path):
     """Run ``train.py`` on a tiny synthetic dataset to ensure the script works."""
     # Create a minimal dataset locally to avoid network downloads from prepare.py
     data_dir = tmp_path / "data" / "shakespeare_char"
@@ -29,8 +30,8 @@ def test_train_script_runs(tmp_path):
     with open(data_dir / "meta.pkl", "wb") as f:
         pickle.dump(meta, f)
 
-    train_script = os.path.join(REPO_ROOT, "train.py")
-    config_file = os.path.join(REPO_ROOT, "config", "train_default.py")
+    train_script = REPO_ROOT / "train.py"
+    config_file = REPO_ROOT / "config" / "train_default.py"
 
     cmd = [
         sys.executable,

@@ -1,8 +1,9 @@
 import types
 import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import runpod_service as rp
 
 
@@ -113,7 +114,7 @@ def test_visualize_dag_attention(tmp_path):
     model.dag.controller = DummyController(cfg.n_embd, cfg.dag_num_ops)
     out_path = tmp_path / "viz.png"
     result = rp.visualize_dag_attention(model, tok, prompt, save_path=str(out_path))
-    assert os.path.exists(result)
+    assert Path(result).exists()
     assert torch.allclose(model.dag.controller.last_attn.squeeze(), torch.tensor([1.0, 0.0]))
     assert torch.argmax(model.dag.controller.last_op_weights).item() == 2
 
