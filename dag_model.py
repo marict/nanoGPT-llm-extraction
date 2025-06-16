@@ -27,19 +27,50 @@ def identity(x, _unused=None):
     return x
 
 
-op_funcs = [add, identity, multiply, subtract, divide]
+def power(x, y, max_exp: float = 6.0):
+    """Element-wise power with clamped exponent to avoid overflow."""
+    y_clamped = torch.clamp(y, -max_exp, max_exp)
+    return torch.pow(torch.abs(x) + 1e-6, y_clamped)
+
+
+def log(x, _unused=None, eps: float = 1e-8):
+    """Element-wise natural log with epsilon for stability."""
+    return torch.log(torch.abs(x) + eps)
+
+
+def max_op(x, y):
+    """Element-wise maximum."""
+    return torch.max(x, y)
+
+
+def min_op(x, y):
+    """Element-wise minimum."""
+    return torch.min(x, y)
+
+
+op_funcs = [
+    add,
+    identity,
+    multiply,
+    subtract,
+    divide,
+    power,
+    log,
+    max_op,
+    min_op,
+]
 
 
 class DAGController(nn.Module):
     """Selects inputs from previous nodes and operation via attention."""
 
-    def __init__(self, hidden_dim, num_ops):
+    def __init__(self, hidden_dim):
         super().__init__()
         self.query_proj1 = nn.Linear(hidden_dim, hidden_dim)
         self.query_proj2 = nn.Linear(hidden_dim, hidden_dim)
         self.op_query_proj = nn.Linear(hidden_dim, hidden_dim)
         self.key_proj = nn.Linear(hidden_dim, hidden_dim)
-        self.op_selector = nn.Linear(hidden_dim, num_ops)
+        self.op_selector = nn.Linear(hidden_dim, len(op_funcs))
         self.last_attn: torch.Tensor | None = None
         self.last_op_weights: torch.Tensor | None = None
 
@@ -82,10 +113,10 @@ class DAGController(nn.Module):
 class DifferentiableDAG(nn.Module):
     """Engine that grows a differentiable DAG of intermediate nodes."""
 
-    def __init__(self, hidden_dim, num_ops, num_steps):
+    def __init__(self, hidden_dim, num_steps):
         super().__init__()
         self.num_steps = num_steps
-        self.controller = DAGController(hidden_dim, num_ops)
+        self.controller = DAGController(hidden_dim)
         self.step_emb = nn.Embedding(num_steps, hidden_dim)
 
     def forward(
@@ -137,7 +168,6 @@ from model import GPT, GPTConfig, Block
 class DAGGPTConfig(GPTConfig):
     dag_depth: int = 4
     dag_hidden_dim: int = 16
-    dag_num_ops: int = 5
 
 
 class DAGGPT(GPT):
@@ -146,7 +176,7 @@ class DAGGPT(GPT):
     def __init__(self, config: DAGGPTConfig):
         super().__init__(config)
         # initialize DAG components
-        self.dag = DifferentiableDAG(config.n_embd, config.dag_num_ops, config.dag_depth)
+        self.dag = DifferentiableDAG(config.n_embd, config.dag_depth)
         self.mix_gate = nn.Linear(config.n_embd * 2, 1)
         self.token_attn = nn.MultiheadAttention(config.n_embd, config.n_head, batch_first=True)
         self.attn_to_num = nn.Linear(config.n_embd, 1)

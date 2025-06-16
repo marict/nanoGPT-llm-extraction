@@ -6,7 +6,8 @@ previous nodes and chooses simple operations such as addition and subtraction
 (see `dag_model.py`). The `DAGGPT` model runs the transformer while preserving a
 copy of the input embeddings. A separate DAG stream operates on this copy and
 its final node is decoded back to a numeric token.
-The module implements basic ops (`add`, `multiply`, `subtract`, `divide`, `identity`) and learns to compose them via attention.
+The module implements basic ops (`add`, `multiply`, `subtract`, `divide`, `identity`,
+`power`, `log`, `max`, `min`) and learns to compose them via attention.
 The experiment evaluates whether this reasoning layer improves performance on small arithmetic problems.
 
 ## Architecture

@@ -64,7 +64,6 @@ class TrainConfig:
 
     dag_depth: int = 0
     dag_hidden_dim: int = 16
-    dag_num_ops: int = 5
 
     learning_rate: float = 6e-4
     max_iters: int = 600000
@@ -159,7 +158,6 @@ dropout = cfg.dropout
 bias = cfg.bias
 dag_depth = cfg.dag_depth
 dag_hidden_dim = cfg.dag_hidden_dim
-dag_num_ops = cfg.dag_num_ops
 learning_rate = cfg.learning_rate
 max_iters = cfg.max_iters
 weight_decay = cfg.weight_decay
@@ -257,7 +255,7 @@ if meta_path.exists():
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
                   bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
 if dag_depth > 0:
-    model_args.update(dag_depth=dag_depth, dag_hidden_dim=dag_hidden_dim, dag_num_ops=dag_num_ops)
+    model_args.update(dag_depth=dag_depth, dag_hidden_dim=dag_hidden_dim)
 
 ModelConfig = DAGGPTConfig if dag_depth > 0 else GPTConfig
 ModelClass = DAGGPT if dag_depth > 0 else GPT
