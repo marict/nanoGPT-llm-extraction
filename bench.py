@@ -1,7 +1,7 @@
 """
 A much shorter version of train.py for benchmarking
 """
-import os
+from pathlib import Path
 from contextlib import nullcontext
 import numpy as np
 import time
@@ -32,9 +32,10 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 # data loading init
 if real_data:
     dataset = 'openwebtext'
-    data_dir = os.path.join('data', dataset)
-    train_data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    def get_batch(split):
+    data_dir = Path('data') / dataset
+    train_data = np.memmap(data_dir / 'train.bin', dtype=np.uint16, mode='r')
+
+    def get_batch(split: str) -> tuple[torch.Tensor, torch.Tensor]:
         data = train_data # note ignore split in benchmarking script
         ix = torch.randint(len(data) - block_size, (batch_size,))
         x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
@@ -45,7 +46,9 @@ else:
     # alternatively, if fixed data is desired to not care about data loading
     x = torch.randint(50304, (batch_size, block_size), device=device)
     y = torch.randint(50304, (batch_size, block_size), device=device)
-    get_batch = lambda split: (x, y)
+
+    def get_batch(split: str) -> tuple[torch.Tensor, torch.Tensor]:
+        return x, y
 
 # model init
 gptconf = GPTConfig(

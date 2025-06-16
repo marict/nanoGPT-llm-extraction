@@ -1,9 +1,10 @@
 import os
 import sys
+from pathlib import Path
 import torch
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import compare_checkpoints as cc
 
 
@@ -18,7 +19,7 @@ class DummyEnc:
 
 
 def test_evaluate_constant_loss():
-    path = os.path.join(os.path.dirname(__file__), "math_eval.txt")
+    path = Path(__file__).resolve().parent / "math_eval.txt"
     pairs = cc.load_pairs(path)
     enc = DummyEnc()
     model = DummyModel()
