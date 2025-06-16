@@ -1,5 +1,4 @@
 import argparse
-import os
 import torch
 import tiktoken
 from model import GPT, GPTConfig

@@ -1,6 +1,5 @@
 import os
 import sys
-import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from model import GPT, GPTConfig
