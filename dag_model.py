@@ -37,28 +37,43 @@ class DAGController(nn.Module):
         super().__init__()
         self.query_proj1 = nn.Linear(hidden_dim, hidden_dim)
         self.query_proj2 = nn.Linear(hidden_dim, hidden_dim)
+        self.op_query_proj = nn.Linear(hidden_dim, hidden_dim)
         self.key_proj = nn.Linear(hidden_dim, hidden_dim)
         self.op_selector = nn.Linear(hidden_dim, num_ops)
         self.last_attn: torch.Tensor | None = None
         self.last_op_weights: torch.Tensor | None = None
 
-    def forward(self, nodes: torch.Tensor):
+    def forward(
+        self,
+        nodes: torch.Tensor,
+        operand_ctx: torch.Tensor,
+        op_ctx: torch.Tensor,
+    ):
         """Select two inputs and operation weights for the next DAG node.
 
         Args:
             nodes: Tensor of shape ``(batch, num_nodes, hidden_dim)``.
+            operand_ctx: Context embedding for operand selection.
+            op_ctx: Context embedding for operation selection.
         """
-        query1 = self.query_proj1(nodes[:, -1, :])
-        query2 = self.query_proj2(nodes[:, -1, :])
-        keys = self.key_proj(nodes[:, :-1, :])
+        summary = torch.mean(nodes, dim=1)
+        query1 = self.query_proj1(summary) + operand_ctx
+        query2 = self.query_proj2(summary) + operand_ctx
+        keys = self.key_proj(nodes)
         att1 = torch.einsum("bij,bj->bi", keys, query1) / (nodes.size(-1) ** 0.5)
         attn1 = F.softmax(att1, dim=1)
-        input1 = torch.sum(attn1.unsqueeze(-1) * nodes[:, :-1, :], dim=1)
+        input1 = torch.sum(attn1.unsqueeze(-1) * nodes, dim=1)
         att2 = torch.einsum("bij,bj->bi", keys, query2) / (nodes.size(-1) ** 0.5)
         attn2 = F.softmax(att2, dim=1)
-        input2 = torch.sum(attn2.unsqueeze(-1) * nodes[:, :-1, :], dim=1)
-        op_logits = self.op_selector(input1)
+        input2 = torch.sum(attn2.unsqueeze(-1) * nodes, dim=1)
+
+        op_query = self.op_query_proj(summary) + op_ctx
+        att_op = torch.einsum("bij,bj->bi", keys, op_query) / (nodes.size(-1) ** 0.5)
+        attn_op = F.softmax(att_op, dim=1)
+        op_context = torch.sum(attn_op.unsqueeze(-1) * nodes, dim=1)
+        op_logits = self.op_selector(op_context)
         op_weights = F.softmax(op_logits, dim=-1)
+
         self.last_attn = attn1.detach()
         self.last_op_weights = op_weights.detach()
         return input1, input2, op_weights
@@ -71,8 +86,15 @@ class DifferentiableDAG(nn.Module):
         super().__init__()
         self.num_steps = num_steps
         self.controller = DAGController(hidden_dim, num_ops)
+        self.step_emb = nn.Embedding(num_steps, hidden_dim)
 
-    def forward(self, initial_nodes, return_info: bool = False):
+    def forward(
+        self,
+        initial_nodes,
+        operand_ctx: torch.Tensor,
+        op_ctx: torch.Tensor,
+        return_info: bool = False,
+    ):
         """Build the DAG and return all nodes.
 
         Args:
@@ -82,9 +104,15 @@ class DifferentiableDAG(nn.Module):
         nodes = [n for n in initial_nodes]
         attn_history = []
         op_history = []
-        for _ in range(self.num_steps):
+        step_embs = self.step_emb.weight[: self.num_steps]
+        for step in range(self.num_steps):
             node_tensor = torch.stack(nodes, dim=1)
-            input1, input2, op_weights = self.controller(node_tensor)
+            emb = step_embs[step].unsqueeze(0).expand(node_tensor.size(0), -1)
+            input1, input2, op_weights = self.controller(
+                node_tensor,
+                operand_ctx + emb,
+                op_ctx + emb,
+            )
             if return_info:
                 attn_history.append(self.controller.last_attn)
                 op_history.append(self.controller.last_op_weights)
@@ -125,6 +153,8 @@ class DAGGPT(GPT):
         self.token_attn = nn.MultiheadAttention(config.n_embd, config.n_head, batch_first=True)
         self.attn_to_num = nn.Linear(config.n_embd, 1)
         self.snap_block = Block(config)
+        self.operand_ctx_block = Block(config)
+        self.op_ctx_block = Block(config)
         self.post_dag_block = Block(config)
 
     def forward(self, idx, targets=None, return_dag_info: bool = False):
@@ -146,6 +176,8 @@ class DAGGPT(GPT):
 
         snap_hidden = self.snap_block(hidden)
         attn_out, _ = self.token_attn(snap_hidden, snap_hidden, snap_hidden)
+        operand_ctx = self.operand_ctx_block(hidden).mean(dim=1)
+        op_ctx = self.op_ctx_block(hidden).mean(dim=1)
         all_vals = torch.round(self.attn_to_num(attn_out).squeeze(-1))
         all_nodes = all_vals.unsqueeze(-1).expand(-1, -1, tok_emb.size(-1))
         initial_nodes = [all_nodes[:, i, :] for i in range(t)]
@@ -153,7 +185,9 @@ class DAGGPT(GPT):
         while len(initial_nodes) < 2:
             initial_nodes.append(zero_node)
 
-        dag_result = self.dag(initial_nodes, return_info=return_dag_info)
+        dag_result = self.dag(
+            initial_nodes, operand_ctx, op_ctx, return_info=return_dag_info
+        )
         if return_dag_info:
             dag_nodes, attn_hist, op_hist = dag_result
         else:

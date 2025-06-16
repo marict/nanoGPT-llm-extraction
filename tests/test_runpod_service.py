@@ -91,7 +91,7 @@ def test_visualize_dag_attention(tmp_path):
     import torch
 
     class DummyController(DAGController):
-        def forward(self, nodes):
+        def forward(self, nodes, operand_ctx, op_ctx):
             self.last_attn = torch.tensor([[1.0, 0.0]])
             input1 = nodes[:, 0, :]
             input2 = nodes[:, 1, :]

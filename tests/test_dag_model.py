@@ -34,7 +34,7 @@ def test_dag_gpt_forward(small_dag_gpt):
 
 def test_dag_node_growth_regression(monkeypatch):
     class DummyController(DAGController):
-        def forward(self, nodes):
+        def forward(self, nodes, operand_ctx, op_ctx):
             input1 = nodes[:, -1, :]
             input2 = input1
             op_weights = torch.tensor([[1.0, 0.0]])
@@ -43,7 +43,8 @@ def test_dag_node_growth_regression(monkeypatch):
     monkeypatch.setattr(dag_model, "op_funcs", dag_model.op_funcs[:2])
     dag = DifferentiableDAG(hidden_dim=4, num_ops=2, num_steps=2)
     dag.controller = DummyController(4, 2)
-    out = dag([torch.ones(1, 4)])
+    ctx = torch.zeros(1, 4)
+    out = dag([torch.ones(1, 4)], ctx, ctx)
     assert out.shape == (1, 3, 4)
     assert torch.allclose(out[:, -1, :], torch.full((1, 4), 4.0))
 
@@ -95,9 +96,9 @@ def test_dag_initial_nodes_all_tokens(monkeypatch):
     captured = {}
     original_forward = DifferentiableDAG.forward
 
-    def capture_forward(self, initial_nodes, return_info=False):
+    def capture_forward(self, initial_nodes, operand_ctx, op_ctx, return_info=False):
         captured["nodes"] = initial_nodes
-        return original_forward(self, initial_nodes, return_info=return_info)
+        return original_forward(self, initial_nodes, operand_ctx, op_ctx, return_info=return_info)
 
     monkeypatch.setattr(DifferentiableDAG, "forward", capture_forward)
 
@@ -140,9 +141,9 @@ def test_dag_attention_for_non_numeric(monkeypatch):
     captured = {}
     original_forward = DifferentiableDAG.forward
 
-    def capture_forward(self, initial_nodes, return_info=False):
+    def capture_forward(self, initial_nodes, operand_ctx, op_ctx, return_info=False):
         captured["nodes"] = initial_nodes
-        return original_forward(self, initial_nodes, return_info=return_info)
+        return original_forward(self, initial_nodes, operand_ctx, op_ctx, return_info=return_info)
 
     monkeypatch.setattr(DifferentiableDAG, "forward", capture_forward)
 
@@ -176,9 +177,9 @@ def test_zero_padding_single_token(monkeypatch):
     captured = {}
     original_forward = DifferentiableDAG.forward
 
-    def capture_forward(self, initial_nodes, return_info=False):
+    def capture_forward(self, initial_nodes, operand_ctx, op_ctx, return_info=False):
         captured["nodes"] = initial_nodes
-        return original_forward(self, initial_nodes, return_info=return_info)
+        return original_forward(self, initial_nodes, operand_ctx, op_ctx, return_info=return_info)
 
     monkeypatch.setattr(DifferentiableDAG, "forward", capture_forward)
 
