@@ -129,14 +129,51 @@ apply_overrides(cfg, overrides)
 if args.dag_depth is not None:
     cfg.dag_depth = args.dag_depth
 
-# expose config variables as globals for the rest of the script
-globals().update(vars(cfg))
+# use cfg directly instead of polluting globals
 
 _use_runpod_flag = args.use_runpod
 _dag_depth_override = args.dag_depth
 _gpu_type_flag = args.gpu_type or runpod_service.DEFAULT_GPU
 config_path = args.config
 config = vars(cfg)
+
+# local aliases for config values
+out_dir = cfg.out_dir
+eval_interval = cfg.eval_interval
+log_interval = cfg.log_interval
+eval_iters = cfg.eval_iters
+eval_only = cfg.eval_only
+always_save_checkpoint = cfg.always_save_checkpoint
+init_from = cfg.init_from
+wandb_log = cfg.wandb_log
+wandb_project = cfg.wandb_project
+wandb_run_name = cfg.wandb_run_name
+dataset = cfg.dataset
+gradient_accumulation_steps = cfg.gradient_accumulation_steps
+batch_size = cfg.batch_size
+block_size = cfg.block_size
+n_layer = cfg.n_layer
+n_head = cfg.n_head
+n_embd = cfg.n_embd
+dropout = cfg.dropout
+bias = cfg.bias
+dag_depth = cfg.dag_depth
+dag_hidden_dim = cfg.dag_hidden_dim
+dag_num_ops = cfg.dag_num_ops
+learning_rate = cfg.learning_rate
+max_iters = cfg.max_iters
+weight_decay = cfg.weight_decay
+beta1 = cfg.beta1
+beta2 = cfg.beta2
+grad_clip = cfg.grad_clip
+decay_lr = cfg.decay_lr
+warmup_iters = cfg.warmup_iters
+lr_decay_iters = cfg.lr_decay_iters
+min_lr = cfg.min_lr
+backend = cfg.backend
+device = cfg.device
+dtype = cfg.dtype
+compile = cfg.compile
 
 if _use_runpod_flag:
     remote_args = config_path
