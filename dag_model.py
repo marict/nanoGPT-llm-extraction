@@ -126,6 +126,7 @@ class DAGGPT(GPT):
         # tie embedding weights with language model head
         self.transformer.wte.embedding.weight = self.lm_head.weight
         self.dag = DifferentiableDAG(config.n_embd, config.dag_num_ops, config.dag_depth)
+        self.mix_gate = nn.Linear(config.n_embd * 2, 1)
 
     def forward(self, idx, binary=None, targets=None, return_dag_info: bool = False):
         """Run the model and optionally return DAG attention info."""
@@ -144,9 +145,8 @@ class DAGGPT(GPT):
         for block in self.transformer.h:
             x = block(x)
         hidden = self.transformer.ln_f(x)
-        logits = self.lm_head(hidden)
         loss = None
-        start_node = emb[:, -1, :]
+        start_node = tok_emb[:, -1, :]
         dag_result = self.dag([start_node, start_node], return_info=return_dag_info)
         if return_dag_info:
             dag_nodes, attn_hist, op_hist = dag_result
@@ -154,6 +154,12 @@ class DAGGPT(GPT):
             dag_nodes = dag_result
             attn_hist = op_hist = None
         dag_output = dag_nodes[:, -1, :]
+        gate = torch.sigmoid(
+            self.mix_gate(torch.cat([hidden[:, -1, :], dag_output], dim=-1))
+        )
+        hidden = hidden.clone()
+        hidden[:, -1, :] = (1 - gate) * hidden[:, -1, :] + gate * dag_output
+        logits = self.lm_head(hidden)
         if return_dag_info:
             return logits, loss, dag_output, {"attn": attn_hist, "op": op_hist}
         return logits, loss, dag_output
