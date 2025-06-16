@@ -27,7 +27,6 @@ bias = False
 
 dag_depth = 0
 dag_hidden_dim = 16
-dag_num_ops = 5
 
 learning_rate = 6e-4
 max_iters = 0

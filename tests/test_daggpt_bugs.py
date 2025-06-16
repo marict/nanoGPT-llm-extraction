@@ -6,7 +6,7 @@ from dag_model import DAGGPT, DAGGPTConfig, DAGController
 
 def test_controller_selects_distinct_inputs():
     torch.manual_seed(0)
-    controller = DAGController(hidden_dim=4, num_ops=5)
+    controller = DAGController(hidden_dim=4)
     nodes = torch.randn(1, 3, 4)
     ctx = torch.zeros(1, 4)
     input1, input2, _ = controller(nodes, ctx, ctx)
