@@ -130,14 +130,15 @@ class DAGGPT(GPT):
         pos = torch.arange(0, t, dtype=torch.long, device=device)
         tok_emb = self.transformer.wte(idx, binary)
         pos_emb = self.transformer.wpe(pos)
-        x = self.transformer.drop(tok_emb + pos_emb)
+        emb = tok_emb + pos_emb
+        x = self.transformer.drop(emb)
         for block in self.transformer.h:
             x = block(x)
         hidden = self.transformer.ln_f(x)
         logits = self.lm_head(hidden)
         loss = None
-        last_hidden = hidden[:, -1, :]
-        dag_result = self.dag([last_hidden, last_hidden], return_info=return_dag_info)
+        start_node = emb[:, -1, :]
+        dag_result = self.dag([start_node, start_node], return_info=return_dag_info)
         if return_dag_info:
             dag_nodes, attn_hist, op_hist = dag_result
         else:
@@ -147,3 +148,13 @@ class DAGGPT(GPT):
         if return_dag_info:
             return logits, loss, dag_output, {"attn": attn_hist, "op": op_hist}
         return logits, loss, dag_output
+
+    def predict_number(self, idx, binary, tokenizer):
+        """Run a forward pass and decode the DAG output as a float."""
+        logits, _, dag_out = self(idx, binary=binary)
+        token_logits = self.lm_head(dag_out)
+        pred_id = torch.argmax(token_logits, dim=-1)
+        if pred_id.numel() != 1:
+            raise ValueError("predict_number only supports batch size 1")
+        token_int = pred_id.item()
+        return tokenizer.id_to_num.get(token_int)

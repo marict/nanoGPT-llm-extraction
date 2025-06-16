@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -64,3 +65,43 @@ def test_dag_backward_flow(small_dag_gpt):
     grad = model.dag.controller.op_selector.weight.grad
     assert grad is not None
     assert torch.any(grad != 0)
+
+
+def test_predict_number(monkeypatch):
+    from numeric_tokenizer import NumericTokenizer
+
+    tok = NumericTokenizer()
+    tokens, binary = tok.encode("7")
+
+    cfg = DAGGPTConfig(
+        vocab_size=tok.next_id,
+        block_size=len(tokens),
+        n_layer=1,
+        n_head=1,
+        n_embd=8,
+        dag_depth=1,
+    )
+    model = DAGGPT(cfg)
+
+    class DummyHead(nn.Module):
+        def __init__(self, token_id, vocab_size):
+            super().__init__()
+            self.token_id = token_id
+            self.vocab_size = vocab_size
+
+        def forward(self, x):
+            b = x.size(0)
+            logits = torch.zeros(b, self.vocab_size)
+            logits[:, self.token_id] = 5.0
+            return logits
+
+    model.lm_head = DummyHead(tokens[0], cfg.vocab_size)
+
+    number = model.predict_number(
+        torch.tensor(tokens).unsqueeze(0),
+        binary=torch.tensor(binary).unsqueeze(0),
+        tokenizer=tok,
+    )
+
+    assert number == 7.0
+
