@@ -1,9 +1,16 @@
 import os
 import subprocess
 from typing import Sequence
-import runpod
-from runpod.cli.utils.rp_info import get_pod_ssh_ip_port
-from runpod.cli.utils.ssh_cmd import SSHConnection
+try:
+    import runpod
+    from runpod.cli.utils.rp_info import get_pod_ssh_ip_port
+    from runpod.cli.utils.ssh_cmd import SSHConnection
+except ModuleNotFoundError:  # pragma: no cover - handled in tests
+    import types
+
+    runpod = types.SimpleNamespace(create_pod=None, api_key=None)
+    get_pod_ssh_ip_port = None
+    SSHConnection = None
 from python_version_check import check_python_version
 
 check_python_version()
@@ -21,7 +28,12 @@ def start_cloud_training(
     api_key: str | None = None,
 ) -> str:
     """Launch a RunPod GPU instance and run training via SSH."""
-    runpod.api_key = api_key or os.getenv("RUNPOD_API_KEY") or runpod.api_key
+    if runpod is None or get_pod_ssh_ip_port is None or SSHConnection is None:
+        raise RunPodError(
+            "runpod package is required to start cloud training"
+        )
+
+    runpod.api_key = api_key or os.getenv("RUNPOD_API_KEY") or getattr(runpod, "api_key", None)
     if not runpod.api_key:
         raise RunPodError(
             "RunPod API key is required. Provide via --api-key or set the RUNPOD_API_KEY environment variable"
