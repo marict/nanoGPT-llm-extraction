@@ -65,6 +65,31 @@ def test_start_cloud_training_default_config(monkeypatch):
     assert "/workspace/config/train_chatgpt2.py" in created["payload"].get("user_data", "")
 
 
+def test_start_cloud_training_accepts_201(monkeypatch):
+    created = {}
+
+    def fake_post(url, json, headers):
+        created['payload'] = json
+        return DummyResponse({"data": {"instance_ids": ["inst456"]}}, status=201)
+
+    statuses = [
+        DummyResponse({"data": {"status": "booting"}}),
+        DummyResponse({"data": {"status": "terminated"}}),
+    ]
+
+    def fake_get(url, headers):
+        return statuses.pop(0)
+
+    monkeypatch.setenv("LAMBDA_API_KEY", "key")
+    monkeypatch.setenv("LAMBDA_SSH_KEY", "ssh")
+    monkeypatch.setattr(ls.requests, "post", fake_post)
+    monkeypatch.setattr(ls.requests, "get", fake_get)
+    monkeypatch.setattr(ls.time, "sleep", lambda x: None)
+    inst_id = ls.start_cloud_training("config.py")
+    assert inst_id == "inst456"
+    assert "/workspace/config.py" in created["payload"].get("user_data", "")
+
+
 def test_visualize_dag_attention(tmp_path):
     from dag_model import DAGGPT, DAGGPTConfig, DAGController
     import dag_model
