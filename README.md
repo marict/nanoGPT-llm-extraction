@@ -20,23 +20,23 @@ to decoding the final token.
 
 ```mermaid
 flowchart TD
-    A[Input Tokens] --> B[Embedding]
-    B --> C[Add Position Embeddings]
-    C --> D[Transformer Blocks]
-    D --> E[LayerNorm]
-    E --> F[Snap Block]
-    F --> G[Token Attention]
-    G --> H[Project to float & round]
-    H --> I[Initial DAG Nodes]
-    E --> O[Operand Attention]
-    E --> P[Operation Attention]
-    I --> J[Differentiable DAG]
+    A["Input Tokens<br/>(B, T)"] --> B["Embedding<br/>(B, T, d)"]
+    B --> C["Add Position Embeddings<br/>(B, T, d)"]
+    C --> D["Transformer Blocks<br/>(B, T, d)"]
+    D --> E["LayerNorm<br/>(B, T, d)"]
+    E --> F["Snap Block<br/>(B, T, d)"]
+    F --> G["Token Attention<br/>(B, T, d)"]
+    G --> H["Project to float & round<br/>out: (B, T)"]
+    H --> I["Initial DAG Nodes<br/>(B, T, d)"]
+    E --> O["Operand Attention<br/>out: (B, d)"]
+    E --> P["Operation Attention<br/>out: (B, d)"]
+    I --> J["Differentiable DAG<br/>out: (B, T + depth, d)"]
     O --> J
     P --> J
-    J --> K[Post-DAG Block]
-    E --> L[Gate]
+    J --> K["Post-DAG Block<br/>(B, d)"]
+    E --> L["Gate<br/>(B, d) → (B, T, d)"]
     K --> L
-    L --> M[LM Head]
+    L --> M["LM Head<br/>out: (B, T, V)"]
 ```
 
 ## Installation
