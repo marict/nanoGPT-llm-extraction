@@ -1,5 +1,6 @@
 import os
 import time
+import subprocess
 from typing import Sequence
 import requests
 from python_version_check import check_python_version
@@ -47,7 +48,6 @@ def start_cloud_training(
     user_data = (
         "#!/bin/bash\n"
         "curl -L https://lambdalabs-guest-agent.s3.us-west-2.amazonaws.com/scripts/install.sh | sudo bash\n"
-        f"cd /workspace && python train.py {train_args}\n"
     )
 
     payload = {
@@ -70,15 +70,30 @@ def start_cloud_training(
     instance_id = instance_ids[0]
     print(f"Launched instance {instance_id}")
 
+    ip_addr = None
     while True:
         stat = requests.get(f"{API_BASE}/instances/{instance_id}", headers=headers)
         if stat.status_code // 100 != 2:
             raise LambdaError("Lambda API returned no status information")
-        status = stat.json().get("data", {}).get("status")
-        print(f"Training status: {status}")
-        if status in {"terminated", "terminating", "unhealthy"}:
+        info = stat.json().get("data", {})
+        status = info.get("status")
+        ip_addr = ip_addr or info.get("ip") or info.get("ip_address") or info.get("ipv4") or info.get("ip_addresses", {}).get("public")
+        print(f"Instance status: {status}")
+        if status == "running" and ip_addr:
             break
+        if status in {"terminated", "terminating", "unhealthy"}:
+            raise LambdaError("Instance failed to start")
         time.sleep(10)
+
+    if not ip_addr:
+        raise LambdaError("Could not determine instance IP address")
+
+    ssh_cmd = [
+        "ssh",
+        f"ubuntu@{ip_addr}",
+        f"cd /workspace && python train.py {train_args}",
+    ]
+    subprocess.run(ssh_cmd, check=True)
 
     return instance_id
 
