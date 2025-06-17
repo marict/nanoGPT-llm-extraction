@@ -1,8 +1,8 @@
+import os
 import pickle
 import subprocess
 import sys
 from pathlib import Path
-import os
 
 import numpy as np
 

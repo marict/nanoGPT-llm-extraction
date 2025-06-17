@@ -11,6 +11,7 @@ DEFAULT_GPU_TYPE = "NVIDIA GeForce RTX 5090"
 REPO_URL = "https://github.com/marict/nanoGPT-llm-extraction.git"
 POD_NAME = "daggpt-train"
 
+
 def _get_wandb_url(cfg_path: str) -> str:
     """Return the expected Weights & Biases URL for ``cfg_path``."""
     data: dict[str, str] = {}
@@ -86,9 +87,7 @@ def start_cloud_training(
         gpu_type_id=gpu_type_id,
         start_ssh=False,
         docker_args=docker_args,
-        env={
-            "WANDB_API_KEY": os.getenv("WANDB_API_KEY", "")
-        }
+        env={"WANDB_API_KEY": os.getenv("WANDB_API_KEY", "")},
     )
     pod_id = pod.get("id")
     if not pod_id:

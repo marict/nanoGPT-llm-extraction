@@ -145,9 +145,7 @@ if args.wandb_api_key:
 
 # validate required keys
 if not os.getenv("WANDB_API_KEY"):
-    parser.error(
-        "WANDB_API_KEY is required for logging to Weights & Biases"
-    )
+    parser.error("WANDB_API_KEY is required for logging to Weights & Biases")
 
 # local aliases for config values
 out_dir = cfg.out_dir
