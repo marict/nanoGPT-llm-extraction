@@ -16,7 +16,7 @@ import pytest
 def test_train_script_runs(tmp_path: Path, batch_size: int):
     """Run ``train.py`` on a tiny synthetic dataset to ensure the script works."""
     # Create a minimal dataset locally to avoid network downloads from prepare.py
-    data_dir = tmp_path / "data" / "shakespeare_char"
+    data_dir = tmp_path / "data" / "shakespeare"
     data_dir.mkdir(parents=True)
 
     vocab_size = 10
@@ -49,7 +49,7 @@ def test_train_script_runs(tmp_path: Path, batch_size: int):
         "--eval_iters=1",
         "--log_interval=1",
         "--max_iters=0",
-        "--dataset=shakespeare_char",
+        "--dataset=shakespeare",
         f"--batch_size={batch_size}",
         "--n_layer=1",
         "--n_head=1",

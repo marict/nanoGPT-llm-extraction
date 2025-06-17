@@ -12,7 +12,7 @@ init_from = "scratch"
 wandb_project = "owt"
 
 # tiny dataset and network for quick local testing
-dataset = "shakespeare_char"
+dataset = "shakespeare"
 gradient_accumulation_steps = 1
 batch_size = 2
 block_size = 32
