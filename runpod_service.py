@@ -67,7 +67,7 @@ def start_cloud_training(
         cfg_path = args_list[0]
         wandb_url = _get_wandb_url(cfg_path)
         if not os.path.isabs(cfg_path):
-            args_list[0] = f"/workspace/{cfg_path}"
+            args_list[0] = f"/workspace/repo/{cfg_path}"
     args_list.append(f"--wandb_project={POD_NAME}")
     train_args = " ".join(args_list)
 

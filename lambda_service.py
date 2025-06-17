@@ -12,6 +12,7 @@ check_python_version()
 API_BASE = "https://cloud.lambdalabs.com/api/v1"
 DEFAULT_INSTANCE_TYPE = "gpu_1x_a10"
 DEFAULT_REGION = "us-east-1"
+POD_NAME = "your_pod_name"
 
 
 class LambdaError(Exception):
@@ -44,8 +45,10 @@ def start_cloud_training(
     args_list = train_args.split()
     if args_list:
         cfg_path = args_list[0]
+        wandb_url = _get_wandb_url(cfg_path)
         if not os.path.isabs(cfg_path):
-            args_list[0] = f"/workspace/{cfg_path}"
+            args_list[0] = f"/workspace/repo/{cfg_path}"
+    args_list.append(f"--wandb_project={POD_NAME}")
     train_args = " ".join(args_list)
 
     user_data = (
@@ -100,7 +103,7 @@ def start_cloud_training(
     ssh_cmd = [
         "ssh",
         f"ubuntu@{ip_addr}",
-        f"cd /workspace && python train.py {train_args}",
+        f"cd /workspace/repo && python train.py {train_args}",
     ]
     subprocess.run(ssh_cmd, check=True)
 
