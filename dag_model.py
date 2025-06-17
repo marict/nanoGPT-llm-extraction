@@ -225,9 +225,13 @@ class DAGGPT(GPT):
         gate = torch.sigmoid(
             self.mix_gate(torch.cat([hidden[:, -1, :], dag_sem], dim=-1))
         )
-        hidden = hidden.clone()
-        hidden[:, -1, :] = (1 - gate) * hidden[:, -1, :] + gate * dag_sem
+        new_last = (1 - gate) * hidden[:, -1, :] + gate * dag_sem
+        hidden = torch.cat([hidden[:, :-1, :], new_last.unsqueeze(1)], dim=1)
         logits = self.lm_head(hidden)
+        if targets is not None:
+            loss = self._compute_loss(logits, targets)
+        else:
+            loss = None
         if return_dag_info:
-            return logits, None, dag_output, {"attn": attn_hist, "op": op_hist}
-        return logits, None, dag_output
+            return logits, loss, dag_output, {"attn": attn_hist, "op": op_hist}
+        return logits, loss, dag_output

@@ -1,6 +1,9 @@
+import sys
+from pathlib import Path
 import torch
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dag_model import DAGGPT, DAGGPTConfig, DAGController
 
 
@@ -27,3 +30,14 @@ def test_forward_block_size_assertion():
     x = torch.randint(0, 10, (1, 3))
     with pytest.raises(AssertionError):
         model(x)
+
+
+def test_forward_returns_loss_when_targets_given():
+    cfg = DAGGPTConfig(vocab_size=10, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=1)
+    model = DAGGPT(cfg)
+    x = torch.randint(0, cfg.vocab_size, (1, 4))
+    logits, loss, _ = model(x, targets=x)
+    assert loss is not None
+    assert loss.ndim == 0
+    loss.backward()
+    assert model.lm_head.weight.grad is not None
