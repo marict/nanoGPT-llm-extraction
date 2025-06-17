@@ -53,8 +53,10 @@ def start_cloud_training(
         "user_data": user_data,
     }
 
-    resp = requests.post(f"{API_BASE}/instance-operations/launch", json=payload, headers=headers)
-    if resp.status_code != 200:
+    resp = requests.post(
+        f"{API_BASE}/instance-operations/launch", json=payload, headers=headers
+    )
+    if resp.status_code // 100 != 2:
         raise LambdaError(f"Failed to launch instance: {resp.text}")
 
     data = resp.json().get("data", {})
@@ -66,7 +68,7 @@ def start_cloud_training(
 
     while True:
         stat = requests.get(f"{API_BASE}/instances/{instance_id}", headers=headers)
-        if stat.status_code != 200:
+        if stat.status_code // 100 != 2:
             raise LambdaError("Lambda API returned no status information")
         status = stat.json().get("data", {}).get("status")
         print(f"Training status: {status}")
