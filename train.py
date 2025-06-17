@@ -38,7 +38,7 @@ from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
 from dag_model import DAGGPT, DAGGPTConfig
-import runpod_service
+import lambda_service
 
 
 @dataclass
@@ -121,10 +121,10 @@ def apply_overrides(cfg: TrainConfig, overrides: list[str]) -> None:
 
 parser = argparse.ArgumentParser(description="nanoGPT Trainer")
 parser.add_argument("config", nargs="?", default="config/train_default.py")
-parser.add_argument("--use-runpod", action="store_true")
+parser.add_argument("--use-lambda", action="store_true")
 parser.add_argument("--dag-depth", type=int)
-parser.add_argument("--gpu-type")
-parser.add_argument("--runpod-api-key", help="RunPod API key")
+parser.add_argument("--instance-type")
+parser.add_argument("--lambda-api-key", help="Lambda API key")
 parser.add_argument("--wandb-api-key", help="Weights & Biases API key")
 args, overrides = parser.parse_known_args()
 
@@ -136,21 +136,21 @@ if args.dag_depth is not None:
 
 # use cfg directly instead of polluting globals
 
-_use_runpod_flag = args.use_runpod
+_use_lambda_flag = args.use_lambda
 _dag_depth_override = args.dag_depth
-_gpu_type_flag = args.gpu_type or runpod_service.DEFAULT_GPU
+_instance_type_flag = args.instance_type or lambda_service.DEFAULT_INSTANCE_TYPE
 config_path = args.config
 config = vars(cfg)
 
 # propagate API keys via environment variables
-if args.runpod_api_key:
-    os.environ["RUNPOD_API_KEY"] = args.runpod_api_key
+if args.lambda_api_key:
+    os.environ["LAMBDA_API_KEY"] = args.lambda_api_key
 if args.wandb_api_key:
     os.environ["WANDB_API_KEY"] = args.wandb_api_key
 
 # validate required keys
-if args.use_runpod and not os.getenv("RUNPOD_API_KEY"):
-    parser.error("--use-runpod requires a RunPod API key (--runpod-api-key or RUNPOD_API_KEY env var)")
+if args.use_lambda and not os.getenv("LAMBDA_API_KEY"):
+    parser.error("--use-lambda requires a Lambda API key (--lambda-api-key or LAMBDA_API_KEY env var)")
 if cfg.wandb_log and not os.getenv("WANDB_API_KEY"):
     parser.error("wandb logging enabled but WANDB_API_KEY not set. Provide via --wandb-api-key or environment variable")
 
@@ -191,14 +191,14 @@ device = cfg.device
 dtype = cfg.dtype
 compile = cfg.compile
 
-if _use_runpod_flag:
+if _use_lambda_flag:
     remote_args = config_path
     for ov in overrides:
         remote_args += f" {ov}"
     if _dag_depth_override is not None:
         # use the public argument name with dash, not underscore
         remote_args += f" --dag-depth={_dag_depth_override}"
-    runpod_service.start_cloud_training(remote_args, _gpu_type_flag, api_key=os.getenv("RUNPOD_API_KEY"))
+    lambda_service.start_cloud_training(remote_args, _instance_type_flag, api_key=os.getenv("LAMBDA_API_KEY"))
     raise SystemExit
 # -----------------------------------------------------------------------------
 

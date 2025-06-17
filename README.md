@@ -72,45 +72,35 @@ python bench.py
 
 This benchmarks a minimal model forward and backward pass.
 
-## RunPod
+## Lambda Cloud
 
-Set up a virtual environment and install the RunPod SDK:
+Set up a virtual environment and install the dependencies:
 
 ```bash
 python3 -m venv env
 source env/bin/activate
-python -m pip install runpod
+pip install requests
 ```
 
-Check the installed version:
+Launch training in the cloud using your API and SSH key:
 
 ```bash
-pip show runpod
-python3 -c "import runpod; print(runpod.__version__)"
+export LAMBDA_API_KEY=YOUR_KEY
+export LAMBDA_SSH_KEY=YOUR_SSH_KEY_NAME
+python lambda_service.py train config/train_default.py --instance gpu_1x_a10 --region us-east-1
 ```
 
-Set the API key via an environment variable or command line argument. Launch training in the cloud:
+To enable Weights & Biases logging, provide your ``WANDB_API_KEY``:
 
 ```bash
-export RUNPOD_API_KEY=YOUR_KEY
-python runpod_service.py train config/train_default.py --gpu "NVIDIA A100 80GB PCIe" --api-key $RUNPOD_API_KEY
-
-To enable Weights & Biases logging, provide your ``WANDB_API_KEY`` and use the RunPod training config:
-
-```bash
-export RUNPOD_API_KEY=YOUR_KEY
+export LAMBDA_API_KEY=YOUR_KEY
+export LAMBDA_SSH_KEY=YOUR_SSH_KEY_NAME
 export WANDB_API_KEY=YOUR_WANDB_KEY
-python runpod_service.py train config/train_daggpt_runpod.py --gpu "NVIDIA A100 80GB PCIe" --api-key $RUNPOD_API_KEY
-```
-
-Or run inference using an existing endpoint:
-
-```bash
-python runpod_service.py infer "a math question" --endpoint ENDPOINT_ID
+python lambda_service.py train config/train_daggpt_lambda.py
 ```
 
 ### Troubleshooting tips
 
-* **502 errors** – ensure your pod has a GPU attached and inspect its logs for errors.
-* **Storage full** – check disk usage with `df -h` and remove large files or mount a network volume.
-* **Leaked API keys** – disable or revoke the compromised key from the console.
+* **Authentication errors** – confirm the ``LAMBDA_API_KEY`` is valid.
+* **Storage full** – check disk usage with ``df -h`` and remove large files.
+* **Leaked API keys** – revoke the compromised key from the console.
