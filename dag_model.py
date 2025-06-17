@@ -161,7 +161,8 @@ class DifferentiableDAG(nn.Module):
 # GPT wrapper with DAG
 # -----------------------------------------------------------------------------
 from dataclasses import dataclass
-from model import GPT, GPTConfig, Block
+
+from model import GPT, Block, GPTConfig
 
 
 @dataclass
@@ -178,7 +179,9 @@ class DAGGPT(GPT):
         # initialize DAG components
         self.dag = DifferentiableDAG(config.n_embd, config.dag_depth)
         self.mix_gate = nn.Linear(config.n_embd * 2, 1)
-        self.token_attn = nn.MultiheadAttention(config.n_embd, config.n_head, batch_first=True)
+        self.token_attn = nn.MultiheadAttention(
+            config.n_embd, config.n_head, batch_first=True
+        )
         self.attn_to_num = nn.Linear(config.n_embd, 1)
         self.snap_block = Block(config)
         self.operand_ctx_block = Block(config)
@@ -189,9 +192,9 @@ class DAGGPT(GPT):
         """Run the model and optionally return DAG attention info."""
         device = idx.device
         b, t = idx.size()
-        assert t <= self.config.block_size, (
-            f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        )
+        assert (
+            t <= self.config.block_size
+        ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=device)
         tok_emb = self.transformer.wte(idx)
         pos_emb = self.transformer.wpe(pos)

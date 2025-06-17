@@ -1,8 +1,10 @@
 import os
-import time
 import subprocess
+import time
 from typing import Sequence
+
 import requests
+
 from python_version_check import check_python_version
 
 check_python_version()
@@ -10,6 +12,7 @@ check_python_version()
 API_BASE = "https://cloud.lambdalabs.com/api/v1"
 DEFAULT_INSTANCE_TYPE = "gpu_1x_a10"
 DEFAULT_REGION = "us-east-1"
+
 
 class LambdaError(Exception):
     """Custom exception for Lambda Labs operations."""
@@ -77,7 +80,13 @@ def start_cloud_training(
             raise LambdaError("Lambda API returned no status information")
         info = stat.json().get("data", {})
         status = info.get("status")
-        ip_addr = ip_addr or info.get("ip") or info.get("ip_address") or info.get("ipv4") or info.get("ip_addresses", {}).get("public")
+        ip_addr = (
+            ip_addr
+            or info.get("ip")
+            or info.get("ip_address")
+            or info.get("ipv4")
+            or info.get("ip_addresses", {}).get("public")
+        )
         print(f"Instance status: {status}")
         if status == "running" and ip_addr:
             break
@@ -106,8 +115,9 @@ def visualize_dag_attention(
 ):
     """Run ``model`` on ``prompt`` and save a DAG attention heatmap."""
 
-    import torch
     import matplotlib.pyplot as plt
+    import torch
+
     from dag_model import DAGGPT
 
     if not isinstance(model, DAGGPT):
@@ -145,7 +155,9 @@ if __name__ == "__main__":
 
     t = sub.add_parser("train", help="Start training instance")
     t.add_argument("config", help="Training config file")
-    t.add_argument("--instance", default=DEFAULT_INSTANCE_TYPE, help="Instance type name")
+    t.add_argument(
+        "--instance", default=DEFAULT_INSTANCE_TYPE, help="Instance type name"
+    )
     t.add_argument("--region", default=DEFAULT_REGION, help="Region name")
     t.add_argument("--ssh-key", help="SSH key name")
     t.add_argument("--api-key", help="Lambda API key")

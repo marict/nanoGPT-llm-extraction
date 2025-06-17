@@ -1,6 +1,8 @@
 import os
 from typing import Sequence
+
 import runpod
+
 from python_version_check import check_python_version
 
 check_python_version()
@@ -20,6 +22,7 @@ def _resolve_gpu_id(gpu_type: str) -> str:
             return gpu["id"]
     raise RunPodError(f"GPU type '{gpu_type}' not found")
 
+
 class RunPodError(Exception):
     """Custom exception for RunPod operations."""
 
@@ -32,7 +35,9 @@ def start_cloud_training(
 ) -> str:
     """Launch a RunPod GPU instance and run training automatically."""
 
-    runpod.api_key = api_key or os.getenv("RUNPOD_API_KEY") or getattr(runpod, "api_key", None)
+    runpod.api_key = (
+        api_key or os.getenv("RUNPOD_API_KEY") or getattr(runpod, "api_key", None)
+    )
     if not runpod.api_key:
         raise RunPodError(
             "RunPod API key is required. Provide via --api-key or set the RUNPOD_API_KEY environment variable"
@@ -70,8 +75,9 @@ def visualize_dag_attention(
 ):
     """Run ``model`` on ``prompt`` and save a DAG attention heatmap."""
 
-    import torch
     import matplotlib.pyplot as plt
+    import torch
+
     from dag_model import DAGGPT
 
     if not isinstance(model, DAGGPT):

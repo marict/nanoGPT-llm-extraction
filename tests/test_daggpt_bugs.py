@@ -1,10 +1,11 @@
 import sys
 from pathlib import Path
-import torch
+
 import pytest
+import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from dag_model import DAGGPT, DAGGPTConfig, DAGController
+from dag_model import DAGGPT, DAGController, DAGGPTConfig
 
 
 def test_controller_selects_distinct_inputs():
@@ -17,7 +18,9 @@ def test_controller_selects_distinct_inputs():
 
 
 def test_weight_tying():
-    cfg = DAGGPTConfig(vocab_size=10, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=1)
+    cfg = DAGGPTConfig(
+        vocab_size=10, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=1
+    )
     model = DAGGPT(cfg)
     w1 = model.transformer.wte.weight
     w2 = model.lm_head.weight
@@ -25,7 +28,9 @@ def test_weight_tying():
 
 
 def test_forward_block_size_assertion():
-    cfg = DAGGPTConfig(vocab_size=10, block_size=2, n_layer=1, n_head=1, n_embd=8, dag_depth=1)
+    cfg = DAGGPTConfig(
+        vocab_size=10, block_size=2, n_layer=1, n_head=1, n_embd=8, dag_depth=1
+    )
     model = DAGGPT(cfg)
     x = torch.randint(0, 10, (1, 3))
     with pytest.raises(AssertionError):
@@ -33,7 +38,9 @@ def test_forward_block_size_assertion():
 
 
 def test_forward_returns_loss_when_targets_given():
-    cfg = DAGGPTConfig(vocab_size=10, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=1)
+    cfg = DAGGPTConfig(
+        vocab_size=10, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=1
+    )
     model = DAGGPT(cfg)
     x = torch.randint(0, cfg.vocab_size, (1, 4))
     logits, loss, _ = model(x, targets=x)

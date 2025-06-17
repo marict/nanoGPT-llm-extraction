@@ -1,25 +1,22 @@
-import torch
-import torch.nn as nn
 import sys
 from pathlib import Path
 
+import torch
+import torch.nn as nn
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import dag_model
-from dag_model import (
-    DAGGPT,
-    DAGGPTConfig,
-    DifferentiableDAG,
-    DAGController,
-    multiply,
-    subtract,
-    divide,
-)
 import pytest
+
+import dag_model
+from dag_model import (DAGGPT, DAGController, DAGGPTConfig, DifferentiableDAG,
+                       divide, multiply, subtract)
 
 
 @pytest.fixture(scope="module")
 def small_dag_gpt():
-    config = DAGGPTConfig(vocab_size=20, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=2)
+    config = DAGGPTConfig(
+        vocab_size=20, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=2
+    )
     return DAGGPT(config), config
 
 
@@ -66,8 +63,6 @@ def test_dag_backward_flow(small_dag_gpt):
     assert grad is not None
 
 
-
-
 def test_dag_initial_nodes_all_tokens(monkeypatch):
     tokens = [0, 1, 2, 3]
 
@@ -97,7 +92,9 @@ def test_dag_initial_nodes_all_tokens(monkeypatch):
 
     def capture_forward(self, initial_nodes, operand_ctx, op_ctx, return_info=False):
         captured["nodes"] = initial_nodes
-        return original_forward(self, initial_nodes, operand_ctx, op_ctx, return_info=return_info)
+        return original_forward(
+            self, initial_nodes, operand_ctx, op_ctx, return_info=return_info
+        )
 
     monkeypatch.setattr(DifferentiableDAG, "forward", capture_forward)
 
@@ -142,7 +139,9 @@ def test_dag_attention_for_non_numeric(monkeypatch):
 
     def capture_forward(self, initial_nodes, operand_ctx, op_ctx, return_info=False):
         captured["nodes"] = initial_nodes
-        return original_forward(self, initial_nodes, operand_ctx, op_ctx, return_info=return_info)
+        return original_forward(
+            self, initial_nodes, operand_ctx, op_ctx, return_info=return_info
+        )
 
     monkeypatch.setattr(DifferentiableDAG, "forward", capture_forward)
 
@@ -178,7 +177,9 @@ def test_zero_padding_single_token(monkeypatch):
 
     def capture_forward(self, initial_nodes, operand_ctx, op_ctx, return_info=False):
         captured["nodes"] = initial_nodes
-        return original_forward(self, initial_nodes, operand_ctx, op_ctx, return_info=return_info)
+        return original_forward(
+            self, initial_nodes, operand_ctx, op_ctx, return_info=return_info
+        )
 
     monkeypatch.setattr(DifferentiableDAG, "forward", capture_forward)
 
@@ -191,7 +192,9 @@ def test_zero_padding_single_token(monkeypatch):
 
 
 def test_post_dag_block_called(monkeypatch):
-    cfg = DAGGPTConfig(vocab_size=10, block_size=2, n_layer=1, n_head=1, n_embd=8, dag_depth=1)
+    cfg = DAGGPTConfig(
+        vocab_size=10, block_size=2, n_layer=1, n_head=1, n_embd=8, dag_depth=1
+    )
     model = DAGGPT(cfg)
 
     called = {}
@@ -200,7 +203,11 @@ def test_post_dag_block_called(monkeypatch):
         called["used"] = True
         return x
 
-    monkeypatch.setattr(model.post_dag_block, "forward", fake_forward.__get__(model.post_dag_block, type(model.post_dag_block)))
+    monkeypatch.setattr(
+        model.post_dag_block,
+        "forward",
+        fake_forward.__get__(model.post_dag_block, type(model.post_dag_block)),
+    )
 
     x = torch.randint(0, 10, (1, 2))
     model(x)

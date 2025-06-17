@@ -2,8 +2,8 @@
 # Mirrors the hyperparameters used in the README instructions.
 
 wandb_log = True
-wandb_project = 'owt'
-wandb_run_name = 'chatgpt2-124M'
+wandb_project = "owt"
+wandb_run_name = "chatgpt2-124M"
 
 # total batch size of ~0.5M tokens
 batch_size = 12
@@ -21,4 +21,3 @@ log_interval = 10
 
 # weight decay
 weight_decay = 1e-1
-

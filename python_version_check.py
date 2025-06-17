@@ -10,4 +10,3 @@ def check_python_version() -> None:
         raise RuntimeError(
             f"Python {required}+ is required, found {sys.version.split()[0]}"
         )
-

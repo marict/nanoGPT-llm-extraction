@@ -1,9 +1,10 @@
 import argparse
-import torch
-import tiktoken
-from model import GPT, GPTConfig
-from dag_model import DAGGPT, DAGGPTConfig
 
+import tiktoken
+import torch
+
+from dag_model import DAGGPT, DAGGPTConfig
+from model import GPT, GPTConfig
 from python_version_check import check_python_version
 
 check_python_version()
@@ -22,7 +23,7 @@ def load_model(ckpt_path, device):
     unwanted_prefix = "_orig_mod."
     for k in list(state_dict.keys()):
         if k.startswith(unwanted_prefix):
-            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+            state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()

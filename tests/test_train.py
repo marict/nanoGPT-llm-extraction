@@ -1,8 +1,9 @@
+import pickle
+import subprocess
 import sys
 from pathlib import Path
-import subprocess
+
 import numpy as np
-import pickle
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

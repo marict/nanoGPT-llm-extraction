@@ -9,24 +9,29 @@ def test_start_cloud_training(monkeypatch):
     created = {}
 
     def fake_create_pod(**kwargs):
-        created['params'] = kwargs
-        return {'id': 'pod123'}
+        created["params"] = kwargs
+        return {"id": "pod123"}
 
     monkeypatch.setenv("RUNPOD_API_KEY", "key")
     monkeypatch.setattr(rp.runpod, "create_pod", fake_create_pod)
-    monkeypatch.setattr(rp.runpod, "get_gpus", lambda: [{"id": "gpu123", "displayName": rp.DEFAULT_GPU_TYPE}])
+    monkeypatch.setattr(
+        rp.runpod,
+        "get_gpus",
+        lambda: [{"id": "gpu123", "displayName": rp.DEFAULT_GPU_TYPE}],
+    )
 
     pod_id = rp.start_cloud_training("config.py")
-    assert pod_id == 'pod123'
-    assert created['params']['gpu_type_id'] == 'gpu123'
-    assert created['params']['start_ssh'] is False
-    assert created['params']['docker_args'] == "python train.py /workspace/config.py"
+    assert pod_id == "pod123"
+    assert created["params"]["gpu_type_id"] == "gpu123"
+    assert created["params"]["start_ssh"] is False
+    assert created["params"]["docker_args"] == "python train.py /workspace/config.py"
 
 
 def test_visualize_dag_attention(tmp_path):
-    from dag_model import DAGGPT, DAGGPTConfig, DAGController
-    import dag_model
     import torch
+
+    import dag_model
+    from dag_model import DAGGPT, DAGController, DAGGPTConfig
 
     class DummyController(DAGController):
         def forward(self, nodes, operand_ctx, op_ctx):
@@ -56,7 +61,11 @@ def test_visualize_dag_attention(tmp_path):
         def encode(self, text):
             return tokens
 
-    result = rp.visualize_dag_attention(model, SimpleTokenizer(), prompt, save_path=str(out_path))
+    result = rp.visualize_dag_attention(
+        model, SimpleTokenizer(), prompt, save_path=str(out_path)
+    )
     assert Path(result).exists()
-    assert torch.allclose(model.dag.controller.last_attn.squeeze(), torch.tensor([1.0, 0.0]))
+    assert torch.allclose(
+        model.dag.controller.last_attn.squeeze(), torch.tensor([1.0, 0.0])
+    )
     assert torch.argmax(model.dag.controller.last_op_weights).item() == 2

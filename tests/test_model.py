@@ -1,10 +1,12 @@
 import sys
 from pathlib import Path
+
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from model import GPT, GPTConfig
 import pytest
+
+from model import GPT, GPTConfig
 
 
 @pytest.fixture(scope="module")
