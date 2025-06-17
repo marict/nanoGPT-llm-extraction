@@ -7,7 +7,23 @@ from python_version_check import check_python_version
 
 check_python_version()
 
-DEFAULT_GPU_TYPE = "NVIDIA GeForce RTX 5090"
+# Available GPU types for RunPod:
+# - NVIDIA A40
+# - NVIDIA A100 80GB PCIe
+# - NVIDIA A100-SXM4-80GB
+# - NVIDIA B200
+# - NVIDIA H100 PCIe
+# - NVIDIA H100 80GB HBM3
+# - NVIDIA H100 NVL
+# - NVIDIA H200
+# - NVIDIA L40
+# - NVIDIA L40S
+# - NVIDIA RTX 6000 Ada Generation
+# - NVIDIA RTX A6000
+# - NVIDIA RTX PRO 6000 Blackwell Workstation Edition
+
+# DEFAULT_GPU_TYPE = "NVIDIA GeForce RTX 5090"
+DEFAULT_GPU_TYPE = "NVIDIA H100 80GB HBM3"
 REPO_URL = "https://github.com/marict/nanoGPT-llm-extraction.git"
 POD_NAME = "daggpt-train"
 
@@ -85,6 +101,11 @@ def start_cloud_training(
         name=POD_NAME,
         image_name="runpod/pytorch:2.2.1-py3.10-cuda12.1.1-devel-ubuntu22.04",
         gpu_type_id=gpu_type_id,
+        gpu_count=1,  # one A100-40GB or A6000
+        min_vcpu_count=8,  # ≥ 8 cores
+        min_memory_in_gb=128,  # 128 GB RAM
+        volume_in_gb=80,  # persistent storage
+        container_disk_in_gb=40,  # docker-layer scratch (adjust if you like)
         start_ssh=False,
         docker_args=docker_args,
         env={"WANDB_API_KEY": os.getenv("WANDB_API_KEY", "")},
