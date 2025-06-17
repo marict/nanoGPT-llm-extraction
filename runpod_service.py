@@ -77,9 +77,7 @@ def start_cloud_training(
         image_name="runpod/stack",
         gpu_type_id=gpu_type_id,
         start_ssh=False,
-        docker_args=(
-            f"git clone {REPO_URL} repo && cd repo && python train.py {train_args}"
-        ),
+        docker_args=f"bash -c 'git clone {REPO_URL} repo && cd repo && python train.py {train_args}'"
     )
     pod_id = pod.get("id")
     if not pod_id:
