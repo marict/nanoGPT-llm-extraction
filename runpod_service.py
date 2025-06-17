@@ -74,7 +74,7 @@ def start_cloud_training(
 
     pod = runpod.create_pod(
         name="daggpt-train",
-        image_name="runpod/stack",
+        image_name="runpod/pytorch:2.2.1-py3.10-cuda12.1.1-devel-ubuntu22.04",
         gpu_type_id=gpu_type_id,
         start_ssh=False,
         docker_args=f"bash -c 'git clone {REPO_URL} repo && cd repo && python train.py {train_args}'"
