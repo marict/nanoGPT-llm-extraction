@@ -93,14 +93,14 @@ Set the API key via an environment variable or command line argument. Launch tra
 
 ```bash
 export RUNPOD_API_KEY=YOUR_KEY
-python runpod_service.py train config/train_default.py --gpu "NVIDIA A100 40GB PCIe" --api-key $RUNPOD_API_KEY
+python runpod_service.py train config/train_default.py --gpu "NVIDIA A100 80GB PCIe" --api-key $RUNPOD_API_KEY
 
 To enable Weights & Biases logging, provide your ``WANDB_API_KEY`` and use the RunPod training config:
 
 ```bash
 export RUNPOD_API_KEY=YOUR_KEY
 export WANDB_API_KEY=YOUR_WANDB_KEY
-python runpod_service.py train config/train_daggpt_runpod.py --gpu "NVIDIA A100 40GB PCIe" --api-key $RUNPOD_API_KEY
+python runpod_service.py train config/train_daggpt_runpod.py --gpu "NVIDIA A100 80GB PCIe" --api-key $RUNPOD_API_KEY
 ```
 
 Or run inference using an existing endpoint:
