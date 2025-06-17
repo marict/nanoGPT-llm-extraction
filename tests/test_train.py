@@ -2,6 +2,7 @@ import pickle
 import subprocess
 import sys
 from pathlib import Path
+import os
 
 import numpy as np
 
@@ -54,7 +55,8 @@ def test_train_script_runs(tmp_path: Path, batch_size: int):
         "--n_head=1",
         "--n_embd=32",
         "--block_size=32",
-        "--wandb_log=False",
     ]
-    # Run the training script in ``tmp_path`` so it picks up the synthetic dataset
-    subprocess.check_call(cmd, cwd=tmp_path)
+    env = os.environ.copy()
+    env["WANDB_API_KEY"] = "dummy"
+    env["WANDB_MODE"] = "offline"
+    subprocess.check_call(cmd, cwd=tmp_path, env=env)

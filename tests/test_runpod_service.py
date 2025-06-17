@@ -13,6 +13,22 @@ def test_start_cloud_training(monkeypatch):
         return {"id": "pod123"}
 
     monkeypatch.setenv("RUNPOD_API_KEY", "key")
+    monkeypatch.setenv("WANDB_API_KEY", "dummy")
+
+    class DummyWandb:
+        class util:
+            @staticmethod
+            def generate_id():
+                return "test-id"
+
+        class Api:
+            def __call__(self):
+                class A:
+                    def viewer(self):
+                        return {"entity": "tester"}
+
+                return A()
+    monkeypatch.setitem(sys.modules, "wandb", DummyWandb())
     monkeypatch.setattr(rp.runpod, "create_pod", fake_create_pod)
     monkeypatch.setattr(
         rp.runpod,

@@ -44,11 +44,48 @@ def start_cloud_training(
         )
 
     args_list = train_args.split()
+    overrides = []
     if args_list:
         cfg_path = args_list[0]
+        overrides = [arg for arg in args_list[1:] if arg.startswith("--")]
         if not os.path.isabs(cfg_path):
             args_list[0] = f"/workspace/{cfg_path}"
     train_args = " ".join(args_list)
+
+    wandb_project = wandb_run_name = None
+    try:  # pragma: no cover - defensive
+        from train import (
+            TrainConfig,
+            load_config_file,
+            update_config,
+            apply_overrides,
+        )
+
+        cfg = TrainConfig()
+        update_config(cfg, load_config_file(cfg_path))
+        apply_overrides(cfg, overrides)
+        wandb_project = cfg.wandb_project
+        wandb_run_name = cfg.wandb_run_name
+    except Exception:
+        pass
+
+    wandb_api_key = os.getenv("WANDB_API_KEY")
+    if not wandb_api_key:
+        raise RunPodError(
+            "WANDB_API_KEY environment variable must be set for wandb logging"
+        )
+
+    import wandb
+
+    run_id = wandb.util.generate_id()
+    os.environ["WANDB_RUN_ID"] = run_id
+    try:
+        api = wandb.Api()
+        entity = api.viewer().get("entity")
+    except Exception:  # pragma: no cover - network/auth issues
+        entity = None
+
+    wandb_url = f"https://wandb.ai/{(entity + '/' if entity else '')}{wandb_project}/runs/{run_id}"
 
     gpu_type_id = _resolve_gpu_id(gpu_type)
 
@@ -58,11 +95,15 @@ def start_cloud_training(
         gpu_type_id=gpu_type_id,
         start_ssh=False,
         docker_args=f"python train.py {train_args}",
+        env={"WANDB_API_KEY": wandb_api_key, "WANDB_RUN_ID": run_id},
     )
     pod_id = pod.get("id")
     if not pod_id:
         raise RunPodError("RunPod API did not return a pod id")
-    print(f"Created pod {pod_id}")
+    print(
+        f"Starting training job in pod {pod_id} on {gpu_type}. "
+        f"Run name: {wandb_run_name}. \nW&B URL: {wandb_url}"
+    )
 
     return pod_id
 
