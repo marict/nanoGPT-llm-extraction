@@ -167,8 +167,7 @@ from model import GPT, Block, GPTConfig
 
 @dataclass
 class DAGGPTConfig(GPTConfig):
-    dag_depth: int = 4
-    dag_hidden_dim: int = 16
+    dag_depth: int = 4  # Number of DAG steps to perform
 
 
 class DAGGPT(GPT):
@@ -187,6 +186,34 @@ class DAGGPT(GPT):
         self.operand_ctx_block = Block(config)
         self.op_ctx_block = Block(config)
         self.post_dag_block = Block(config)
+
+    @classmethod
+    def init_from(cls, model_type: str, override_args: dict | None = None) -> "DAGGPT":
+        """Initialize a DAGGPT model from a pretrained GPT model.
+
+        Args:
+            model_type: Type of pretrained model to load (e.g. 'gpt2')
+            override_args: Optional dict of arguments to override in the config
+
+        Returns:
+            Initialized DAGGPT model
+        """
+        # First initialize the base GPT model
+        base_model = GPT.from_pretrained(model_type, override_args)
+
+        # Create DAGGPT config from base model config
+        config = DAGGPTConfig(**base_model.config.__dict__)
+        if override_args:
+            for k, v in override_args.items():
+                setattr(config, k, v)
+
+        # Create new DAGGPT model
+        model = cls(config)
+
+        # Copy over the base model weights
+        model.load_state_dict(base_model.state_dict(), strict=False)
+
+        return model
 
     def forward(self, idx, targets=None, return_dag_info: bool = False):
         """Run the model and optionally return DAG attention info."""

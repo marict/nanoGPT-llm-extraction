@@ -9,7 +9,7 @@ eval_only = False
 always_save_checkpoint = True
 init_from = "scratch"
 
-wandb_project = "owt"
+wandb_project = "dag-gpt"
 
 # tiny dataset and network for quick local testing
 dataset = "shakespeare"
@@ -24,7 +24,6 @@ dropout = 0.0
 bias = False
 
 dag_depth = 0
-dag_hidden_dim = 16
 
 learning_rate = 6e-4
 max_iters = 0
