@@ -110,3 +110,16 @@ curl -L https://lambdalabs-guest-agent.s3.us-west-2.amazonaws.com/scripts/instal
 * **Authentication errors** – confirm the ``LAMBDA_API_KEY`` is valid.
 * **Storage full** – check disk usage with ``df -h`` and remove large files.
 * **Leaked API keys** – revoke the compromised key from the console.
+
+### Viewing Weights & Biases logs
+
+When ``wandb_log`` is enabled (the default in ``config/train_default.py`` or via
+an override), the training script calls ``wandb.init`` with
+``wandb_project`` and ``wandb_run_name``. This automatically creates the project
+if it does not exist or attaches to it if it already exists.
+
+After initialization, ``train.py`` prints ``W&B run URL: <link>`` where ``<link>``
+is a direct link to the run such as
+``https://wandb.ai/<user>/<project>/runs/<run-id>``. Open this address in your
+browser to monitor metrics, loss curves and system stats live. You can also find
+the run from your dashboard at ``https://wandb.ai``.

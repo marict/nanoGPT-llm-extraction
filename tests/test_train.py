@@ -53,6 +53,7 @@ def test_train_script_runs(tmp_path: Path, batch_size: int):
         "--n_head=1",
         "--n_embd=32",
         "--block_size=32",
+        "--wandb_log=False",
     ]
     # Run the training script in ``tmp_path`` so it picks up the synthetic dataset
     subprocess.check_call(cmd, cwd=tmp_path)
