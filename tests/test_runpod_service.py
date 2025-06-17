@@ -24,8 +24,12 @@ def test_start_cloud_training(monkeypatch):
     assert pod_id == "pod123"
     assert created["params"]["gpu_type_id"] == "gpu123"
     assert created["params"]["start_ssh"] is False
-    expected_cmd = f"bash -c 'git clone {rp.REPO_URL} repo && cd repo && python train.py /workspace/repo/config.py --wandb_project={rp.POD_NAME}'"
-    assert created["params"]["docker_args"] == expected_cmd
+
+    docker_args = created["params"]["docker_args"]
+    assert docker_args.startswith(
+        f"bash -c '[ -d repo ] && git -C repo pull || git clone {rp.REPO_URL} repo"
+    )
+    assert f"python train.py config.py --wandb_project={rp.POD_NAME}'" in docker_args
 
 
 def test_visualize_dag_attention(tmp_path):
