@@ -1,21 +1,23 @@
 import os
 import pickle
-import requests
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+import requests
 from tiktoken import get_encoding
 
 from data import register_dataset
 
+
 @register_dataset("shakespeare")
 def prepare(data_dir: Path) -> tuple[int, int]:
     """Prepare the tiny Shakespeare dataset for training.
-    
+
     Downloads the dataset if needed, splits into train/val, and exports to binary files.
-    
+
     Args:
         data_dir: Directory to save the prepared dataset
-        
+
     Returns:
         Tuple of (train_tokens, val_tokens)
     """
@@ -52,8 +54,9 @@ def prepare(data_dir: Path) -> tuple[int, int]:
     }
     with open(data_dir / "meta.pkl", "wb") as f:
         pickle.dump(meta, f)
-        
+
     return len(train_ids), len(val_ids)
+
 
 if __name__ == "__main__":
     prepare(Path(__file__).parent)

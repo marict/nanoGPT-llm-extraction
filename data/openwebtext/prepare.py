@@ -3,23 +3,25 @@
 
 import os
 import pickle
-import numpy as np
 from pathlib import Path
-from tiktoken import get_encoding
+
+import numpy as np
 from datasets import load_dataset
+from tiktoken import get_encoding
 
 from data import register_dataset
+
 
 @register_dataset("openwebtext")
 def prepare(data_dir: Path, num_proc: int = 8) -> tuple[int, int]:
     """Prepare the OpenWebText dataset for training.
-    
+
     Downloads the dataset, splits into train/val, and exports to binary files.
-    
+
     Args:
         data_dir: Directory to save the prepared dataset
         num_proc: Number of processes to use for tokenization
-        
+
     Returns:
         Tuple of (train_tokens, val_tokens)
     """
@@ -39,9 +41,7 @@ def prepare(data_dir: Path, num_proc: int = 8) -> tuple[int, int]:
     split_dataset = dataset["train"].train_test_split(
         test_size=0.0005, seed=2357, shuffle=True
     )
-    split_dataset["val"] = split_dataset.pop(
-        "test"
-    )  # rename the test split to val
+    split_dataset["val"] = split_dataset.pop("test")  # rename the test split to val
 
     # this results in:
     # >>> split_dataset
@@ -103,8 +103,9 @@ def prepare(data_dir: Path, num_proc: int = 8) -> tuple[int, int]:
     }
     with open(data_dir / "meta.pkl", "wb") as f:
         pickle.dump(meta, f)
-        
+
     return len(tokenized["train"]), len(tokenized["val"])
+
 
 if __name__ == "__main__":
     prepare(Path(__file__).parent)

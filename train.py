@@ -244,8 +244,11 @@ DATA_DIR = Path("data") / dataset
 if not (DATA_DIR / "train.bin").exists():
     print(f"Preparing dataset {dataset}...")
     from data import prepare_dataset
+
     train_tokens, val_tokens = prepare_dataset(dataset, DATA_DIR)
-    print(f"Dataset preparation complete. Train tokens: {train_tokens:,}, Val tokens: {val_tokens:,}")
+    print(
+        f"Dataset preparation complete. Train tokens: {train_tokens:,}, Val tokens: {val_tokens:,}"
+    )
 
 # attempt to derive vocab_size from the dataset
 META_PATH = DATA_DIR / "meta.pkl"
@@ -264,9 +267,7 @@ def get_batch(split: str) -> tuple[torch.Tensor, torch.Tensor]:
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
     if split == "train":
-        data = np.memmap(
-            DATA_DIR / "train.bin", dtype=META_DTYPE, mode="r"
-        )
+        data = np.memmap(DATA_DIR / "train.bin", dtype=META_DTYPE, mode="r")
     else:
         data = np.memmap(DATA_DIR / "val.bin", dtype=META_DTYPE, mode="r")
     ix = torch.randint(len(data) - block_size, (batch_size,))
