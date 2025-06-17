@@ -75,6 +75,13 @@ def start_cloud_training(
     docker_args = (
         f"bash -c '[ -d repo ] && git -C repo pull || git clone {REPO_URL} repo; "
         f"cd repo && "
+        f"apt-get update && apt-get install -y tree && "
+        f"echo '=== Directory Structure ===' && "
+        f"tree && "
+        f"echo '=== Current Directory ===' && "
+        f"pwd && "
+        f"echo '=== Config File Location ===' && "
+        f"ls -la config/train_default.py && "
         f"pip install -r requirements-dev.txt && "
         f"python train.py {train_args}'"
     )
