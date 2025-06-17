@@ -38,6 +38,7 @@ def test_start_cloud_training(monkeypatch):
     inst_id = ls.start_cloud_training("config.py")
     assert inst_id == "inst123"
     assert "/workspace/config.py" in created["payload"].get("user_data", "")
+    assert "guest-agent" in created["payload"].get("user_data", "")
 
 
 def test_start_cloud_training_default_config(monkeypatch):
@@ -63,6 +64,7 @@ def test_start_cloud_training_default_config(monkeypatch):
     inst_id = ls.start_cloud_training("config/train_chatgpt2.py")
     assert inst_id == "inst123"
     assert "/workspace/config/train_chatgpt2.py" in created["payload"].get("user_data", "")
+    assert "guest-agent" in created["payload"].get("user_data", "")
 
 
 def test_start_cloud_training_accepts_201(monkeypatch):

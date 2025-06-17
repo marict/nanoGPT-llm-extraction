@@ -330,9 +330,10 @@ model.to(device)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 try:
-    scaler = torch.amp.GradScaler(device_type=device_type,
-                                  enabled=(dtype == 'float16'))
-except AttributeError:
+    scaler = torch.amp.GradScaler(
+        device_type=device_type, enabled=(dtype == "float16")
+    )
+except (AttributeError, TypeError):
     # fall back for older PyTorch versions
     scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
