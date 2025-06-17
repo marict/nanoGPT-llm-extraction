@@ -11,7 +11,6 @@ DEFAULT_GPU_TYPE = "NVIDIA GeForce RTX 5090"
 REPO_URL = "https://github.com/marict/nanoGPT-llm-extraction.git"
 POD_NAME = "daggpt-train"
 
-
 def _get_wandb_url(cfg_path: str) -> str:
     """Return the expected Weights & Biases URL for ``cfg_path``."""
     if not os.path.isabs(cfg_path):
@@ -21,7 +20,7 @@ def _get_wandb_url(cfg_path: str) -> str:
         with open(cfg_path, "r") as f:
             exec(f.read(), data)
         project = data.get("wandb_project")
-        run_name = data.get("wandb_run_name")
+        run_name = POD_NAME
         if project and run_name:
             return f"https://wandb.ai/{project}/{run_name}"
     except Exception:
@@ -73,18 +72,18 @@ def start_cloud_training(
     train_args = " ".join(args_list)
 
     gpu_type_id = _resolve_gpu_id(gpu_type)
+    docker_args = (
+        f"bash -c '[ -d repo ] && git -C repo pull || git clone {REPO_URL} repo; "
+        f"cd repo && "
+        f"pip install -r requirements-dev.txt && "
+        f"python train.py {train_args}'"
+    )
     pod = runpod.create_pod(
-        name="daggpt-train",
+        name=POD_NAME,
         image_name="runpod/pytorch:2.2.1-py3.10-cuda12.1.1-devel-ubuntu22.04",
         gpu_type_id=gpu_type_id,
         start_ssh=False,
-        docker_args=(
-            f"bash -c '\n",
-            f"[ -d repo ] && git -C repo pull || git clone {REPO_URL} repo;\n",
-            f"cd repo\n",
-            f"pip install -r requirements-dev.txt\n",
-            f"python train.py {train_args}\n'",
-        )
+        docker_args=docker_args
     )
     pod_id = pod.get("id")
     if not pod_id:

@@ -10,7 +10,6 @@ always_save_checkpoint = True
 init_from = "scratch"
 
 wandb_project = "owt"
-wandb_run_name = "gpt2"
 
 # tiny dataset and network for quick local testing
 dataset = "shakespeare_char"
