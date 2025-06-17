@@ -72,14 +72,14 @@ python bench.py
 
 This benchmarks a minimal model forward and backward pass.
 
-## Lambda Cloud
+## RunPod
 
 Set up a virtual environment and install the dependencies:
 
 ```bash
 python3 -m venv env
 source env/bin/activate
-pip install requests
+pip install requests runpod
 ```
 
 Launch training in the cloud using your API and SSH key. The helper script now
@@ -87,29 +87,21 @@ opens an SSH session and runs the training command interactively so you can
 watch the logs directly:
 
 ```bash
-export LAMBDA_API_KEY=YOUR_KEY
-export LAMBDA_SSH_KEY=YOUR_SSH_KEY_NAME
-python lambda_service.py train config/train_default.py --instance gpu_1x_a10 --region us-east-1
+export RUNPOD_API_KEY=YOUR_KEY
+python runpod_service.py train config/train_default.py --gpu-type "NVIDIA A100-SXM4-40GB"
 ```
 
 To enable Weights & Biases logging, provide your ``WANDB_API_KEY``:
 
 ```bash
-export LAMBDA_API_KEY=YOUR_KEY
-export LAMBDA_SSH_KEY=YOUR_SSH_KEY_NAME
+export RUNPOD_API_KEY=YOUR_KEY
 export WANDB_API_KEY=YOUR_WANDB_KEY
-python lambda_service.py train config/train_daggpt_lambda.py
-```
-
-The launch script installs Lambda's Guest Agent so GPU metrics show up on your Cloud dashboard. It runs the following command before you SSH in to run training:
-
-```bash
-curl -L https://lambdalabs-guest-agent.s3.us-west-2.amazonaws.com/scripts/install.sh | sudo bash
+python runpod_service.py train config/train_daggpt_lambda.py
 ```
 
 ### Troubleshooting tips
 
-* **Authentication errors** – confirm the ``LAMBDA_API_KEY`` is valid.
+* **Authentication errors** – confirm the ``RUNPOD_API_KEY`` is valid.
 * **Storage full** – check disk usage with ``df -h`` and remove large files.
 * **Leaked API keys** – revoke the compromised key from the console.
 
