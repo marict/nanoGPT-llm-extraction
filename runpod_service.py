@@ -1,8 +1,6 @@
 import os
 from typing import Sequence
 import runpod
-from runpod.cli.utils.rp_info import get_pod_ssh_ip_port
-from runpod.cli.utils.ssh_cmd import SSHConnection
 from python_version_check import check_python_version
 
 check_python_version()
@@ -32,7 +30,7 @@ def start_cloud_training(
     *,
     api_key: str | None = None,
 ) -> str:
-    """Launch a RunPod GPU instance and run training via SSH."""
+    """Launch a RunPod GPU instance and run training automatically."""
 
     runpod.api_key = api_key or os.getenv("RUNPOD_API_KEY") or getattr(runpod, "api_key", None)
     if not runpod.api_key:
@@ -53,20 +51,14 @@ def start_cloud_training(
         name="daggpt-train",
         image_name="runpod/stack",
         gpu_type_id=gpu_type_id,
-        ports="22/tcp",
+        start_ssh=False,
+        docker_args=f"python train.py {train_args}",
     )
     pod_id = pod.get("id")
     if not pod_id:
         raise RunPodError("RunPod API did not return a pod id")
     print(f"Created pod {pod_id}")
 
-    # wait for pod to start and get ssh details
-    ip_addr, port = get_pod_ssh_ip_port(pod_id)
-
-    ssh = SSHConnection(pod_id)
-    cmd = f"cd /workspace && python train.py {train_args}"
-    ssh.run_commands([cmd])
-    ssh.close()
     return pod_id
 
 

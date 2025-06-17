@@ -12,34 +12,15 @@ def test_start_cloud_training(monkeypatch):
         created['params'] = kwargs
         return {'id': 'pod123'}
 
-    def fake_ip_port(pod_id):
-        assert pod_id == 'pod123'
-        return '1.2.3.4', 22
-
-    commands = {}
-
-    class DummySSH:
-        def __init__(self, pod_id):
-            assert pod_id == 'pod123'
-
-        def run_commands(self, cmds):
-            commands['value'] = cmds
-
-        def close(self):
-            pass
-
     monkeypatch.setenv("RUNPOD_API_KEY", "key")
     monkeypatch.setattr(rp.runpod, "create_pod", fake_create_pod)
     monkeypatch.setattr(rp.runpod, "get_gpus", lambda: [{"id": "gpu123", "displayName": rp.DEFAULT_GPU_TYPE}])
-    monkeypatch.setattr(rp, "get_pod_ssh_ip_port", fake_ip_port)
-    monkeypatch.setattr(rp, "SSHConnection", DummySSH)
 
     pod_id = rp.start_cloud_training("config.py")
     assert pod_id == 'pod123'
-    assert commands['value'] == [
-        "cd /workspace && python train.py /workspace/config.py"
-    ]
     assert created['params']['gpu_type_id'] == 'gpu123'
+    assert created['params']['start_ssh'] is False
+    assert created['params']['docker_args'] == "python train.py /workspace/config.py"
 
 
 def test_visualize_dag_attention(tmp_path):
