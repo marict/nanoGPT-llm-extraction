@@ -51,7 +51,6 @@ class TrainConfig:
     always_save_checkpoint: bool = True
     init_from: str = "scratch"
 
-    wandb_log: bool = True
     wandb_project: str = "owt"
     wandb_run_name: str = "gpt2"
 
@@ -153,11 +152,9 @@ if args.use_runpod and not os.getenv("RUNPOD_API_KEY"):
     parser.error(
         "--use-runpod requires a RunPod API key (--runpod-api-key or RUNPOD_API_KEY env var)"
     )
-if not cfg.wandb_log:
-    parser.error("wandb logging is required. Set wandb_log=True in the config")
-if cfg.wandb_log and not os.getenv("WANDB_API_KEY"):
+if not os.getenv("WANDB_API_KEY"):
     parser.error(
-        "wandb logging enabled but WANDB_API_KEY not set. Provide via --wandb-api-key or environment variable"
+        "WANDB_API_KEY is required for logging to Weights & Biases"
     )
 
 # local aliases for config values
@@ -168,7 +165,6 @@ eval_iters = cfg.eval_iters
 eval_only = cfg.eval_only
 always_save_checkpoint = cfg.always_save_checkpoint
 init_from = cfg.init_from
-wandb_log = cfg.wandb_log
 wandb_project = cfg.wandb_project
 wandb_run_name = cfg.wandb_run_name
 dataset = cfg.dataset
@@ -428,7 +424,7 @@ def get_lr(it: int) -> float:
 
 
 # logging
-if wandb_log and master_process:
+if master_process:
     import wandb
 
     run = wandb.init(project=wandb_project, name=wandb_run_name, config=config)
@@ -453,16 +449,15 @@ while True:
         print(
             f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
         )
-        if wandb_log:
-            wandb.log(
-                {
-                    "iter": iter_num,
-                    "train/loss": losses["train"],
-                    "val/loss": losses["val"],
-                    "lr": lr,
-                    "mfu": running_mfu * 100,  # convert to percentage
-                }
-            )
+        wandb.log(
+            {
+                "iter": iter_num,
+                "train/loss": losses["train"],
+                "val/loss": losses["val"],
+                "lr": lr,
+                "mfu": running_mfu * 100,  # convert to percentage
+            }
+        )
         if losses["val"] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses["val"]
             if iter_num > 0:

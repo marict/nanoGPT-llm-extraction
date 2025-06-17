@@ -1,7 +1,6 @@
 # Training config for ChatGPT-2 equivalent model on OpenWebText.
 # Mirrors the hyperparameters used in the README instructions.
 
-wandb_log = True
 wandb_project = "owt"
 wandb_run_name = "chatgpt2-124M"
 
