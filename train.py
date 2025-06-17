@@ -283,8 +283,8 @@ def get_batch(split: str) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
-ITER_NUM = 0
-BEST_VAL_LOSS = 1e9
+iter_num = 0
+best_val_loss = 1e9
 
 # model init
 model_args = dict(
@@ -333,8 +333,8 @@ elif init_from == "resume":
         if k.startswith(unwanted_prefix):
             state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
     model.load_state_dict(state_dict)
-    ITER_NUM = checkpoint["iter_num"]
-    BEST_VAL_LOSS = checkpoint["best_val_loss"]
+    iter_num = checkpoint["iter_num"]
+    best_val_loss = checkpoint["best_val_loss"]
 elif init_from.startswith("gpt2"):
     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
     override_args = dict(dropout=dropout)
@@ -430,39 +430,39 @@ running_mfu = -1.0
 while True:
 
     # determine and set the learning rate for this iteration
-    lr = get_lr(ITER_NUM) if decay_lr else learning_rate
+    lr = get_lr(iter_num) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
         param_group["lr"] = lr
 
     # evaluate the loss on train/val sets and write checkpoints
-    if ITER_NUM % eval_interval == 0 and master_process:
+    if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
         print(
-            f"step {ITER_NUM}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
+            f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
         )
         wandb.log(
             {
-                "iter": ITER_NUM,
+                "iter": iter_num,
                 "train/loss": losses["train"],
                 "val/loss": losses["val"],
                 "lr": lr,
                 "mfu": running_mfu * 100,  # convert to percentage
             }
         )
-        if losses["val"] < BEST_VAL_LOSS or always_save_checkpoint:
-            BEST_VAL_LOSS = losses["val"]
-            if ITER_NUM > 0:
+        if losses["val"] < best_val_loss or always_save_checkpoint:
+            best_val_loss = losses["val"]
+            if iter_num > 0:
                 checkpoint = {
                     "model": raw_model.state_dict(),
                     "optimizer": optimizer.state_dict(),
                     "model_args": model_args,
-                    "iter_num": ITER_NUM,
-                    "best_val_loss": BEST_VAL_LOSS,
+                    "iter_num": iter_num,
+                    "best_val_loss": best_val_loss,
                     "config": config,
                 }
                 print(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, Path(out_dir) / "ckpt.pt")
-    if ITER_NUM == 0 and eval_only:
+    if iter_num == 0 and eval_only:
         break
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
@@ -499,7 +499,7 @@ while True:
     t1 = time.time()
     dt = t1 - t0
     t0 = t1
-    if ITER_NUM % log_interval == 0 and master_process:
+    if iter_num % log_interval == 0 and master_process:
         # get loss as float. note: this is a CPU-GPU sync point
         # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
         lossf = loss.item() * gradient_accumulation_steps
@@ -507,13 +507,13 @@ while True:
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
         print(
-            f"iter {ITER_NUM}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%"
+            f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%"
         )
-    ITER_NUM += 1
+    iter_num += 1
     local_iter_num += 1
 
     # termination conditions
-    if ITER_NUM > max_iters:
+    if iter_num > max_iters:
         break
 
 if ddp:
