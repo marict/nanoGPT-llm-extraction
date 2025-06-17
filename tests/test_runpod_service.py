@@ -53,7 +53,8 @@ def test_start_cloud_training(monkeypatch):
     monkeypatch.setattr(rp.time, "sleep", lambda x: None)
     pod_id = rp.start_cloud_training("config.py")
     assert pod_id == "pod123"
-    assert "docker_args" in created and "config.py" in created["docker_args"]
+    args = created.get("docker_args", "")
+    assert "/workspace/train.py" in args and "/workspace/config.py" in args
 
 
 def test_start_cloud_training_default_config(monkeypatch):
@@ -82,7 +83,8 @@ def test_start_cloud_training_default_config(monkeypatch):
     monkeypatch.setattr(rp.time, "sleep", lambda x: None)
     pod_id = rp.start_cloud_training("config/train_chatgpt2.py")
     assert pod_id == "pod123"
-    assert "config/train_chatgpt2.py" in created.get("docker_args", "")
+    args = created.get("docker_args", "")
+    assert "/workspace/train.py" in args and "/workspace/config/train_chatgpt2.py" in args
 
 
 def test_visualize_dag_attention(tmp_path):
