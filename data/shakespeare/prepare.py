@@ -6,10 +6,7 @@ import numpy as np
 import requests
 from tiktoken import get_encoding
 
-from data import register_dataset
 
-
-@register_dataset("shakespeare")
 def prepare(data_dir: Path) -> tuple[int, int]:
     """Prepare the tiny Shakespeare dataset for training.
 

@@ -4,21 +4,11 @@ from typing import Callable, Dict, Optional, Tuple
 from .openwebtext.prepare import prepare as prepare_openwebtext
 from .shakespeare.prepare import prepare as prepare_shakespeare
 
-# Registry of available datasets and their prepare functions
+# Available datasets and their prepare functions
 DATASETS: Dict[str, Callable[[Path], Tuple[int, int]]] = {
     "shakespeare": prepare_shakespeare,
     "openwebtext": prepare_openwebtext,
 }
-
-
-def register_dataset(name: str) -> Callable:
-    """Decorator to register a dataset's prepare function."""
-
-    def decorator(prepare_func: Callable[[Path], Tuple[int, int]]) -> Callable:
-        DATASETS[name] = prepare_func
-        return prepare_func
-
-    return decorator
 
 
 def prepare_dataset(dataset: str, data_dir: Optional[Path] = None) -> Tuple[int, int]:

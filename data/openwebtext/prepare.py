@@ -9,10 +9,7 @@ import numpy as np
 from datasets import load_dataset
 from tiktoken import get_encoding
 
-from data import register_dataset
 
-
-@register_dataset("openwebtext")
 def prepare(data_dir: Path, num_proc: int = 8) -> tuple[int, int]:
     """Prepare the OpenWebText dataset for training.
 
