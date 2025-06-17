@@ -21,12 +21,11 @@ def small_dag_gpt():
 
 
 def test_dag_gpt_forward(small_dag_gpt):
-    model, config = small_dag_gpt
+    model, _ = small_dag_gpt
     x = torch.randint(0, 20, (2, 4))
-    logits, loss, dag_out = model(x)
+    logits, loss = model(x)
     assert logits.shape == (2, 4, 20)
-    assert dag_out.shape == (2, config.n_embd)
-
+    assert loss is None
 
 def test_dag_node_growth_regression(monkeypatch):
     class DummyController(DAGController):
@@ -56,8 +55,9 @@ def test_op_functions():
 def test_dag_backward_flow(small_dag_gpt):
     model, _ = small_dag_gpt
     x = torch.randint(0, 20, (2, 4))
-    _, _, dag_out = model(x)
-    loss = dag_out.sum()
+    y = torch.randint(0, 20, (2, 4))    
+    _, loss = model(x, y)
+    loss = loss.sum()
     loss.backward()
     grad = model.dag.controller.op_selector.weight.grad
     assert grad is not None

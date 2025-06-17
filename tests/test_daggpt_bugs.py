@@ -43,7 +43,7 @@ def test_forward_returns_loss_when_targets_given():
     )
     model = DAGGPT(cfg)
     x = torch.randint(0, cfg.vocab_size, (1, 4))
-    logits, loss, _ = model(x, targets=x)
+    logits, loss = model(x, targets=x)
     assert loss is not None
     assert loss.ndim == 0
     loss.backward()

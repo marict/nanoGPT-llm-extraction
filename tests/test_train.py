@@ -44,8 +44,8 @@ def test_train_script_runs(tmp_path: Path, batch_size: int):
 
     cmd = [
         sys.executable,
-        train_script,
-        config_file,
+        str(train_script),
+        str(config_file),
         f"--out_dir={tmp_path / 'out'}",
         "--device=cpu",
         "--compile=False",
@@ -70,7 +70,29 @@ def test_train_script_runs(tmp_path: Path, batch_size: int):
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{tmp_path}:{env.get('PYTHONPATH', '')}"
     env["WANDB_API_KEY"] = "dummy"
-    subprocess.check_call(cmd, cwd=tmp_path, env=env)
+    
+    # Run the command and capture output
+    result = subprocess.run(
+        cmd,
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False  # Don't raise exception, we'll handle it
+    )
+    
+    if result.returncode != 0:
+        # Format a detailed error message
+        error_msg = [
+            f"Command failed with return code {result.returncode}",
+            f"Command: {' '.join(str(x) for x in cmd)}",
+            f"Working directory: {tmp_path}",
+            "\nSTDOUT:",
+            result.stdout,
+            "\nSTDERR:",
+            result.stderr
+        ]
+        pytest.fail("\n".join(error_msg))
 
 class MockModel(torch.nn.Module):
     def __init__(self):

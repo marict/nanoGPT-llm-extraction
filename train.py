@@ -320,9 +320,7 @@ def train(cfg: TrainConfig) -> None:
         model.crop_block_size(cfg.block_size)
         model_args["block_size"] = cfg.block_size
     model.to(cfg.device)
-
-    scaler_cls = getattr(torch.amp, "GradScaler", torch.cuda.amp.GradScaler)
-    scaler = scaler_cls(device_type=device_type, enabled=(cfg.dtype == "float16"))
+    scaler = torch.amp.GradScaler(enabled=(cfg.dtype == "float16"))
 
     optimizer = model.configure_optimizers(
         cfg.weight_decay,
