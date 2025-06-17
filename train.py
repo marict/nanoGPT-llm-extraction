@@ -238,7 +238,19 @@ ctx = (
 )
 
 # poor man's data loader
-data_dir = Path("data") / dataset
+DATA_DIR = Path("data") / dataset
+
+# attempt to derive vocab_size from the dataset
+META_PATH = DATA_DIR / "meta.pkl"
+META_VOCAB_SIZE = None
+META_DTYPE = np.uint16  # default dtype
+if META_PATH.exists():
+    with open(META_PATH, "rb") as f:
+        meta = pickle.load(f)
+    META_VOCAB_SIZE = meta["vocab_size"]
+    META_DTYPE = np.uint8 if meta.get("byte_level", False) else np.uint16
+    print(f"found vocab_size = {META_VOCAB_SIZE} (inside {META_PATH})")
+    print(f"found meta_dtype = {META_DTYPE} (inside {META_PATH})")
 
 
 def get_batch(split: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -246,10 +258,10 @@ def get_batch(split: str) -> tuple[torch.Tensor, torch.Tensor]:
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
     if split == "train":
         data = np.memmap(
-            data_dir / "train.bin", dtype=meta_dtype or np.uint16, mode="r"
+            DATA_DIR / "train.bin", dtype=META_DTYPE, mode="r"
         )
     else:
-        data = np.memmap(data_dir / "val.bin", dtype=meta_dtype or np.uint16, mode="r")
+        data = np.memmap(DATA_DIR / "val.bin", dtype=META_DTYPE, mode="r")
     ix = torch.randint(len(data) - block_size, (batch_size,))
     x = torch.stack(
         [torch.from_numpy((data[i : i + block_size]).astype(np.int64)) for i in ix]
@@ -271,19 +283,8 @@ def get_batch(split: str) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
-iter_num = 0
-best_val_loss = 1e9
-
-# attempt to derive vocab_size from the dataset
-meta_path = data_dir / "meta.pkl"
-meta_vocab_size = None
-if meta_path.exists():
-    with open(meta_path, "rb") as f:
-        meta = pickle.load(f)
-    meta_vocab_size = meta["vocab_size"]
-    meta_dtype = np.uint8 if meta.get("byte_level", False) else np.uint16
-    print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
-    print(f"found meta_dtype = {meta_dtype} (inside {meta_path})")
+ITER_NUM = 0
+BEST_VAL_LOSS = 1e9
 
 # model init
 model_args = dict(
@@ -304,11 +305,11 @@ if init_from == "scratch":
     # init a new model from scratch
     print("Initializing a new model from scratch")
     # determine the vocab size we'll use for from-scratch training
-    if meta_vocab_size is None:
+    if META_VOCAB_SIZE is None:
         print(
             "defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)"
         )
-    model_args["vocab_size"] = meta_vocab_size if meta_vocab_size is not None else 50304
+    model_args["vocab_size"] = META_VOCAB_SIZE if META_VOCAB_SIZE is not None else 50304
     gptconf = ModelConfig(**model_args)
     model = ModelClass(gptconf)
 elif init_from == "resume":
@@ -332,8 +333,8 @@ elif init_from == "resume":
         if k.startswith(unwanted_prefix):
             state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
     model.load_state_dict(state_dict)
-    iter_num = checkpoint["iter_num"]
-    best_val_loss = checkpoint["best_val_loss"]
+    ITER_NUM = checkpoint["iter_num"]
+    BEST_VAL_LOSS = checkpoint["best_val_loss"]
 elif init_from.startswith("gpt2"):
     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
     override_args = dict(dropout=dropout)
@@ -429,39 +430,39 @@ running_mfu = -1.0
 while True:
 
     # determine and set the learning rate for this iteration
-    lr = get_lr(iter_num) if decay_lr else learning_rate
+    lr = get_lr(ITER_NUM) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
         param_group["lr"] = lr
 
     # evaluate the loss on train/val sets and write checkpoints
-    if iter_num % eval_interval == 0 and master_process:
+    if ITER_NUM % eval_interval == 0 and master_process:
         losses = estimate_loss()
         print(
-            f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
+            f"step {ITER_NUM}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
         )
         wandb.log(
             {
-                "iter": iter_num,
+                "iter": ITER_NUM,
                 "train/loss": losses["train"],
                 "val/loss": losses["val"],
                 "lr": lr,
                 "mfu": running_mfu * 100,  # convert to percentage
             }
         )
-        if losses["val"] < best_val_loss or always_save_checkpoint:
-            best_val_loss = losses["val"]
-            if iter_num > 0:
+        if losses["val"] < BEST_VAL_LOSS or always_save_checkpoint:
+            BEST_VAL_LOSS = losses["val"]
+            if ITER_NUM > 0:
                 checkpoint = {
                     "model": raw_model.state_dict(),
                     "optimizer": optimizer.state_dict(),
                     "model_args": model_args,
-                    "iter_num": iter_num,
-                    "best_val_loss": best_val_loss,
+                    "iter_num": ITER_NUM,
+                    "best_val_loss": BEST_VAL_LOSS,
                     "config": config,
                 }
                 print(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, Path(out_dir) / "ckpt.pt")
-    if iter_num == 0 and eval_only:
+    if ITER_NUM == 0 and eval_only:
         break
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
@@ -498,7 +499,7 @@ while True:
     t1 = time.time()
     dt = t1 - t0
     t0 = t1
-    if iter_num % log_interval == 0 and master_process:
+    if ITER_NUM % log_interval == 0 and master_process:
         # get loss as float. note: this is a CPU-GPU sync point
         # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
         lossf = loss.item() * gradient_accumulation_steps
@@ -506,13 +507,13 @@ while True:
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
         print(
-            f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%"
+            f"iter {ITER_NUM}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%"
         )
-    iter_num += 1
+    ITER_NUM += 1
     local_iter_num += 1
 
     # termination conditions
-    if iter_num > max_iters:
+    if ITER_NUM > max_iters:
         break
 
 if ddp:

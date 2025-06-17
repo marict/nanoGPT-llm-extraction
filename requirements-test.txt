@@ -1,0 +1,9 @@
+pytest
+tiktoken
+requests
+numpy==1.26.4
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.0+cpu
+matplotlib
+wandb
+runpod
