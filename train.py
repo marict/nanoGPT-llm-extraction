@@ -240,6 +240,13 @@ ctx = (
 # poor man's data loader
 DATA_DIR = Path("data") / dataset
 
+# run prepare script if train.bin doesn't exist
+if not (DATA_DIR / "train.bin").exists():
+    print(f"Preparing dataset {dataset}...")
+    from data import prepare_dataset
+    train_tokens, val_tokens = prepare_dataset(dataset, DATA_DIR)
+    print(f"Dataset preparation complete. Train tokens: {train_tokens:,}, Val tokens: {val_tokens:,}")
+
 # attempt to derive vocab_size from the dataset
 META_PATH = DATA_DIR / "meta.pkl"
 META_VOCAB_SIZE = None
