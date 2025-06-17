@@ -268,4 +268,4 @@ class DAGGPT(GPT):
             loss = None
         if return_dag_info:
             return logits, loss, dag_output, {"attn": attn_hist, "op": op_hist}
-        return logits, loss, dag_output
+        return logits, loss
