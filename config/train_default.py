@@ -9,7 +9,6 @@ eval_only = False
 always_save_checkpoint = True
 init_from = "scratch"
 
-wandb_log = True
 wandb_project = "owt"
 wandb_run_name = "gpt2"
 

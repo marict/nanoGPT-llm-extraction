@@ -1,6 +1,5 @@
 """Training config for DAGGPT on RunPod."""
 
-wandb_log = True
 wandb_project = "daggpt"
 wandb_run_name = "daggpt-runpod"
 

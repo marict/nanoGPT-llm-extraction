@@ -2,6 +2,7 @@ import pickle
 import subprocess
 import sys
 from pathlib import Path
+import os
 
 import numpy as np
 
@@ -54,7 +55,15 @@ def test_train_script_runs(tmp_path: Path, batch_size: int):
         "--n_head=1",
         "--n_embd=32",
         "--block_size=32",
-        "--wandb_log=False",
     ]
-    # Run the training script in ``tmp_path`` so it picks up the synthetic dataset
-    subprocess.check_call(cmd, cwd=tmp_path)
+    # Provide a minimal stub for the wandb library so training can run without
+    # network access.
+    (tmp_path / "wandb.py").write_text(
+        """\nclass _Run:\n    url = 'http://wandb.local'\n\n"""
+        "def init(*a, **k):\n    return _Run()\n\n"
+        "def log(*a, **k):\n    pass\n"
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"{tmp_path}:{env.get('PYTHONPATH', '')}"
+    env["WANDB_API_KEY"] = "dummy"
+    subprocess.check_call(cmd, cwd=tmp_path, env=env)

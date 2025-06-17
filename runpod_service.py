@@ -11,6 +11,23 @@ DEFAULT_GPU_TYPE = "NVIDIA GeForce RTX 5090"
 REPO_URL = "https://github.com/marict/nanoGPT-llm-extraction.git"
 
 
+def _get_wandb_url(cfg_path: str) -> str:
+    """Return the expected Weights & Biases URL for ``cfg_path``."""
+    if not os.path.isabs(cfg_path):
+        cfg_path = os.path.join(os.getcwd(), cfg_path)
+    data: dict[str, str] = {}
+    try:  # pragma: no cover - best effort for user feedback
+        with open(cfg_path, "r") as f:
+            exec(f.read(), data)
+        project = data.get("wandb_project")
+        run_name = data.get("wandb_run_name")
+        if project and run_name:
+            return f"https://wandb.ai/{project}/{run_name}"
+    except Exception:
+        pass
+    return "https://wandb.ai"
+
+
 def _resolve_gpu_id(gpu_type: str) -> str:
     """Return the GPU id for ``gpu_type`` which may be a name or id."""
     try:
@@ -45,8 +62,10 @@ def start_cloud_training(
         )
 
     args_list = train_args.split()
+    wandb_url = "https://wandb.ai"
     if args_list:
         cfg_path = args_list[0]
+        wandb_url = _get_wandb_url(cfg_path)
         if not os.path.isabs(cfg_path):
             args_list[0] = f"/workspace/{cfg_path}"
     train_args = " ".join(args_list)
@@ -65,7 +84,10 @@ def start_cloud_training(
     pod_id = pod.get("id")
     if not pod_id:
         raise RunPodError("RunPod API did not return a pod id")
-    print(f"Created pod {pod_id}")
+    print(
+        f"Starting training job 'daggpt-train' (pod {pod_id}) on {gpu_type}. "
+        f"View logs at {wandb_url}"
+    )
 
     return pod_id
 

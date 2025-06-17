@@ -91,13 +91,16 @@ export RUNPOD_API_KEY=YOUR_KEY
 python runpod_service.py train config/train_default.py --gpu-type "NVIDIA A100-SXM4-40GB"
 ```
 
-To enable Weights & Biases logging, provide your ``WANDB_API_KEY``:
+Training requires Weights & Biases. Authenticate by setting your
+``WANDB_API_KEY``:
 
 ```bash
 export RUNPOD_API_KEY=YOUR_KEY
 export WANDB_API_KEY=YOUR_WANDB_KEY
 python runpod_service.py train config/train_daggpt_lambda.py
 ```
+The helper will report the pod id, GPU type and a link to your W&B run so you
+can monitor progress.
 
 ### Troubleshooting tips
 
@@ -107,10 +110,9 @@ python runpod_service.py train config/train_daggpt_lambda.py
 
 ### Viewing Weights & Biases logs
 
-When ``wandb_log`` is enabled (the default in ``config/train_default.py`` or via
-an override), the training script calls ``wandb.init`` with
-``wandb_project`` and ``wandb_run_name``. This automatically creates the project
-if it does not exist or attaches to it if it already exists.
+Training always logs to Weights & Biases. ``train.py`` calls ``wandb.init`` with
+``wandb_project`` and ``wandb_run_name`` from the config. The project is created
+if it does not exist or attached to if it already exists.
 
 After initialization, ``train.py`` prints ``W&B run URL: <link>`` where ``<link>``
 is a direct link to the run such as
