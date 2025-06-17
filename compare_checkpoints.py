@@ -4,6 +4,10 @@ import tiktoken
 from model import GPT, GPTConfig
 from dag_model import DAGGPT, DAGGPTConfig
 
+from python_version_check import check_python_version
+
+check_python_version()
+
 
 def load_model(ckpt_path, device):
     ckpt = torch.load(ckpt_path, map_location=device)

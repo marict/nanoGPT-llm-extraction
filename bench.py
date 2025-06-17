@@ -6,6 +6,10 @@ from contextlib import nullcontext
 import numpy as np
 import time
 import torch
+
+from python_version_check import check_python_version
+
+check_python_version()
 from model import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------

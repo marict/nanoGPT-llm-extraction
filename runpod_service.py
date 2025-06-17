@@ -2,6 +2,10 @@ import os
 import time
 from typing import Sequence
 
+from python_version_check import check_python_version
+
+check_python_version()
+
 runpod = None
 
 
