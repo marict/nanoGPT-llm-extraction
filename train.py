@@ -123,7 +123,6 @@ parser.add_argument("config", nargs="?", default="config/train_default.py")
 parser.add_argument("--use-runpod", action="store_true")
 parser.add_argument("--dag-depth", type=int)
 parser.add_argument("--gpu-type")
-parser.add_argument("--runpod-api-key", help="RunPod API key")
 parser.add_argument("--wandb-api-key", help="Weights & Biases API key")
 args, overrides = parser.parse_known_args()
 
@@ -134,7 +133,6 @@ if args.dag_depth is not None:
     cfg.dag_depth = args.dag_depth
 
 # use cfg directly instead of polluting globals
-
 _use_runpod_flag = args.use_runpod
 _dag_depth_override = args.dag_depth
 _gpu_type_flag = args.gpu_type or runpod_service.DEFAULT_GPU_TYPE
@@ -142,16 +140,10 @@ config_path = args.config
 config = vars(cfg)
 
 # propagate API keys via environment variables
-if args.runpod_api_key:
-    os.environ["RUNPOD_API_KEY"] = args.runpod_api_key
 if args.wandb_api_key:
     os.environ["WANDB_API_KEY"] = args.wandb_api_key
 
 # validate required keys
-if args.use_runpod and not os.getenv("RUNPOD_API_KEY"):
-    parser.error(
-        "--use-runpod requires a RunPod API key (--runpod-api-key or RUNPOD_API_KEY env var)"
-    )
 if not os.getenv("WANDB_API_KEY"):
     parser.error(
         "WANDB_API_KEY is required for logging to Weights & Biases"

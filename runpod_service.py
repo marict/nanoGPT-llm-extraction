@@ -85,7 +85,10 @@ def start_cloud_training(
         image_name="runpod/pytorch:2.2.1-py3.10-cuda12.1.1-devel-ubuntu22.04",
         gpu_type_id=gpu_type_id,
         start_ssh=False,
-        docker_args=docker_args
+        docker_args=docker_args,
+        env={
+            "WANDB_API_KEY": os.getenv("WANDB_API_KEY", "")
+        }
     )
     pod_id = pod.get("id")
     if not pod_id:
