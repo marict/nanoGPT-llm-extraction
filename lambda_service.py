@@ -44,7 +44,11 @@ def start_cloud_training(
             args_list[0] = f"/workspace/{cfg_path}"
     train_args = " ".join(args_list)
 
-    user_data = f"#!/bin/bash\ncd /workspace && python train.py {train_args}\n"
+    user_data = (
+        "#!/bin/bash\n"
+        "curl -L https://lambdalabs-guest-agent.s3.us-west-2.amazonaws.com/scripts/install.sh | sudo bash\n"
+        f"cd /workspace && python train.py {train_args}\n"
+    )
 
     payload = {
         "region_name": region,

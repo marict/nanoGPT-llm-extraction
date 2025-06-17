@@ -99,6 +99,12 @@ export WANDB_API_KEY=YOUR_WANDB_KEY
 python lambda_service.py train config/train_daggpt_lambda.py
 ```
 
+The launch script installs Lambda's Guest Agent so GPU metrics show up on your Cloud dashboard. It runs the following command before starting training:
+
+```bash
+curl -L https://lambdalabs-guest-agent.s3.us-west-2.amazonaws.com/scripts/install.sh | sudo bash
+```
+
 ### Troubleshooting tips
 
 * **Authentication errors** – confirm the ``LAMBDA_API_KEY`` is valid.
