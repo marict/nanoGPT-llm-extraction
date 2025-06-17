@@ -9,6 +9,7 @@ check_python_version()
 
 DEFAULT_GPU_TYPE = "NVIDIA GeForce RTX 5090"
 REPO_URL = "https://github.com/marict/nanoGPT-llm-extraction.git"
+POD_NAME = "daggpt-train"
 
 
 def _get_wandb_url(cfg_path: str) -> str:
@@ -68,22 +69,28 @@ def start_cloud_training(
         wandb_url = _get_wandb_url(cfg_path)
         if not os.path.isabs(cfg_path):
             args_list[0] = f"/workspace/{cfg_path}"
+    args_list.append(f"--wandb_project={POD_NAME}")
     train_args = " ".join(args_list)
 
     gpu_type_id = _resolve_gpu_id(gpu_type)
 
+    cmd = (
+        f"git clone {REPO_URL} repo && cd repo "
+        f"&& python train.py {train_args}"
+    )
+
     pod = runpod.create_pod(
-        name="daggpt-train",
+        name=POD_NAME,
         image_name="runpod/stack",
         gpu_type_id=gpu_type_id,
         start_ssh=False,
-        docker_args=f"bash -c 'git clone {REPO_URL} repo && cd repo && python train.py {train_args}'"
+        docker_args=f"bash -c '{cmd}'"
     )
     pod_id = pod.get("id")
     if not pod_id:
         raise RunPodError("RunPod API did not return a pod id")
     print(
-        f"Starting training job 'daggpt-train' (pod {pod_id}) on {gpu_type}. "
+        f"Starting training job '{POD_NAME}' (pod {pod_id}) on {gpu_type}. "
         f"View logs at {wandb_url}"
     )
 
