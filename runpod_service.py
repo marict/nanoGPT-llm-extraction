@@ -14,6 +14,7 @@ def _get_runpod():
     global runpod
     if runpod is None:
         import runpod as rp_mod  # type: ignore
+
         runpod = rp_mod
     return runpod
 
@@ -40,7 +41,9 @@ def start_cloud_training(
     """
     api_key = api_key or os.getenv("RUNPOD_API_KEY")
     if not api_key:
-        raise RunpodError("RunPod API key is required")
+        raise RunpodError(
+            "RunPod API key is required. Provide via --api-key or set the RUNPOD_API_KEY environment variable"
+        )
 
     rp = _get_runpod()
     rp.api_key = api_key
