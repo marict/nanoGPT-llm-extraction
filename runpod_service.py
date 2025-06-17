@@ -13,8 +13,6 @@ POD_NAME = "daggpt-train"
 
 def _get_wandb_url(cfg_path: str) -> str:
     """Return the expected Weights & Biases URL for ``cfg_path``."""
-    if not os.path.isabs(cfg_path):
-        cfg_path = os.path.join(os.getcwd(), cfg_path)
     data: dict[str, str] = {}
     try:  # pragma: no cover - best effort for user feedback
         with open(cfg_path, "r") as f:
@@ -67,7 +65,7 @@ def start_cloud_training(
         cfg_path = args_list[0]
         wandb_url = _get_wandb_url(cfg_path)
         if not os.path.isabs(cfg_path):
-            args_list[0] = f"/workspace/repo/{cfg_path}"
+            args_list[0] = f"{cfg_path}"
     args_list.append(f"--wandb_project={POD_NAME}")
     train_args = " ".join(args_list)
 
