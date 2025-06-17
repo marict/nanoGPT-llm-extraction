@@ -51,7 +51,7 @@ class TrainConfig:
     always_save_checkpoint: bool = True
     init_from: str = "scratch"
 
-    wandb_log: bool = False
+    wandb_log: bool = True
     wandb_project: str = "owt"
     wandb_run_name: str = "gpt2"
 
@@ -153,6 +153,8 @@ if args.use_runpod and not os.getenv("RUNPOD_API_KEY"):
     parser.error(
         "--use-runpod requires a RunPod API key (--runpod-api-key or RUNPOD_API_KEY env var)"
     )
+if not cfg.wandb_log:
+    parser.error("wandb logging is required. Set wandb_log=True in the config")
 if cfg.wandb_log and not os.getenv("WANDB_API_KEY"):
     parser.error(
         "wandb logging enabled but WANDB_API_KEY not set. Provide via --wandb-api-key or environment variable"
