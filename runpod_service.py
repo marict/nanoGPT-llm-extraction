@@ -9,17 +9,23 @@ check_python_version()
 
 DEFAULT_GPU_TYPE = "NVIDIA GeForce RTX 5090"
 REPO_URL = "https://github.com/marict/nanoGPT-llm-extraction.git"
+# Pod and default wandb project name
+POD_NAME = "daggpt-train"
 
 
-def _get_wandb_url(cfg_path: str) -> str:
-    """Return the expected Weights & Biases URL for ``cfg_path``."""
+def _get_wandb_url(cfg_path: str, project_override: str | None = None) -> str:
+    """Return the expected Weights & Biases URL for ``cfg_path``.
+
+    If ``project_override`` is provided, use that instead of the value from the
+    configuration file.
+    """
     if not os.path.isabs(cfg_path):
         cfg_path = os.path.join(os.getcwd(), cfg_path)
     data: dict[str, str] = {}
     try:  # pragma: no cover - best effort for user feedback
         with open(cfg_path, "r") as f:
             exec(f.read(), data)
-        project = data.get("wandb_project")
+        project = project_override or data.get("wandb_project")
         run_name = data.get("wandb_run_name")
         if project and run_name:
             return f"https://wandb.ai/{project}/{run_name}"
@@ -65,27 +71,30 @@ def start_cloud_training(
     wandb_url = "https://wandb.ai"
     if args_list:
         cfg_path = args_list[0]
-        wandb_url = _get_wandb_url(cfg_path)
+        wandb_url = _get_wandb_url(cfg_path, POD_NAME)
         if not os.path.isabs(cfg_path):
             args_list[0] = f"/workspace/{cfg_path}"
+    args_list.append(f"--wandb_project={POD_NAME}")
     train_args = " ".join(args_list)
 
     gpu_type_id = _resolve_gpu_id(gpu_type)
 
+    cmd = (
+        f"git clone {REPO_URL} repo && cd repo && python train.py {train_args}"
+    )
+
     pod = runpod.create_pod(
-        name="daggpt-train",
+        name=POD_NAME,
         image_name="runpod/stack",
         gpu_type_id=gpu_type_id,
         start_ssh=False,
-        docker_args=(
-            f"git clone {REPO_URL} repo && cd repo && python train.py {train_args}"
-        ),
+        docker_args=cmd,
     )
     pod_id = pod.get("id")
     if not pod_id:
         raise RunPodError("RunPod API did not return a pod id")
     print(
-        f"Starting training job 'daggpt-train' (pod {pod_id}) on {gpu_type}. "
+        f"Starting training job '{POD_NAME}' (pod {pod_id}) on {gpu_type}. "
         f"View logs at {wandb_url}"
     )
 
