@@ -19,7 +19,7 @@ def _get_runpod():
     return runpod
 
 
-DEFAULT_IMAGE = "runpod/pytorch:2.2.1-cuda12.1-devel"
+DEFAULT_IMAGE = "runpod/pytorch:2.2.1-py3.10-cuda12.1.1-devel-ubuntu22.04"
 DEFAULT_GPU = "NVIDIA A100 80GB PCIe"
 
 
