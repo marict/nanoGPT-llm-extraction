@@ -48,13 +48,20 @@ def start_cloud_training(
     rp = _get_runpod()
     rp.api_key = api_key
 
+    args_list = train_args.split()
+    if args_list:
+        cfg_path = args_list[0]
+        if not os.path.isabs(cfg_path):
+            args_list[0] = f"/workspace/{cfg_path}"
+    train_args = " ".join(args_list)
+
     pod = rp.create_pod(
         name="nanogpt-training",
         image_name=DEFAULT_IMAGE,
         gpu_type_id=gpu_type,
         gpu_count=1,
         start_ssh=True,
-        docker_args=f"python train.py {train_args}",
+        docker_args=f"python /workspace/train.py {train_args}",
     )
     pod_id = pod.get("id")
     if not pod_id:
