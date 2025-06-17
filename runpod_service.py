@@ -20,7 +20,7 @@ def _get_runpod():
 
 
 DEFAULT_IMAGE = "runpod/pytorch:2.2.1-cuda12.1-devel"
-DEFAULT_GPU = "NVIDIA A100 40GB PCIe"
+DEFAULT_GPU = "NVIDIA A100 80GB PCIe"
 
 
 class RunpodError(Exception):
