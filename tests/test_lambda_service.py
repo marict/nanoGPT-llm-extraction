@@ -24,7 +24,7 @@ def test_start_cloud_training(monkeypatch):
 
     statuses = [
         DummyResponse({"data": {"status": "booting"}}),
-        DummyResponse({"data": {"status": "terminated"}}),
+        DummyResponse({"data": {"status": "running", "ip": "1.2.3.4"}}),
     ]
 
     def fake_get(url, headers):
@@ -35,10 +35,19 @@ def test_start_cloud_training(monkeypatch):
     monkeypatch.setattr(ls.requests, "post", fake_post)
     monkeypatch.setattr(ls.requests, "get", fake_get)
     monkeypatch.setattr(ls.time, "sleep", lambda x: None)
+    cmd = {}
+    def fake_run(c, check):
+        cmd['value'] = c
+    monkeypatch.setattr(ls.subprocess, "run", fake_run)
     inst_id = ls.start_cloud_training("config.py")
     assert inst_id == "inst123"
-    assert "/workspace/config.py" in created["payload"].get("user_data", "")
     assert "guest-agent" in created["payload"].get("user_data", "")
+    assert "python" not in created["payload"].get("user_data", "")
+    assert cmd["value"] == [
+        "ssh",
+        "ubuntu@1.2.3.4",
+        "cd /workspace && python train.py /workspace/config.py",
+    ]
 
 
 def test_start_cloud_training_default_config(monkeypatch):
@@ -50,7 +59,7 @@ def test_start_cloud_training_default_config(monkeypatch):
 
     statuses = [
         DummyResponse({"data": {"status": "booting"}}),
-        DummyResponse({"data": {"status": "terminated"}}),
+        DummyResponse({"data": {"status": "running", "ip": "5.6.7.8"}}),
     ]
 
     def fake_get(url, headers):
@@ -61,10 +70,19 @@ def test_start_cloud_training_default_config(monkeypatch):
     monkeypatch.setattr(ls.requests, "post", fake_post)
     monkeypatch.setattr(ls.requests, "get", fake_get)
     monkeypatch.setattr(ls.time, "sleep", lambda x: None)
+    cmd = {}
+    def fake_run(c, check):
+        cmd['value'] = c
+    monkeypatch.setattr(ls.subprocess, "run", fake_run)
     inst_id = ls.start_cloud_training("config/train_chatgpt2.py")
     assert inst_id == "inst123"
-    assert "/workspace/config/train_chatgpt2.py" in created["payload"].get("user_data", "")
     assert "guest-agent" in created["payload"].get("user_data", "")
+    assert "python" not in created["payload"].get("user_data", "")
+    assert cmd["value"] == [
+        "ssh",
+        "ubuntu@5.6.7.8",
+        "cd /workspace && python train.py /workspace/config/train_chatgpt2.py",
+    ]
 
 
 def test_start_cloud_training_accepts_201(monkeypatch):
@@ -76,7 +94,7 @@ def test_start_cloud_training_accepts_201(monkeypatch):
 
     statuses = [
         DummyResponse({"data": {"status": "booting"}}),
-        DummyResponse({"data": {"status": "terminated"}}),
+        DummyResponse({"data": {"status": "running", "ip": "9.9.9.9"}}),
     ]
 
     def fake_get(url, headers):
@@ -87,9 +105,19 @@ def test_start_cloud_training_accepts_201(monkeypatch):
     monkeypatch.setattr(ls.requests, "post", fake_post)
     monkeypatch.setattr(ls.requests, "get", fake_get)
     monkeypatch.setattr(ls.time, "sleep", lambda x: None)
+    cmd = {}
+    def fake_run(c, check):
+        cmd['value'] = c
+    monkeypatch.setattr(ls.subprocess, "run", fake_run)
     inst_id = ls.start_cloud_training("config.py")
     assert inst_id == "inst456"
-    assert "/workspace/config.py" in created["payload"].get("user_data", "")
+    assert "guest-agent" in created["payload"].get("user_data", "")
+    assert "python" not in created["payload"].get("user_data", "")
+    assert cmd["value"] == [
+        "ssh",
+        "ubuntu@9.9.9.9",
+        "cd /workspace && python train.py /workspace/config.py",
+    ]
 
 
 def test_visualize_dag_attention(tmp_path):
