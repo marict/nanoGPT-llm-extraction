@@ -64,7 +64,13 @@ def start_cloud_training(
 
     while True:
         info = rp.get_pod(pod_id)
-        status = info.get("desiredStatus") or info.get("podStatus") or info.get("state")
+        if not info:
+            raise RunpodError("RunPod API returned no status information")
+        status = (
+            info.get("desiredStatus")
+            or info.get("podStatus")
+            or info.get("state")
+        )
         print(f"Training status: {status}")
         if status in {"COMPLETED", "STOPPED", "FAILED", "TERMINATED"}:
             break
