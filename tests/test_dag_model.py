@@ -241,3 +241,31 @@ def test_step_contexts_added(monkeypatch):
         assert torch.allclose(oc, operand_ctx + expect)
         assert torch.allclose(oc2, op_ctx + expect)
         assert oc.shape == (1, 4) and oc2.shape == (1, 4)
+
+
+def test_daggpt_config_creation():
+    """Test that DAGGPTConfig can be created with various parameters."""
+    # Test with default values
+    config = DAGGPTConfig()
+    assert config.dag_depth == 4
+    assert config.n_embd == 768  # default from GPTConfig
+
+    # Test with custom values
+    config = DAGGPTConfig(
+        dag_depth=6,
+        n_embd=512,
+        n_layer=6,
+        n_head=8,
+        block_size=1024,
+        vocab_size=50257,
+    )
+    assert config.dag_depth == 6
+    assert config.n_embd == 512
+    assert config.n_layer == 6
+    assert config.n_head == 8
+    assert config.block_size == 1024
+    assert config.vocab_size == 50257
+
+    # Test that invalid parameters are rejected
+    with pytest.raises(TypeError):
+        DAGGPTConfig(dag_hidden_dim=32)  # This should fail

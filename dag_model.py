@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -188,7 +190,9 @@ class DAGGPT(GPT):
         self.post_dag_block = Block(config)
 
     @classmethod
-    def init_from(cls, model_type: str, override_args: dict | None = None) -> "DAGGPT":
+    def init_from(
+        cls, model_type: str, override_args: Optional[dict] = None
+    ) -> "DAGGPT":
         """Initialize a DAGGPT model from a pretrained GPT model.
 
         Args:
