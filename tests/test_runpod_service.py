@@ -24,7 +24,10 @@ def test_start_cloud_training(monkeypatch):
     assert pod_id == "pod123"
     assert created["params"]["gpu_type_id"] == "gpu123"
     assert created["params"]["start_ssh"] is False
-    assert created["params"]["docker_args"] == "python train.py /workspace/config.py"
+    expected_cmd = (
+        f"git clone {rp.REPO_URL} repo && cd repo && python train.py /workspace/config.py"
+    )
+    assert created["params"]["docker_args"] == expected_cmd
 
 
 def test_visualize_dag_attention(tmp_path):

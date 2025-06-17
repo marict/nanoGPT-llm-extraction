@@ -8,6 +8,7 @@ from python_version_check import check_python_version
 check_python_version()
 
 DEFAULT_GPU_TYPE = "NVIDIA GeForce RTX 5090"
+REPO_URL = "https://github.com/marict/nanoGPT-llm-extraction.git"
 
 
 def _resolve_gpu_id(gpu_type: str) -> str:
@@ -57,7 +58,9 @@ def start_cloud_training(
         image_name="runpod/stack",
         gpu_type_id=gpu_type_id,
         start_ssh=False,
-        docker_args=f"python train.py {train_args}",
+        docker_args=(
+            f"git clone {REPO_URL} repo && cd repo && python train.py {train_args}"
+        ),
     )
     pod_id = pod.get("id")
     if not pod_id:
