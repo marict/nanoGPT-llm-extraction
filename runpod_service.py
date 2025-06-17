@@ -7,7 +7,7 @@ from python_version_check import check_python_version
 
 check_python_version()
 
-DEFAULT_GPU_TYPE = "NVIDIA A100-SXM4-40GB"
+DEFAULT_GPU_TYPE = "NVIDIA GeForce RTX 5090"
 
 
 def _resolve_gpu_id(gpu_type: str) -> str:
