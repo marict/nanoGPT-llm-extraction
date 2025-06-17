@@ -1,21 +1,26 @@
 import os
-import subprocess
 from typing import Sequence
-try:
-    import runpod
-    from runpod.cli.utils.rp_info import get_pod_ssh_ip_port
-    from runpod.cli.utils.ssh_cmd import SSHConnection
-except ModuleNotFoundError:  # pragma: no cover - handled in tests
-    import types
-
-    runpod = types.SimpleNamespace(create_pod=None, api_key=None)
-    get_pod_ssh_ip_port = None
-    SSHConnection = None
+import runpod
+from runpod.cli.utils.rp_info import get_pod_ssh_ip_port
+from runpod.cli.utils.ssh_cmd import SSHConnection
 from python_version_check import check_python_version
 
 check_python_version()
 
 DEFAULT_GPU_TYPE = "NVIDIA A100-SXM4-40GB"
+
+
+def _resolve_gpu_id(gpu_type: str) -> str:
+    """Return the GPU id for ``gpu_type`` which may be a name or id."""
+    try:
+        gpus = runpod.get_gpus()
+    except Exception as exc:  # pragma: no cover - network errors
+        raise RunPodError(f"Failed to list GPUs: {exc}") from exc
+
+    for gpu in gpus:
+        if gpu_type in {gpu.get("id"), gpu.get("displayName")}:
+            return gpu["id"]
+    raise RunPodError(f"GPU type '{gpu_type}' not found")
 
 class RunPodError(Exception):
     """Custom exception for RunPod operations."""
@@ -28,10 +33,6 @@ def start_cloud_training(
     api_key: str | None = None,
 ) -> str:
     """Launch a RunPod GPU instance and run training via SSH."""
-    if runpod is None or get_pod_ssh_ip_port is None or SSHConnection is None:
-        raise RunPodError(
-            "runpod package is required to start cloud training"
-        )
 
     runpod.api_key = api_key or os.getenv("RUNPOD_API_KEY") or getattr(runpod, "api_key", None)
     if not runpod.api_key:
@@ -46,10 +47,12 @@ def start_cloud_training(
             args_list[0] = f"/workspace/{cfg_path}"
     train_args = " ".join(args_list)
 
+    gpu_type_id = _resolve_gpu_id(gpu_type)
+
     pod = runpod.create_pod(
         name="daggpt-train",
         image_name="runpod/stack",
-        gpu_type_id=gpu_type,
+        gpu_type_id=gpu_type_id,
         ports="22/tcp",
     )
     pod_id = pod.get("id")

@@ -1,4 +1,3 @@
-import types
 import sys
 from pathlib import Path
 
@@ -31,6 +30,7 @@ def test_start_cloud_training(monkeypatch):
 
     monkeypatch.setenv("RUNPOD_API_KEY", "key")
     monkeypatch.setattr(rp.runpod, "create_pod", fake_create_pod)
+    monkeypatch.setattr(rp.runpod, "get_gpus", lambda: [{"id": "gpu123", "displayName": rp.DEFAULT_GPU_TYPE}])
     monkeypatch.setattr(rp, "get_pod_ssh_ip_port", fake_ip_port)
     monkeypatch.setattr(rp, "SSHConnection", DummySSH)
 
@@ -39,6 +39,7 @@ def test_start_cloud_training(monkeypatch):
     assert commands['value'] == [
         "cd /workspace && python train.py /workspace/config.py"
     ]
+    assert created['params']['gpu_type_id'] == 'gpu123'
 
 
 def test_visualize_dag_attention(tmp_path):
