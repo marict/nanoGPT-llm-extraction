@@ -73,13 +73,14 @@ def start_cloud_training(
 
     gpu_type_id = _resolve_gpu_id(gpu_type)
     docker_args = (
-        f"bash -c \"[ -d repo ] && git -C repo pull || git clone {REPO_URL} repo && "
+        f"bash -c '[ -d repo ] && git -C repo pull || git clone {REPO_URL} repo && "
         f"cd repo && "
-        f"echo '=== Directory Structure ===' && tree && "
-        f"echo '=== Current Directory ===' && pwd && "
-        f"echo '=== Config File Location ===' && ls -la config/train_default.py && "
+        f"apt-get update && apt-get install -y tree && "
+        f"echo === Directory Structure === && tree && "
+        f"echo === Current Directory === && pwd && "
+        f"echo === Config File Location === && ls -la config/train_default.py && "
         f"pip install -r requirements-dev.txt && "
-        f"python train.py {train_args}\""
+        f"python train.py {train_args}'"
     )
     pod = runpod.create_pod(
         name=POD_NAME,
