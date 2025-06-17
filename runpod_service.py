@@ -73,23 +73,17 @@ def start_cloud_training(
     train_args = " ".join(args_list)
 
     gpu_type_id = _resolve_gpu_id(gpu_type)
-
-    cmd = (
-        f"git clone {REPO_URL} repo && cd repo "
-        f"&& python train.py {train_args}"
-    )
-
     pod = runpod.create_pod(
         name="daggpt-train",
         image_name="runpod/pytorch:2.2.1-py3.10-cuda12.1.1-devel-ubuntu22.04",
         gpu_type_id=gpu_type_id,
         start_ssh=False,
         docker_args=(
-            f"bash -c '\n"
-            f"[ -d repo ] && git -C repo pull || git clone {REPO_URL} repo;\n"
-            f"cd repo\n"
-            f"pip install -r requirements-dev.txt\n"
-            f"python train.py {train_args}\n'"
+            f"bash -c '\n",
+            f"[ -d repo ] && git -C repo pull || git clone {REPO_URL} repo;\n",
+            f"cd repo\n",
+            f"pip install -r requirements-dev.txt\n",
+            f"python train.py {train_args}\n'",
         )
     )
     pod_id = pod.get("id")
