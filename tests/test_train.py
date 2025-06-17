@@ -5,12 +5,16 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
+import torch
+from contextlib import nullcontext
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from dag_model import DAGGPT, DAGGPTConfig
+from train import estimate_loss
 
+REPO_ROOT = Path(__file__).parent.parent
 
 import pytest
-
 
 @pytest.mark.parametrize("batch_size", [1, 2])
 def test_train_script_runs(tmp_path: Path, batch_size: int):
@@ -67,3 +71,62 @@ def test_train_script_runs(tmp_path: Path, batch_size: int):
     env["PYTHONPATH"] = f"{tmp_path}:{env.get('PYTHONPATH', '')}"
     env["WANDB_API_KEY"] = "dummy"
     subprocess.check_call(cmd, cwd=tmp_path, env=env)
+
+class MockModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.training = True
+
+    def forward(self, x, y):
+        # Return a fixed loss value for testing
+        return torch.tensor(0.0), torch.tensor(1.0)
+
+    def eval(self):
+        self.training = False
+
+    def train(self):
+        self.training = True
+
+
+def mock_batch_fn(split: str):
+    # Return fixed tensors for testing
+    x = torch.ones((2, 3))  # batch_size=2, block_size=3
+    y = torch.ones((2, 3))
+    return x, y
+
+
+def test_estimate_loss():
+    # Setup
+    model = MockModel()
+    eval_iters = 2
+    ctx = nullcontext()
+
+    # Run
+    losses = estimate_loss(model, eval_iters, mock_batch_fn, ctx)
+
+    # Assert
+    assert isinstance(losses, dict)
+    assert set(losses.keys()) == {"train", "val"}
+    assert all(isinstance(v, torch.Tensor) for v in losses.values())
+    assert all(v.item() == 1.0 for v in losses.values())  # Our mock model always returns 1.0
+    assert model.training  # Model should be back in training mode
+
+
+def test_estimate_loss_with_cuda():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+
+    # Setup
+    model = MockModel().cuda()
+    eval_iters = 2
+    ctx = torch.cuda.amp.autocast()
+
+    # Run
+    losses = estimate_loss(model, eval_iters, mock_batch_fn, ctx)
+
+    # Assert
+    assert isinstance(losses, dict)
+    assert set(losses.keys()) == {"train", "val"}
+    assert all(isinstance(v, torch.Tensor) for v in losses.values())
+    assert all(v.item() == 1.0 for v in losses.values())
+    assert model.training  # Model should be back in training mode
