@@ -72,19 +72,18 @@ def start_cloud_training(
     train_args = " ".join(args_list)
 
     gpu_type_id = _resolve_gpu_id(gpu_type)
-    docker_args = (
-        f"bash -c '[ -d repo ] && git -C repo pull || git clone {REPO_URL} repo; "
-        f"cd repo && "
-        f"apt-get update && apt-get install -y tree && "
-        f"echo '=== Directory Structure ===' && "
-        f"tree && "
-        f"echo '=== Current Directory ===' && "
-        f"pwd && "
-        f"echo '=== Config File Location ===' && "
-        f"ls -la config/train_default.py && "
-        f"pip install -r requirements-dev.txt && "
-        f"python train.py {train_args}'"
-    )
+    docker_args = [
+        "bash", "-c",
+        (
+            f"[ -d repo ] && git -C repo pull || git clone {REPO_URL} repo && "
+            f"cd repo && "
+            f"echo '=== Directory Structure ===' && tree && "
+            f"echo '=== Current Directory ===' && pwd && "
+            f"echo '=== Config File Location ===' && ls -la config/train_default.py && "
+            f"pip install -r requirements-dev.txt && "
+            f"python train.py {train_args}"
+        )
+    ]
     pod = runpod.create_pod(
         name=POD_NAME,
         image_name="runpod/pytorch:2.2.1-py3.10-cuda12.1.1-devel-ubuntu22.04",
