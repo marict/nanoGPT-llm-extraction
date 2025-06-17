@@ -79,7 +79,7 @@ Set up a virtual environment and install the dependencies:
 ```bash
 python3 -m venv env
 source env/bin/activate
-pip install requests
+pip install requests runpod
 ```
 
 Launch training in the cloud using your API and SSH key. The helper script now
