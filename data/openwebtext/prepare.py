@@ -32,7 +32,7 @@ def prepare(data_dir: Path, num_proc: int = 8) -> tuple[int, int]:
     num_proc_load_dataset = num_proc
 
     # takes 54GB in huggingface .cache dir, at least 30GB more to run
-    dataset = load_dataset("openwebtext", num_proc=num_proc_load_dataset)
+    dataset = load_dataset("openwebtext", num_proc=num_proc_load_dataset, trust_remote_code=True)
 
     # owt by default only contains the 'train' split, so create a test split
     split_dataset = dataset["train"].train_test_split(
