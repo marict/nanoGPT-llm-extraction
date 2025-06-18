@@ -327,9 +327,9 @@ def train(cfg: TrainConfig) -> None:
     # One for the local version and one for the runpod version
     scalar_enabled = cfg.dtype == "float16"
     scaler = (
-        torch.amp.GradScaler("cuda", enabled=scalar_enabled)
+        torch.cuda.amp.GradScaler(enabled=scalar_enabled)
         if TORCH_2_2_1
-        else torch.cuda.amp.GradScaler(enabled=scalar_enabled)
+        else torch.amp.GradScaler("cuda", enabled=scalar_enabled)
     )
 
     optimizer = model.configure_optimizers(
