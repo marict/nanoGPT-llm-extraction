@@ -274,7 +274,7 @@ def test_daggpt_config_creation():
 
 
 def test_extra_vals_daggpt():
-    """Test that DAGGPT's extra_vals calculates entropy correctly."""
+    """Test that DAGGPT's extra_vals calculates entropy and gradients correctly."""
     config = DAGGPTConfig(
         n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=2
     )
@@ -284,31 +284,50 @@ def test_extra_vals_daggpt():
     batch_size = 2
     seq_len = 8
     x = torch.randint(0, config.vocab_size, (batch_size, seq_len))
+    y = torch.randint(0, config.vocab_size, (batch_size, seq_len))
 
-    # Run forward pass to populate last_activations
-    model(x)
+    # Run forward pass to populate last_activations and retain grads
+    logits, loss = model(x, y)
+    for tensor in model.last_activations.values():
+        tensor.retain_grad()
+
+    # Backward pass to populate gradients
+    loss.sum().backward()
 
     # Get extra values
     extra_vals = model.extra_vals()
 
     # Check structure
     assert isinstance(extra_vals, dict)
-    assert len(extra_vals) > 0
-
-    # Check that all values are entropy metrics
-    expected_keys = {
+    # There should be both entropy and grad keys
+    expected_entropy_keys = {
         "dag_entropy/snap_hidden",
         "dag_entropy/attn_out",
         "dag_entropy/operand_ctx",
         "dag_entropy/op_ctx",
         "dag_entropy/all_nodes",
     }
-    assert set(extra_vals.keys()) == expected_keys
+    expected_grad_keys = {
+        "dag_grad/snap_hidden",
+        "dag_grad/attn_out",
+        "dag_grad/operand_ctx",
+        "dag_grad/op_ctx",
+        "dag_grad/all_nodes",
+    }
+    assert expected_entropy_keys.issubset(extra_vals.keys())
+    assert expected_grad_keys.issubset(extra_vals.keys())
 
     # Check that entropy values are reasonable (between 0 and log(n))
-    for val in extra_vals.values():
+    for k in expected_entropy_keys:
+        val = extra_vals[k]
         assert isinstance(val, float)
         assert 0 <= val <= np.log(64)  # max entropy for 64-dimensional vectors
+
+    # Check that grad values are floats (should not be None since we retained grads)
+    for k in expected_grad_keys:
+        val = extra_vals[k]
+        assert isinstance(val, float)
+        assert val >= 0  # mean absolute grad should be non-negative
 
 
 def test_extra_vals_daggpt_no_forward():
