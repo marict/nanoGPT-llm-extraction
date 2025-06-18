@@ -121,7 +121,7 @@ def start_cloud_training(
         gpu_count=1,  # one A100-40GB or A6000
         min_vcpu_count=8,  # ≥ 8 cores
         min_memory_in_gb=128,  # 128 GB RAM
-        volume_in_gb=80,  # persistent storage
+        volume_in_gb=160,  # persistent storage
         container_disk_in_gb=40,  # docker-layer scratch (adjust if you like)
         start_ssh=False,
         docker_args=docker_args,
