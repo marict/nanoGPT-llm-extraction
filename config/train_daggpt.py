@@ -53,5 +53,5 @@ compile = True  # Use torch.compile() for faster training
 
 # Checkpointing
 out_dir = "out"
-always_save_checkpoint = True
+always_save_checkpoint = False
 init_from = "scratch"

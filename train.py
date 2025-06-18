@@ -391,7 +391,7 @@ def train(cfg: TrainConfig) -> None:
                     }
                     if master_process:
                         print(f"Saving checkpoint to {cfg.out_dir}")
-                    torch.save(ckpt, Path(cfg.out_dir) / "ckpt.pt")
+                    torch.save(ckpt, Path(cfg.out_dir) / f"ckpt_{iter_num}.pt")
         if iter_num == 0 and cfg.eval_only:
             break
 
