@@ -118,14 +118,19 @@ def start_cloud_training(
         name=POD_NAME,
         image_name="runpod/pytorch:2.2.1-py3.10-cuda12.1.1-devel-ubuntu22.04",
         gpu_type_id=gpu_type_id,
-        gpu_count=1,  # one A100-40GB or A6000
-        min_vcpu_count=8,  # ≥ 8 cores
-        min_memory_in_gb=128,  # 128 GB RAM
-        volume_in_gb=160,  # persistent storage
-        container_disk_in_gb=40,  # docker-layer scratch (adjust if you like)
+        gpu_count=1,
+        min_vcpu_count=8,
+        min_memory_in_gb=128,
+        volume_in_gb=160,  # persists across stops, billed continuously
+        container_disk_in_gb=60,  # wiped on stop, billed only while running
+        env={
+            "WANDB_API_KEY": os.getenv("WANDB_API_KEY", ""),
+            "HF_HOME": "/workspace/.cache/huggingface",
+            "HF_DATASETS_CACHE": "/workspace/.cache/huggingface/datasets",
+            "TRANSFORMERS_CACHE": "/workspace/.cache/huggingface/transformers",
+        },
         start_ssh=False,
         docker_args=docker_args,
-        env={"WANDB_API_KEY": os.getenv("WANDB_API_KEY", "")},
     )
     pod_id = pod.get("id")
     if not pod_id:
