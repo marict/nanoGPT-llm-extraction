@@ -43,11 +43,10 @@ warmup_iters = 2000
 min_lr = 6e-5
 
 # Dataset
-dataset = "shakespeare"
+dataset = "openwebtext"
 
 # Training infrastructure
 backend = "nccl"  # Use NCCL for multi-GPU training
-device = "cuda"
 dtype = "bfloat16"  # Use bfloat16 for better performance
 compile = True  # Use torch.compile() for faster training
 
