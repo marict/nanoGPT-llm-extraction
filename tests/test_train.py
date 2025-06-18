@@ -4,17 +4,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-import numpy as np
 import pytest
-import torch
+np = pytest.importorskip("numpy")
+torch = pytest.importorskip("torch")
 from contextlib import nullcontext
 
 from dag_model import DAGGPT, DAGGPTConfig
 from train import estimate_loss
 
 REPO_ROOT = Path(__file__).parent.parent
-
-import pytest
 
 @pytest.mark.parametrize("batch_size", [1, 2])
 def test_train_script_runs(tmp_path: Path, batch_size: int):

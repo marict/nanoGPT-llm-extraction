@@ -1,6 +1,9 @@
 import sys
 from pathlib import Path
 
+import pytest
+pytest.importorskip("runpod")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import runpod_service as rp
 

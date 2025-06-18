@@ -1,11 +1,11 @@
 import sys
 from pathlib import Path
 
-import torch
+import pytest
+torch = pytest.importorskip("torch")
 import torch.nn as nn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import pytest
 
 from model import GPT, MLP, Block, CausalSelfAttention, GPTConfig, LayerNorm
 

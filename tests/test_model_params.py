@@ -1,8 +1,10 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest
+pytest.importorskip("torch")
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from model import GPT, GPTConfig
 

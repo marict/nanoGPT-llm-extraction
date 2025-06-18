@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 
 import pytest
-import torch
+torch = pytest.importorskip("torch")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import compare_checkpoints as cc
