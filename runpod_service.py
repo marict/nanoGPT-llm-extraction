@@ -94,7 +94,7 @@ def start_cloud_training(
         f"echo === Directory Structure === && tree && "
         f"echo === Current Directory === && pwd && "
         f"echo === Config File Location === && ls -la config/train_default.py && "
-        f"pip install -r requirements-dev.txt && "
+        f"pip install -q -r requirements-dev.txt && "
         f"python train.py {train_args}'"
     )
     pod = runpod.create_pod(

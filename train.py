@@ -172,6 +172,9 @@ def train(cfg: TrainConfig) -> None:
     # --------------------------------------------------------------------- #
     # DDP / environment setup
     # --------------------------------------------------------------------- #
+    if master_process:
+        print(f"PyTorch version: {torch.__version__}")
+    
     ddp = int(os.environ.get("RANK", -1)) != -1
     if ddp:
         init_process_group(backend=cfg.backend)
