@@ -30,7 +30,6 @@ from dag_model import DAGGPT, DAGGPTConfig
 from model import GPT, GPTConfig
 from python_version_check import check_python_version
 
-
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
 
 
@@ -385,6 +384,11 @@ def train(cfg: TrainConfig) -> None:
 
             # Get extra values from model if available
             extra_vals = model.extra_vals()
+
+            # Debug prints
+            print(f"Model type: {type(model).__name__}")
+            print(f"Extra values: {extra_vals}")
+            print(f"Has last_activations: {hasattr(model, 'last_activations')}")
 
             # Log everything to wandb
             wandb.log(
