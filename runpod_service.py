@@ -122,7 +122,7 @@ def start_cloud_training(
         min_vcpu_count=8,
         min_memory_in_gb=128,
         volume_in_gb=160,  # persists across stops, billed continuously
-        container_disk_in_gb=60,  # wiped on stop, billed only while running
+        container_disk_in_gb=100,  # wiped on stop, billed only while running
         env={
             "WANDB_API_KEY": os.getenv("WANDB_API_KEY", ""),
             "HF_HOME": "/workspace/.cache/huggingface",
