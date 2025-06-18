@@ -31,6 +31,9 @@ from model import GPT, GPTConfig
 from python_version_check import check_python_version
 
 
+TORCH_2_2_1 = torch.__version__ >= "2.2.1"
+
+
 # --------------------------------------------------------------------------- #
 # Configuration utilities
 # --------------------------------------------------------------------------- #
@@ -173,7 +176,7 @@ def train(cfg: TrainConfig) -> None:
     # DDP / environment setup
     # --------------------------------------------------------------------- #
     print(f"PyTorch version: {torch.__version__}")
-    
+
     ddp = int(os.environ.get("RANK", -1)) != -1
     if ddp:
         init_process_group(backend=cfg.backend)
@@ -319,7 +322,15 @@ def train(cfg: TrainConfig) -> None:
         model.crop_block_size(cfg.block_size)
         model_args["block_size"] = cfg.block_size
     model.to(cfg.device)
-    scaler = torch.amp.GradScaler(enabled=(cfg.dtype == "float16"))
+
+    # Different scaler for different torch versions
+    # One for the local version and one for the runpod version
+    scalar_enabled = cfg.dtype == "float16"
+    scaler = (
+        torch.amp.GradScaler("cuda", enabled=scalar_enabled)
+        if TORCH_2_2_1
+        else torch.cuda.amp.GradScaler(enabled=scalar_enabled)
+    )
 
     optimizer = model.configure_optimizers(
         cfg.weight_decay,
