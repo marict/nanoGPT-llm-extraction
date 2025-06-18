@@ -32,6 +32,7 @@ from model import GPT, GPTConfig
 from python_version_check import check_python_version
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
+CUDA_AVAILABLE = torch.cuda.is_available()
 
 
 # --------------------------------------------------------------------------- #
@@ -78,7 +79,6 @@ class TrainConfig:
     min_lr: float = 6e-5
 
     backend: str = "nccl"
-    device: str = "cuda"
     dtype: str = (
         "bfloat16"
         if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
@@ -175,6 +175,7 @@ def train(cfg: TrainConfig) -> None:
     # --------------------------------------------------------------------- #
     # DDP / environment setup
     # --------------------------------------------------------------------- #
+    print("Starting training")
     print(f"PyTorch version: {torch.__version__}")
 
     ddp = int(os.environ.get("RANK", -1)) != -1
@@ -183,8 +184,8 @@ def train(cfg: TrainConfig) -> None:
         ddp_rank = int(os.environ["RANK"])
         ddp_local_rank = int(os.environ["LOCAL_RANK"])
         ddp_world_size = int(os.environ["WORLD_SIZE"])
-        cfg.device = f"cuda:{ddp_local_rank}"
-        torch.cuda.set_device(cfg.device)
+        device = f"cuda:{ddp_local_rank}"
+        torch.cuda.set_device(device)
         master_process = ddp_rank == 0
         seed_offset = ddp_rank
         assert cfg.gradient_accumulation_steps % ddp_world_size == 0
@@ -206,7 +207,7 @@ def train(cfg: TrainConfig) -> None:
     torch.manual_seed(1337 + seed_offset)
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
-    device_type = "cuda" if "cuda" in cfg.device else "cpu"
+    device = "cuda" if CUDA_AVAILABLE else "cpu"
     ptdtype = {
         "float32": torch.float32,
         "bfloat16": torch.bfloat16,
@@ -214,13 +215,14 @@ def train(cfg: TrainConfig) -> None:
     }[cfg.dtype]
     ctx = (
         nullcontext()
-        if device_type == "cpu"
-        else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+        if device == "cpu"
+        else torch.amp.autocast(device_type=device, dtype=ptdtype)
     )
 
     # --------------------------------------------------------------------- #
     # Data loading
     # --------------------------------------------------------------------- #
+    print("Loading data")
     data_dir = Path("data") / cfg.dataset
     if not (data_dir / "train.bin").exists():
         if master_process:
@@ -230,6 +232,7 @@ def train(cfg: TrainConfig) -> None:
             train_tokens, val_tokens = prepare_dataset(cfg.dataset, data_dir)
             print(f"Dataset prepared. Train: {train_tokens:,}, Val: {val_tokens:,}")
 
+    print("Loading meta")
     meta_path = data_dir / "meta.pkl"
     meta_dtype = np.uint16
     vocab_size = None
@@ -258,18 +261,19 @@ def train(cfg: TrainConfig) -> None:
                 for i in ix
             ]
         )
-        if device_type == "cuda":
+        if device == "cuda":
             x, y = (
-                x.pin_memory().to(cfg.device, non_blocking=True),
-                y.pin_memory().to(cfg.device, non_blocking=True),
+                x.pin_memory().to(device, non_blocking=True),
+                y.pin_memory().to(device, non_blocking=True),
             )
         else:
-            x, y = x.to(cfg.device), y.to(cfg.device)
+            x, y = x.to(device), y.to(device)
         return x, y
 
     # --------------------------------------------------------------------- #
     # Model creation
     # --------------------------------------------------------------------- #
+    print("Initializing model")
     model_args: Dict[str, object] = dict(
         n_layer=cfg.n_layer,
         n_head=cfg.n_head,
@@ -292,7 +296,7 @@ def train(cfg: TrainConfig) -> None:
         model = ModelClass(gptconf)
     elif cfg.init_from == "resume":
         ckpt_path = Path(cfg.out_dir) / "ckpt.pt"
-        checkpoint = torch.load(ckpt_path, map_location=cfg.device)
+        checkpoint = torch.load(ckpt_path, map_location=device)
         for k in ("n_layer", "n_head", "n_embd", "block_size", "bias", "vocab_size"):
             model_args[k] = checkpoint["model_args"][k]
         gptconf = ModelConfig(**model_args)
@@ -323,7 +327,7 @@ def train(cfg: TrainConfig) -> None:
         model_args["block_size"] = cfg.block_size
 
     print(f"Model type: {type(model).__name__}")
-    model.to(cfg.device)
+    model.to(device)
 
     # Different scaler for different torch versions
     # One for the local version and one for the runpod version
@@ -334,23 +338,26 @@ def train(cfg: TrainConfig) -> None:
         else torch.amp.GradScaler("cuda", enabled=scalar_enabled)
     )
 
+    print("Initializing optimizer")
     optimizer = model.configure_optimizers(
         cfg.weight_decay,
         cfg.learning_rate,
         (cfg.beta1, cfg.beta2),
-        device_type,
+        device,
     )
     if cfg.init_from == "resume":
         optimizer.load_state_dict(checkpoint["optimizer"])
 
     if cfg.compile:
-        if master_process:
-            print("Compiling model")
+        print("Compiling model")
         model = torch.compile(model)
+    else:
+        print("Compilation disabled")
 
     if ddp:
-        model = DDP(model, device_ids=[int(cfg.device.split(":")[-1])])
+        model = DDP(model, device_ids=[int(device.split(":")[-1])])
 
+    print("Initializing wandb")
     # --------------------------------------------------------------------- #
     # W&B
     # --------------------------------------------------------------------- #
@@ -384,6 +391,7 @@ def train(cfg: TrainConfig) -> None:
         running_mfu = -1.0
         raw_model = model.module if ddp else model
 
+        extra_vals = {}
         while True:
             lr = get_lr(iter_num, cfg=cfg) if cfg.decay_lr else cfg.learning_rate
             for pg in optimizer.param_groups:
@@ -395,9 +403,6 @@ def train(cfg: TrainConfig) -> None:
                     print(
                         f"step {iter_num}: train {losses['train']:.4f}, val {losses['val']:.4f}"
                     )
-
-                    # Get extra values from model if available
-                    extra_vals = model.extra_vals()
 
                     # Log everything to wandb if available
                     if run is not None:
@@ -446,6 +451,9 @@ def train(cfg: TrainConfig) -> None:
                         loss = loss / cfg.gradient_accumulation_steps
                     X, Y = get_batch("train")
                     scaler.scale(loss).backward()
+                    # We have to grab the extra vals after the backwards pass
+                    # because some might be gradients.
+                    extra_vals = model.extra_vals()
 
                 if cfg.grad_clip:
                     scaler.unscale_(optimizer)

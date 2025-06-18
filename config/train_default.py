@@ -14,7 +14,7 @@ wandb_project = "dag-gpt"
 # tiny dataset and network for quick local testing
 dataset = "shakespeare"
 gradient_accumulation_steps = 1
-batch_size = 2
+batch_size = 16
 block_size = 32
 
 n_layer = 1
@@ -32,12 +32,11 @@ beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
 
-decay_lr = True
+decay_lr = False
 warmup_iters = 2000
 lr_decay_iters = 600000
 min_lr = 6e-5
 
 backend = "gloo"
-device = "cpu"
 dtype = "float32"
 compile = False
