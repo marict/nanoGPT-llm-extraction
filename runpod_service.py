@@ -1,6 +1,7 @@
 import os
 from typing import Sequence
 
+import requests
 import runpod
 
 from python_version_check import check_python_version
@@ -58,6 +59,22 @@ def _resolve_gpu_id(gpu_type: str) -> str:
 
 class RunPodError(Exception):
     """Custom exception for RunPod operations."""
+
+
+def stop_runpod():
+    pod_id = os.getenv("RUNPOD_POD_ID")
+    api_key = os.getenv("RUNPOD_API_KEY")
+    if pod_id and api_key:
+        url = f"https://api.runpod.io/v1/pod/{pod_id}/stop"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        try:
+            response = requests.post(url, headers=headers)
+            response.raise_for_status()
+            print("Successfully requested pod stop.")
+        except Exception as e:
+            print(f"Failed to stop pod: {e}")
+    else:
+        print("RUNPOD_POD_ID or RUNPOD_API_KEY not set, skipping pod stop.")
 
 
 def start_cloud_training(

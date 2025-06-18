@@ -371,6 +371,8 @@ def train(cfg: TrainConfig) -> None:
             print(f"Warning: Failed to initialize wandb: {e}")
             run = None
 
+    print("Entering training loop")
+
     # --------------------------------------------------------------------- #
     # Training loop
     # --------------------------------------------------------------------- #
@@ -490,9 +492,10 @@ def train(cfg: TrainConfig) -> None:
                 run.finish()
             except Exception as e:
                 print(f"Warning: Failed to finish wandb run: {e}")
+
         # Stop RunPod instance if we're running on RunPod
         if os.getenv("RUNPOD_POD_ID"):
-            stop_runpod()
+            runpod_service.stop_runpod()
 
 
 # --------------------------------------------------------------------------- #
