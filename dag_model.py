@@ -242,7 +242,7 @@ class DAGGPT(GPT):
         attn_out, _ = self.token_attn(snap_hidden, snap_hidden, snap_hidden)
         operand_ctx = self.operand_ctx_block(hidden).mean(dim=1)
         op_ctx = self.op_ctx_block(hidden).mean(dim=1)
-        all_vals = torch.round(self.attn_to_num(attn_out).squeeze(-1))
+        all_vals = self.attn_to_num(attn_out).squeeze(-1)
         all_nodes = all_vals.unsqueeze(-1).expand(-1, -1, tok_emb.size(-1))
         initial_nodes = [all_nodes[:, i, :] for i in range(t)]
         zero_node = torch.zeros_like(tok_emb[:, 0, :])

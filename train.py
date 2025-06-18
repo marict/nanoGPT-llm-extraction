@@ -13,6 +13,7 @@ import math
 import os
 import pickle
 import runpy
+import subprocess
 import time
 from ast import literal_eval
 from contextlib import nullcontext
@@ -320,6 +321,8 @@ def train(cfg: TrainConfig) -> None:
     if cfg.block_size < model.config.block_size:
         model.crop_block_size(cfg.block_size)
         model_args["block_size"] = cfg.block_size
+
+    print(f"Model type: {type(model).__name__}")
     model.to(cfg.device)
 
     # Different scaler for different torch versions
@@ -393,11 +396,6 @@ def train(cfg: TrainConfig) -> None:
 
                     # Get extra values from model if available
                     extra_vals = model.extra_vals()
-
-                    # Debug prints
-                    print(f"Model type: {type(model).__name__}")
-                    print(f"Extra values: {extra_vals}")
-                    print(f"Has last_activations: {hasattr(model, 'last_activations')}")
 
                     # Log everything to wandb if available
                     if run is not None:
@@ -492,6 +490,9 @@ def train(cfg: TrainConfig) -> None:
                 run.finish()
             except Exception as e:
                 print(f"Warning: Failed to finish wandb run: {e}")
+        # Stop RunPod instance if we're running on RunPod
+        if os.getenv("RUNPOD_POD_ID"):
+            stop_runpod()
 
 
 # --------------------------------------------------------------------------- #
