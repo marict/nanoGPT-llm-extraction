@@ -8,8 +8,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest
 
 import dag_model
-from dag_model import (DAGGPT, DAGController, DAGGPTConfig, DifferentiableDAG,
-                       divide, multiply, subtract)
+from dag_model import (
+    DAGGPT,
+    DAGController,
+    DAGGPTConfig,
+    DifferentiableDAG,
+    divide,
+    multiply,
+    subtract,
+)
 
 
 @pytest.fixture(scope="module")
