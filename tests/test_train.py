@@ -2,12 +2,12 @@ import os
 import pickle
 import subprocess
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
-from contextlib import nullcontext
 
 from dag_model import DAGGPT, DAGGPTConfig
 from train import estimate_loss
@@ -15,6 +15,7 @@ from train import estimate_loss
 REPO_ROOT = Path(__file__).parent.parent
 
 import pytest
+
 
 @pytest.mark.parametrize("batch_size", [1, 2])
 def test_train_script_runs(tmp_path: Path, batch_size: int):
@@ -70,7 +71,7 @@ def test_train_script_runs(tmp_path: Path, batch_size: int):
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{tmp_path}:{env.get('PYTHONPATH', '')}"
     env["WANDB_API_KEY"] = "dummy"
-    
+
     # Run the command and capture output
     result = subprocess.run(
         cmd,
@@ -78,9 +79,9 @@ def test_train_script_runs(tmp_path: Path, batch_size: int):
         env=env,
         capture_output=True,
         text=True,
-        check=False  # Don't raise exception, we'll handle it
+        check=False,  # Don't raise exception, we'll handle it
     )
-    
+
     if result.returncode != 0:
         # Format a detailed error message
         error_msg = [
@@ -90,9 +91,10 @@ def test_train_script_runs(tmp_path: Path, batch_size: int):
             "\nSTDOUT:",
             result.stdout,
             "\nSTDERR:",
-            result.stderr
+            result.stderr,
         ]
         pytest.fail("\n".join(error_msg))
+
 
 class MockModel(torch.nn.Module):
     def __init__(self):
@@ -130,7 +132,9 @@ def test_estimate_loss():
     assert isinstance(losses, dict)
     assert set(losses.keys()) == {"train", "val"}
     assert all(isinstance(v, torch.Tensor) for v in losses.values())
-    assert all(v.item() == 1.0 for v in losses.values())  # Our mock model always returns 1.0
+    assert all(
+        v.item() == 1.0 for v in losses.values()
+    )  # Our mock model always returns 1.0
     assert model.training  # Model should be back in training mode
 
 

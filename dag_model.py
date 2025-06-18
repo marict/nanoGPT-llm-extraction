@@ -219,7 +219,7 @@ class DAGGPT(GPT):
 
         return model
 
-    # Expected dimensions: 
+    # Expected dimensions:
     # idx: (batch_size, seq_len)
     # targets: (batch_size, seq_len)
     def forward(self, idx, targets=None, return_dag_info: bool = False):

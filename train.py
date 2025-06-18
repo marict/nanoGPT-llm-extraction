@@ -25,10 +25,10 @@ import torch
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from python_version_check import check_python_version
 import runpod_service
 from dag_model import DAGGPT, DAGGPTConfig
 from model import GPT, GPTConfig
+from python_version_check import check_python_version
 
 
 # --------------------------------------------------------------------------- #
@@ -37,6 +37,7 @@ from model import GPT, GPTConfig
 @dataclass
 class TrainConfig:
     """Container for all training-related hyperparameters."""
+
     out_dir: str = "out"
     eval_interval: int = 250
     log_interval: int = 1
@@ -222,9 +223,7 @@ def train(cfg: TrainConfig) -> None:
             from data import prepare_dataset  # local import
 
             train_tokens, val_tokens = prepare_dataset(cfg.dataset, data_dir)
-            print(
-                f"Dataset prepared. Train: {train_tokens:,}, Val: {val_tokens:,}"
-            )
+            print(f"Dataset prepared. Train: {train_tokens:,}, Val: {val_tokens:,}")
 
     meta_path = data_dir / "meta.pkl"
     meta_dtype = np.uint16
@@ -250,9 +249,7 @@ def train(cfg: TrainConfig) -> None:
         )
         y = torch.stack(
             [
-                torch.from_numpy(
-                    data[i + 1 : i + 1 + cfg.block_size].astype(np.int64)
-                )
+                torch.from_numpy(data[i + 1 : i + 1 + cfg.block_size].astype(np.int64))
                 for i in ix
             ]
         )

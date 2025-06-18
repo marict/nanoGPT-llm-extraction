@@ -113,10 +113,7 @@ def start_cloud_training(
     pod_id = pod.get("id")
     if not pod_id:
         raise RunPodError("RunPod API did not return a pod id")
-    print(
-        f"Starting training job '{POD_NAME}' (pod {pod_id}) on {gpu_type}. "
-        f"View logs at {wandb_url}"
-    )
+    print(f"Starting training job '{POD_NAME}' (pod {pod_id}) on {gpu_type}. ")
 
     return pod_id
 

@@ -26,7 +26,7 @@ bias = False
 dag_depth = 0
 
 learning_rate = 6e-4
-max_iters = 0
+max_iters = 10
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95

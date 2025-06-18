@@ -27,6 +27,7 @@ def test_dag_gpt_forward(small_dag_gpt):
     assert logits.shape == (2, 4, 20)
     assert loss is None
 
+
 def test_dag_node_growth_regression(monkeypatch):
     class DummyController(DAGController):
         def forward(self, nodes, operand_ctx, op_ctx):
@@ -55,7 +56,7 @@ def test_op_functions():
 def test_dag_backward_flow(small_dag_gpt):
     model, _ = small_dag_gpt
     x = torch.randint(0, 20, (2, 4))
-    y = torch.randint(0, 20, (2, 4))    
+    y = torch.randint(0, 20, (2, 4))
     _, loss = model(x, y)
     loss = loss.sum()
     loss.backward()
