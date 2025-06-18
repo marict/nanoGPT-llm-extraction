@@ -257,12 +257,8 @@ class DAGGPT(GPT):
             "op_ctx": op_ctx,
             "all_nodes": all_nodes,
         }
-
-        # Debug print
-        print(
-            "Stored activations:",
-            {k: v.shape for k, v in self.last_activations.items()},
-        )
+        for tensor in self.last_activations.values():
+            tensor.retain_grad()
 
         dag_result = self.dag(
             initial_nodes, operand_ctx, op_ctx, return_info=return_dag_info
