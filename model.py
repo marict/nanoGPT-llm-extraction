@@ -390,6 +390,11 @@ class GPT(nn.Module):
         mfu = flops_achieved / flops_promised
         return mfu
 
+    def extra_vals(self):
+        """Return any extra values to log during validation.
+        Base GPT model doesn't have any extra values to log."""
+        return {}
+
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
         """

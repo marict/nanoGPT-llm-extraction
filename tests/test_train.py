@@ -10,6 +10,7 @@ import pytest
 import torch
 
 from dag_model import DAGGPT, DAGGPTConfig
+from model import GPT, GPTConfig
 from train import estimate_loss
 
 REPO_ROOT = Path(__file__).parent.parent

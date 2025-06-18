@@ -369,6 +369,11 @@ def train(cfg: TrainConfig) -> None:
             print(
                 f"step {iter_num}: train {losses['train']:.4f}, val {losses['val']:.4f}"
             )
+
+            # Get extra values from model if available
+            extra_vals = model.extra_vals()
+
+            # Log everything to wandb
             wandb.log(
                 {
                     "iter": iter_num,
@@ -376,6 +381,7 @@ def train(cfg: TrainConfig) -> None:
                     "val/loss": losses["val"],
                     "lr": lr,
                     "mfu": running_mfu * 100,
+                    **extra_vals,  # Add any extra values from the model
                 }
             )
             if losses["val"] < best_val_loss or cfg.always_save_checkpoint:

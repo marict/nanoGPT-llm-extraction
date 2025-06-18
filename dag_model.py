@@ -249,6 +249,15 @@ class DAGGPT(GPT):
         while len(initial_nodes) < 2:
             initial_nodes.append(zero_node)
 
+        # Store activations for entropy calculation
+        self.last_activations = {
+            "snap_hidden": snap_hidden,
+            "attn_out": attn_out,
+            "operand_ctx": operand_ctx,
+            "op_ctx": op_ctx,
+            "all_nodes": all_nodes,
+        }
+
         dag_result = self.dag(
             initial_nodes, operand_ctx, op_ctx, return_info=return_dag_info
         )
@@ -272,3 +281,18 @@ class DAGGPT(GPT):
         if return_dag_info:
             return logits, loss, dag_output, {"attn": attn_hist, "op": op_hist}
         return logits, loss
+
+    def extra_vals(self):
+        """Calculate entropy of activations in the DAG components."""
+        if not hasattr(self, "last_activations"):
+            return {}
+
+        entropy_vals = {}
+        for name, tensor in self.last_activations.items():
+            # Calculate entropy along the last dimension
+            probs = F.softmax(tensor, dim=-1)
+            entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1)
+            # Average over batch and sequence dimensions
+            entropy_vals[f"dag_entropy/{name}"] = entropy.mean().item()
+
+        return entropy_vals

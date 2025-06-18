@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -8,15 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest
 
 import dag_model
-from dag_model import (
-    DAGGPT,
-    DAGController,
-    DAGGPTConfig,
-    DifferentiableDAG,
-    divide,
-    multiply,
-    subtract,
-)
+from dag_model import (DAGGPT, DAGController, DAGGPTConfig, DifferentiableDAG,
+                       divide, multiply, subtract)
 
 
 @pytest.fixture(scope="module")
@@ -277,3 +271,56 @@ def test_daggpt_config_creation():
     # Test that invalid parameters are rejected
     with pytest.raises(TypeError):
         DAGGPTConfig(dag_hidden_dim=32)  # This should fail
+
+
+def test_extra_vals_daggpt():
+    """Test that DAGGPT's extra_vals calculates entropy correctly."""
+    config = DAGGPTConfig(
+        n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=2
+    )
+    model = DAGGPT(config)
+
+    # Create a dummy input
+    batch_size = 2
+    seq_len = 8
+    x = torch.randint(0, config.vocab_size, (batch_size, seq_len))
+
+    # Run forward pass to populate last_activations
+    model(x)
+
+    # Get extra values
+    extra_vals = model.extra_vals()
+
+    # Check structure
+    assert isinstance(extra_vals, dict)
+    assert len(extra_vals) > 0
+
+    # Check that all values are entropy metrics
+    expected_keys = {
+        "dag_entropy/snap_hidden",
+        "dag_entropy/attn_out",
+        "dag_entropy/operand_ctx",
+        "dag_entropy/op_ctx",
+        "dag_entropy/all_nodes",
+    }
+    assert set(extra_vals.keys()) == expected_keys
+
+    # Check that entropy values are reasonable (between 0 and log(n))
+    for val in extra_vals.values():
+        assert isinstance(val, float)
+        assert 0 <= val <= np.log(64)  # max entropy for 64-dimensional vectors
+
+
+def test_extra_vals_daggpt_no_forward():
+    """Test that DAGGPT's extra_vals handles case where forward hasn't been called."""
+    config = DAGGPTConfig(
+        n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=2
+    )
+    model = DAGGPT(config)
+
+    # Get extra values without running forward
+    extra_vals = model.extra_vals()
+
+    # Should return empty dict
+    assert isinstance(extra_vals, dict)
+    assert len(extra_vals) == 0

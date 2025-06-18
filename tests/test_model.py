@@ -71,3 +71,12 @@ def test_block():
     assert out.shape == x.shape, "Block output shape mismatch"
     # Check that the output is not all zeros
     assert not torch.allclose(out, torch.zeros_like(out)), "Block output is all zeros"
+
+
+def test_extra_vals_gpt():
+    """Test that GPT's extra_vals returns an empty dict."""
+    config = GPTConfig(n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100)
+    model = GPT(config)
+    extra_vals = model.extra_vals()
+    assert isinstance(extra_vals, dict)
+    assert len(extra_vals) == 0
