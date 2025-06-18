@@ -23,7 +23,7 @@ n_embd = 32
 dropout = 0.0
 bias = False
 
-dag_depth = 0
+dag_depth = 4
 
 learning_rate = 6e-4
 max_iters = 10

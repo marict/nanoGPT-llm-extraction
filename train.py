@@ -354,108 +354,144 @@ def train(cfg: TrainConfig) -> None:
     if master_process:
         import wandb
 
-        run = wandb.init(
-            project=cfg.wandb_project,
-            name=cfg.wandb_run_name,
-            config=cfg.__dict__,
-        )
-        print(f"W&B URL: {run.url}")
+        try:
+            run = wandb.init(
+                project=cfg.wandb_project,
+                name=cfg.wandb_run_name,
+                config=cfg.__dict__,
+                settings=wandb.Settings(
+                    start_method="thread"
+                ),  # Use thread-based initialization
+            )
+            print(f"W&B URL: {run.url}")
+        except Exception as e:
+            print(f"Warning: Failed to initialize wandb: {e}")
+            run = None
 
     # --------------------------------------------------------------------- #
     # Training loop
     # --------------------------------------------------------------------- #
-    X, Y = get_batch("train")
-    t0 = time.time()
-    iter_num = locals().get("iter_num", 0)
-    best_val_loss = locals().get("best_val_loss", 1e9)
-    running_mfu = -1.0
-    raw_model = model.module if ddp else model
-
-    while True:
-        lr = get_lr(iter_num, cfg=cfg) if cfg.decay_lr else cfg.learning_rate
-        for pg in optimizer.param_groups:
-            pg["lr"] = lr
-
-        if iter_num % cfg.eval_interval == 0 and master_process:
-            losses = estimate_loss(model, cfg.eval_iters, get_batch, ctx)
-            print(
-                f"step {iter_num}: train {losses['train']:.4f}, val {losses['val']:.4f}"
-            )
-
-            # Get extra values from model if available
-            extra_vals = model.extra_vals()
-
-            # Debug prints
-            print(f"Model type: {type(model).__name__}")
-            print(f"Extra values: {extra_vals}")
-            print(f"Has last_activations: {hasattr(model, 'last_activations')}")
-
-            # Log everything to wandb
-            wandb.log(
-                {
-                    "iter": iter_num,
-                    "train/loss": losses["train"],
-                    "val/loss": losses["val"],
-                    "lr": lr,
-                    "mfu": running_mfu * 100,
-                    **extra_vals,  # Add any extra values from the model
-                }
-            )
-            if losses["val"] < best_val_loss or cfg.always_save_checkpoint:
-                best_val_loss = losses["val"]
-                if iter_num > 0:
-                    ckpt = {
-                        "model": raw_model.state_dict(),
-                        "optimizer": optimizer.state_dict(),
-                        "model_args": model_args,
-                        "iter_num": iter_num,
-                        "best_val_loss": best_val_loss,
-                        "config": cfg.__dict__,
-                    }
-                    if master_process:
-                        print(f"Saving checkpoint to {cfg.out_dir}")
-                    torch.save(ckpt, Path(cfg.out_dir) / f"ckpt_{iter_num}.pt")
-        if iter_num == 0 and cfg.eval_only:
-            break
-
-        for micro_step in range(cfg.gradient_accumulation_steps):
-            if ddp:
-                model.require_backward_grad_sync = (
-                    micro_step == cfg.gradient_accumulation_steps - 1
-                )
-            with ctx:
-                logits, loss = model(X, Y)
-                loss = loss / cfg.gradient_accumulation_steps
-            X, Y = get_batch("train")
-            scaler.scale(loss).backward()
-
-        if cfg.grad_clip:
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad(set_to_none=True)
-
-        dt = time.time() - t0
+    try:
+        X, Y = get_batch("train")
         t0 = time.time()
-        if iter_num % cfg.log_interval == 0 and master_process:
-            lossf = loss.item() * cfg.gradient_accumulation_steps
-            if iter_num >= 5:
-                mfu = raw_model.estimate_mfu(
-                    cfg.batch_size * cfg.gradient_accumulation_steps, dt
-                )
-                running_mfu = 0.9 * running_mfu + 0.1 * mfu if running_mfu >= 0 else mfu
-            print(
-                f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, "
-                f"mfu {running_mfu*100:.2f}%"
-            )
+        iter_num = locals().get("iter_num", 0)
+        best_val_loss = locals().get("best_val_loss", 1e9)
+        running_mfu = -1.0
+        raw_model = model.module if ddp else model
 
-        iter_num += 1
-        if iter_num > cfg.max_iters:
-            break
+        while True:
+            lr = get_lr(iter_num, cfg=cfg) if cfg.decay_lr else cfg.learning_rate
+            for pg in optimizer.param_groups:
+                pg["lr"] = lr
 
-    if ddp:
-        destroy_process_group()
+            if iter_num % cfg.eval_interval == 0 and master_process:
+                try:
+                    losses = estimate_loss(model, cfg.eval_iters, get_batch, ctx)
+                    print(
+                        f"step {iter_num}: train {losses['train']:.4f}, val {losses['val']:.4f}"
+                    )
+
+                    # Get extra values from model if available
+                    extra_vals = model.extra_vals()
+
+                    # Debug prints
+                    print(f"Model type: {type(model).__name__}")
+                    print(f"Extra values: {extra_vals}")
+                    print(f"Has last_activations: {hasattr(model, 'last_activations')}")
+
+                    # Log everything to wandb if available
+                    if run is not None:
+                        try:
+                            wandb.log(
+                                {
+                                    "iter": iter_num,
+                                    "train/loss": losses["train"],
+                                    "val/loss": losses["val"],
+                                    "lr": lr,
+                                    "mfu": running_mfu * 100,
+                                    **extra_vals,  # Add any extra values from the model
+                                }
+                            )
+                        except Exception as e:
+                            print(f"Warning: Failed to log to wandb: {e}")
+
+                    if losses["val"] < best_val_loss or cfg.always_save_checkpoint:
+                        best_val_loss = losses["val"]
+                        if iter_num > 0:
+                            ckpt = {
+                                "model": raw_model.state_dict(),
+                                "optimizer": optimizer.state_dict(),
+                                "model_args": model_args,
+                                "iter_num": iter_num,
+                                "best_val_loss": best_val_loss,
+                                "config": cfg.__dict__,
+                            }
+                            if master_process:
+                                print(f"Saving checkpoint to {cfg.out_dir}")
+                            torch.save(ckpt, Path(cfg.out_dir) / f"ckpt_{iter_num}.pt")
+                except Exception as e:
+                    print(f"Warning: Error during evaluation: {e}")
+
+            if iter_num == 0 and cfg.eval_only:
+                break
+
+            try:
+                for micro_step in range(cfg.gradient_accumulation_steps):
+                    if ddp:
+                        model.require_backward_grad_sync = (
+                            micro_step == cfg.gradient_accumulation_steps - 1
+                        )
+                    with ctx:
+                        logits, loss = model(X, Y)
+                        loss = loss / cfg.gradient_accumulation_steps
+                    X, Y = get_batch("train")
+                    scaler.scale(loss).backward()
+
+                if cfg.grad_clip:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
+
+                dt = time.time() - t0
+                t0 = time.time()
+                if iter_num % cfg.log_interval == 0 and master_process:
+                    lossf = loss.item() * cfg.gradient_accumulation_steps
+                    if iter_num >= 5:
+                        mfu = raw_model.estimate_mfu(
+                            cfg.batch_size * cfg.gradient_accumulation_steps, dt
+                        )
+                        running_mfu = (
+                            0.9 * running_mfu + 0.1 * mfu if running_mfu >= 0 else mfu
+                        )
+                    print(
+                        f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, "
+                        f"mfu {running_mfu*100:.2f}%"
+                    )
+
+                iter_num += 1
+                if iter_num > cfg.max_iters:
+                    break
+            except Exception as e:
+                print(f"Warning: Error during training step: {e}")
+                # Try to recover by getting a new batch
+                try:
+                    X, Y = get_batch("train")
+                except Exception as e2:
+                    print(f"Fatal: Could not recover from error: {e2}")
+                    break
+
+    except Exception as e:
+        print(f"Fatal error in training loop: {e}")
+    finally:
+        if ddp:
+            destroy_process_group()
+        if run is not None:
+            try:
+                run.finish()
+            except Exception as e:
+                print(f"Warning: Failed to finish wandb run: {e}")
 
 
 # --------------------------------------------------------------------------- #
