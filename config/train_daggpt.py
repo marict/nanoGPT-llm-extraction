@@ -48,7 +48,7 @@ dataset = "shakespeare"
 # Training infrastructure
 backend = "nccl"  # Use NCCL for multi-GPU training
 dtype = "bfloat16"  # Use bfloat16 for better performance
-compile = True  # Use torch.compile() for faster training
+compile = False  # Use torch.compile() for faster training
 
 # Checkpointing
 out_dir = "out"
