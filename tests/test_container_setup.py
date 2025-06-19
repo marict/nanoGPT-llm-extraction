@@ -46,15 +46,16 @@ def test_bash_syntax() -> None:
 
 def test_content_tokens() -> None:
     required = {
-        "shebang": "#!/bin/bash",
+        "shebang": "#!/usr/bin/env bash",
         "error handling": "set -e",
         "timing variable": "start_time=",
-        "git clone": "git clone",
         "apt-get": "apt-get",
         "pip install": "pip install",
         "python train": "python train.py",
         "arg forward": 'python train.py "$@"',
         "tail keep-alive": "tail -f /dev/null",
+        "log function": "log()",
+        "cd to repo": "cd /runpod-volume/repo",
     }
 
     text = SCRIPT.read_text()
@@ -67,14 +68,15 @@ def test_structure_hints() -> None:
     lines = SCRIPT.read_text().splitlines()
 
     checks: list[tuple[str, bool]] = [
-        ("has shebang", lines[0].startswith("#!/bin/bash")),
+        ("has shebang", lines[0].startswith("#!/usr/bin/env bash")),
         ("has set -e", any("set -e" in l for l in lines)),
         ("has start_time var", any("start_time=" in l for l in lines)),
-        ("has git ops", any("git" in l for l in lines)),
         ("has apt-get", any("apt-get" in l for l in lines)),
         ("has pip install", any("pip install" in l for l in lines)),
         ("has python train.py", any("python train.py" in l for l in lines)),
         ("has tail keep-alive", any("tail -f /dev/null" in l for l in lines)),
+        ("has log function", any("log()" in l for l in lines)),
+        ("has cd to repo", any("cd /runpod-volume/repo" in l for l in lines)),
     ]
 
     print("\nchecking structure hints …")

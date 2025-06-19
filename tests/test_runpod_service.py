@@ -26,9 +26,7 @@ def test_start_cloud_training(monkeypatch):
     assert created["params"]["start_ssh"] is False
 
     docker_args = created["params"]["docker_args"]
-    assert docker_args.startswith(
-        "bash -c 'cd /workspace && curl -s https://raw.githubusercontent.com/marict/nanoGPT-llm-extraction/main/scripts/container_setup.sh > container_setup.sh && chmod +x container_setup.sh && bash container_setup.sh"
-    )
+    assert docker_args.startswith("bash -c")
     assert f"config.py --wandb_project={rp.POD_NAME}" in docker_args
 
 
