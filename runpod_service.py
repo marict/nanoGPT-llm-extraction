@@ -108,27 +108,11 @@ def start_cloud_training(
     # Docker args preparation
     docker_start = time.time()
     docker_args = (
-        f"bash -c 'set -e ; "
-        f"start_time=$(date +%s) ; "
-        f"echo '[0s] Starting container setup' ; "
-        f"cd /workspace ; "
-        f"echo '[$(($(date +%s) - start_time))s] Cloning repository' ; "
-        f"[ -d repo ] && git -C repo pull || git clone {REPO_URL} repo ; "
-        f"echo '[$(($(date +%s) - start_time))s] Repository setup completed' ; "
-        f"cd repo ; "
-        f"echo '[$(($(date +%s) - start_time))s] Installing system packages' ; "
-        f"apt-get update && apt-get install -y tree ; "
-        f"echo '[$(($(date +%s) - start_time))s] System packages installed' ; "
-        f"echo === Directory Structure === && tree ; "
-        f"echo === Current Directory === && pwd ; "
-        f"echo '[$(($(date +%s) - start_time))s] Installing Python dependencies' ; "
-        f"pip install -q -r requirements-dev.txt ; "
-        f"echo '[$(($(date +%s) - start_time))s] Python dependencies installed' ; "
-        f"echo '[$(($(date +%s) - start_time))s] Starting training' ; "
-        f"python train.py {train_args} 2>&1 | "
-        f"tee /workspace/train_$(date +%Y%m%d_%H%M%S).log ; "
-        f"echo '[$(($(date +%s) - start_time))s] Training completed' ; "
-        f"tail -f /dev/null'"
+        f"bash -c '"
+        f"cd /workspace && "
+        f"curl -s https://raw.githubusercontent.com/marict/nanoGPT-llm-extraction/main/scripts/container_setup.sh > container_setup.sh && "
+        f"chmod +x container_setup.sh && "
+        f"bash container_setup.sh {train_args}'"
     )
     print(
         f"[{time.time() - docker_start:.2f}s] Docker args preparation completed in {time.time() - docker_start:.2f}s"
