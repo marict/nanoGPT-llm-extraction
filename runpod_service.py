@@ -1,4 +1,5 @@
 import os
+import time
 from typing import Sequence
 
 import requests
@@ -104,18 +105,32 @@ def start_cloud_training(
     train_args = " ".join(args_list)
 
     gpu_type_id = _resolve_gpu_id(gpu_type)
+    # Docker args preparation
+    docker_start = time.time()
     docker_args = (
         f"bash -c 'set -e ; "
+        f'echo "[$(date +%s)] Starting container setup" ; '
         f"cd /workspace ; "
+        f'echo "[$(date +%s)] Cloning/updating repository..." ; '
         f"[ -d repo ] && git -C repo pull || git clone {REPO_URL} repo ; "
+        f'echo "[$(date +%s)] Repository setup completed" ; '
         f"cd repo ; "
+        f'echo "[$(date +%s)] Installing system packages..." ; '
         f"apt-get update && apt-get install -y tree ; "
+        f'echo "[$(date +%s)] System packages installed" ; '
         f"echo === Directory Structure === && tree ; "
         f"echo === Current Directory === && pwd ; "
+        f'echo "[$(date +%s)] Installing Python dependencies..." ; '
         f"pip install -q -r requirements-dev.txt ; "
+        f'echo "[$(date +%s)] Python dependencies installed" ; '
+        f'echo "[$(date +%s)] Starting training..." ; '
         f"python train.py {train_args} 2>&1 | "
         f"tee /workspace/train_$(date +%Y%m%d_%H%M%S).log ; "
+        f'echo "[$(date +%s)] Training completed" ; '
         f"tail -f /dev/null'"
+    )
+    print(
+        f"[{time.time() - docker_start:.2f}s] Docker args preparation completed in {time.time() - docker_start:.2f}s"
     )
     pod = runpod.create_pod(
         name=POD_NAME,
