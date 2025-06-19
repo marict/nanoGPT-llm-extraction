@@ -46,42 +46,142 @@ def test_bash_syntax() -> None:
 
 def test_content_tokens() -> None:
     required = {
-        "shebang": "#!/usr/bin/env bash",
-        "error handling": "set -e",
-        "timing variable": "start_time=",
-        "apt-get": "apt-get",
-        "pip install": "pip install",
-        "python train": "python train.py",
-        "arg forward": 'python train.py "$@"',
-        "tail keep-alive": "tail -f /dev/null",
-        "log function": "log()",
-        "cd to repo": "cd /workspace/repo",
+        "shebang": {
+            "token": "#!/usr/bin/env bash",
+            "purpose": "Script interpreter declaration - tells system to run with bash",
+        },
+        "error handling": {
+            "token": "set -e",
+            "purpose": "Exit on any error - critical for container reliability",
+        },
+        "timing variable": {
+            "token": "start_time=",
+            "purpose": "Timing variable for log timestamps - needed for log() function",
+        },
+        "apt-get": {
+            "token": "apt-get",
+            "purpose": "System package installation - needed to install tree and other dependencies",
+        },
+        "pip install": {
+            "token": "pip install",
+            "purpose": "Python package installation - needed to install project dependencies",
+        },
+        "python train": {
+            "token": "python -u train.py",
+            "purpose": "Training script execution - core functionality of the container",
+        },
+        "arg forward": {
+            "token": 'python -u train.py "$@"',
+            "purpose": "Argument forwarding - allows passing training arguments to the script",
+        },
+        "tail keep-alive": {
+            "token": "tail -f /dev/null",
+            "purpose": "Keep container alive after training - prevents container from exiting",
+        },
+        "log function": {
+            "token": "log()",
+            "purpose": "Logging function definition - provides structured logging with timestamps",
+        },
+        "cd to repo": {
+            "token": "cd /workspace/repo",
+            "purpose": "Change to repository directory - ensures we're in the right working directory",
+        },
     }
 
     text = SCRIPT.read_text()
     print("\nscanning script tokens …")
-    for label, token in required.items():
-        assert _print_result(label, token in text)
+    missing_tokens = []
+
+    for label, info in required.items():
+        token = info["token"]
+        purpose = info["purpose"]
+        found = token in text
+        if not found:
+            missing_tokens.append(f"  ❌ {label}: '{token}' - {purpose}")
+        else:
+            print(f"  ✅ {label}: '{token}'")
+
+    if missing_tokens:
+        print("\n❌ MISSING REQUIRED TOKENS:")
+        for missing in missing_tokens:
+            print(missing)
+        print(f"\nThe container setup script is missing essential components.")
+        print(f"Please check {SCRIPT} and ensure all required tokens are present.")
+        assert (
+            False
+        ), f"Container setup script missing {len(missing_tokens)} required tokens"
+
+    print(f"\n✅ All {len(required)} required tokens found in container setup script")
 
 
 def test_structure_hints() -> None:
     lines = SCRIPT.read_text().splitlines()
 
-    checks: list[tuple[str, bool]] = [
-        ("has shebang", lines[0].startswith("#!/usr/bin/env bash")),
-        ("has set -e", any("set -e" in l for l in lines)),
-        ("has start_time var", any("start_time=" in l for l in lines)),
-        ("has apt-get", any("apt-get" in l for l in lines)),
-        ("has pip install", any("pip install" in l for l in lines)),
-        ("has python train.py", any("python train.py" in l for l in lines)),
-        ("has tail keep-alive", any("tail -f /dev/null" in l for l in lines)),
-        ("has log function", any("log()" in l for l in lines)),
-        ("has cd to repo", any("cd /workspace/repo" in l for l in lines)),
+    checks = [
+        (
+            "has shebang",
+            lines[0].startswith("#!/usr/bin/env bash"),
+            "First line must declare bash interpreter",
+        ),
+        (
+            "has set -e",
+            any("set -e" in l for l in lines),
+            "Script must exit on errors for container reliability",
+        ),
+        (
+            "has start_time var",
+            any("start_time=" in l for l in lines),
+            "Timing variable needed for log timestamps",
+        ),
+        (
+            "has apt-get",
+            any("apt-get" in l for l in lines),
+            "System package installation required",
+        ),
+        (
+            "has pip install",
+            any("pip install" in l for l in lines),
+            "Python package installation required",
+        ),
+        (
+            "has tail keep-alive",
+            any("tail -f /dev/null" in l for l in lines),
+            "Keep container alive after training",
+        ),
+        (
+            "has log function",
+            any("log()" in l for l in lines),
+            "Logging function needed for structured output",
+        ),
+        (
+            "has cd to repo",
+            any("cd /workspace/repo" in l for l in lines),
+            "Must change to repository directory",
+        ),
     ]
 
     print("\nchecking structure hints …")
-    for label, ok in checks:
-        assert _print_result(label, ok)
+    missing_checks = []
+
+    for label, ok, purpose in checks:
+        if not ok:
+            missing_checks.append(f"  ❌ {label}: {purpose}")
+        else:
+            print(f"  ✅ {label}")
+
+    if missing_checks:
+        print("\n❌ STRUCTURE ISSUES FOUND:")
+        for missing in missing_checks:
+            print(missing)
+        print(f"\nThe container setup script has structural problems.")
+        print(
+            f"Please check {SCRIPT} and ensure all required structural elements are present."
+        )
+        assert (
+            False
+        ), f"Container setup script has {len(missing_checks)} structural issues"
+
+    print(f"\n✅ All {len(checks)} structural checks passed")
 
 
 # --------------------------------------------------------------------------- #
