@@ -16,9 +16,9 @@ weight_decay = 1e-1
 
 dag_depth = 16
 
-n_layer = 48
-n_head = 48
-n_embd = 6144
+n_layer = 24
+n_head = 24
+n_embd = 2048
 dropout = 0.1
 bias = True
 
