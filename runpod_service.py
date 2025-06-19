@@ -62,20 +62,53 @@ class RunPodError(Exception):
     """Custom exception for RunPod operations."""
 
 
-def stop_runpod():
-    pod_id = os.getenv("RUNPOD_POD_ID")
-    api_key = os.getenv("RUNPOD_API_KEY")
-    if pod_id and api_key:
-        url = f"https://rest.runpod.io/v1/pods/{pod_id}/stop"
-        headers = {"Authorization": f"Bearer {api_key}"}
-        try:
-            response = requests.post(url, headers=headers)
-            response.raise_for_status()
-            print("Successfully requested pod stop.")
-        except Exception as e:
-            print(f"Failed to stop pod: {e}")
-    else:
-        print("RUNPOD_POD_ID or RUNPOD_API_KEY not set, skipping pod stop.")
+def stop_runpod(pod_id: str | None = None, api_key: str | None = None) -> bool:
+    """
+    Stop the active RunPod instance.
+
+    Returns
+    -------
+    bool
+        True  – stop signal accepted
+        False – stop failed / not attempted
+    """
+    pod_id = pod_id or os.getenv("RUNPOD_POD_ID")
+    api_key = api_key or os.getenv("RUNPOD_API_KEY")
+
+    if not pod_id or not api_key:
+        print("RUNPOD_POD_ID or RUNPOD_API_KEY not set – skipping pod stop.")
+        return False
+
+    # ------------------------------------------------------------------ #
+    # 1 Try the Python SDK (cleanest, no hard-coding of REST paths)
+    # ------------------------------------------------------------------ #
+    try:
+        runpod.api_key = api_key
+        # stop_pod is available in runpod>=0.9.0
+        if hasattr(runpod, "stop_pod"):
+            runpod.stop_pod(pod_id)  # raises on error
+            print("Successfully requested pod stop (SDK).")
+            return True
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[stop_runpod] SDK method failed: {exc}.  "
+            "Falling back to raw REST call …"
+        )
+
+    # ------------------------------------------------------------------ #
+    # 2 Fallback – direct REST POST
+    # ------------------------------------------------------------------ #
+    url = f"https://rest.runpod.io/v1/pods/{pod_id}/stop"
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    try:
+        resp = requests.post(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        print("Successfully requested pod stop (REST).")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to stop pod: {exc}")
+        return False
 
 
 def start_cloud_training(
