@@ -423,6 +423,7 @@ def train(cfg: TrainConfig) -> None:
     # --------------------------------------------------------------------- #
     # Training loop
     # --------------------------------------------------------------------- #
+    train_start = time.time()
     try:
         X, Y = get_batch("train")
         t0 = time.time()
@@ -533,6 +534,7 @@ def train(cfg: TrainConfig) -> None:
     except Exception as e:
         print(f"Fatal error in training loop: {e}")
     finally:
+        print(f"[{time.time() - train_start:.2f}s] Training loop completed in {time.time() - train_start:.2f}s")
         if ddp:
             destroy_process_group()
         if run is not None:
