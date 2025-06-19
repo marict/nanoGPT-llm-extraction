@@ -110,9 +110,9 @@ def start_cloud_training(
 
     # Create an inline script that clones the repo first, then runs the setup script
     inline_script = (
-        f"cd /runpod-volume && "
+        f"cd /workspace && "
         f"( [ -d repo/.git ] && git -C repo pull || git clone {REPO_URL} repo ) && "
-        f"bash /runpod-volume/repo/scripts/container_setup.sh {train_args}"
+        f"bash /workspace/repo/scripts/container_setup.sh {train_args}"
     )
     docker_args = f"bash -c '{inline_script}'"
     print(

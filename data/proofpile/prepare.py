@@ -108,4 +108,7 @@ def parse_args() -> argparse.ArgumentParser:
 
 if __name__ == "__main__":
     args = parse_args().parse_args()
-    prepare(args.data_dir, args.num_proc)
+    train_tokens, val_tokens = prepare(args.data_dir, args.num_proc)
+    print(f"✅ Preparation complete for proofpile")
+    print(f"Train tokens: {train_tokens:,}")
+    print(f"Val tokens:   {val_tokens:,}")

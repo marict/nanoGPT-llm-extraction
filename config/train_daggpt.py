@@ -1,12 +1,12 @@
 wandb_project = "dag-gpt"
-wandb_run_name = "daggpt-h100-burnin"
+wandb_run_name = "daggpt-h100-proofpile"
 
 batch_size = 64
-block_size = 2048
+block_size = 4096
 gradient_accumulation_steps = 8
 
-max_iters = 1000000
-lr_decay_iters = 1000000
+max_iters = 1500000
+lr_decay_iters = 1500000
 
 eval_interval = 100
 eval_iters = 50
@@ -28,15 +28,15 @@ beta2 = 0.95
 grad_clip = 1.0
 
 decay_lr = True
-warmup_iters = 5000
+warmup_iters = 10000
 min_lr = 3e-5
 
-dataset = "openwebtext"
+dataset = "proofpile"
 
 backend = "nccl"
 dtype = "bfloat16"
 compile = True
 
 out_dir = "out"
-always_save_checkpoint = False
+always_save_checkpoint = True
 init_from = "scratch"

@@ -56,7 +56,10 @@ def prepare(data_dir: Path) -> tuple[int, int]:
 
 
 if __name__ == "__main__":
-    prepare(Path(__file__).parent)
+    train_tokens, val_tokens = prepare(Path(__file__).parent)
+    print(f"✅ Preparation complete for shakespeare")
+    print(f"Train tokens: {train_tokens:,}")
+    print(f"Val tokens:   {val_tokens:,}")
 
 # train.bin has 301,966 tokens
 # val.bin has 36,059 tokens

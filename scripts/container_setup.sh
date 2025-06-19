@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Persist-safe nanoGPT setup and training entry-point
-# Saves logs and checkpoints in /runpod-volume so they survive POD restarts.
+# Saves logs and checkpoints in /workspace so they survive POD restarts.
 
 set -euo pipefail
 exec 2>&1                     # merge stderr into stdout
@@ -14,12 +14,12 @@ trap 'err "failed at line $LINENO"' ERR
 #---------------------------------------------------------------------------#
 # workspace & repo
 #---------------------------------------------------------------------------#
-cd /runpod-volume/repo
+cd /workspace/repo
 log "cwd $(pwd)"
 
 # Repository should already be cloned by the calling script
 if [[ ! -d .git ]]; then
-    err "Repository not found. Expected to be in /runpod-volume/repo"
+    err "Repository not found. Expected to be in /workspace/repo"
     exit 1
 fi
 
@@ -38,7 +38,7 @@ pip install -q -r requirements-dev.txt
 #---------------------------------------------------------------------------#
 # training
 #---------------------------------------------------------------------------#
-log_file="/runpod-volume/train_$(date +%Y%m%d_%H%M%S).log"
+log_file="/workspace/train_$(date +%Y%m%d_%H%M%S).log"
 log "starting training – output -> $log_file"
 python -u train.py "$@" 2>&1 | tee "$log_file"
 

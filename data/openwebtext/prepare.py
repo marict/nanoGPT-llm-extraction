@@ -107,7 +107,10 @@ def prepare(data_dir: Path, num_proc: int = 8) -> tuple[int, int]:
 
 
 if __name__ == "__main__":
-    prepare(Path(__file__).parent)
+    train_tokens, val_tokens = prepare(Path(__file__).parent)
+    print(f"✅ Preparation complete for openwebtext")
+    print(f"Train tokens: {train_tokens:,}")
+    print(f"Val tokens:   {val_tokens:,}")
 
     # train.bin is ~17GB, val.bin ~8.5MB
     # train has ~9B tokens (9,035,582,198)

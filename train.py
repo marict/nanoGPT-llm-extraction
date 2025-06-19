@@ -310,6 +310,9 @@ def train(cfg: TrainConfig) -> None:
     else:
         ModelConfig, ModelClass = GPTConfig, GPT
 
+    # Append persistent workspace path to out_dir
+    cfg.out_dir = str(Path("/workspace") / cfg.out_dir)
+
     if cfg.init_from == "scratch":
         if master_process:
             print(f"[{time.time() - setup_start:.2f}s] Initializing model from scratch")

@@ -55,7 +55,7 @@ def test_content_tokens() -> None:
         "arg forward": 'python train.py "$@"',
         "tail keep-alive": "tail -f /dev/null",
         "log function": "log()",
-        "cd to repo": "cd /runpod-volume/repo",
+        "cd to repo": "cd /workspace/repo",
     }
 
     text = SCRIPT.read_text()
@@ -76,7 +76,7 @@ def test_structure_hints() -> None:
         ("has python train.py", any("python train.py" in l for l in lines)),
         ("has tail keep-alive", any("tail -f /dev/null" in l for l in lines)),
         ("has log function", any("log()" in l for l in lines)),
-        ("has cd to repo", any("cd /runpod-volume/repo" in l for l in lines)),
+        ("has cd to repo", any("cd /workspace/repo" in l for l in lines)),
     ]
 
     print("\nchecking structure hints …")
