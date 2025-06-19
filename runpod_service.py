@@ -105,14 +105,18 @@ def start_cloud_training(
 
     gpu_type_id = _resolve_gpu_id(gpu_type)
     docker_args = (
-        f"bash -c '[ -d repo ] && git -C repo pull || git clone {REPO_URL} repo && "
-        f"cd repo && "
-        f"apt-get update && apt-get install -y tree && "
-        f"echo === Directory Structure === && tree && "
-        f"echo === Current Directory === && pwd && "
-        f"echo === Config File Location === && ls -la config/train_default.py && "
-        f"pip install -q -r requirements-dev.txt && "
-        f"python train.py {train_args}'"
+        f"bash -c 'set -e ; "
+        f"cd /workspace ; "
+        f"[ -d repo ] && git -C repo pull || git clone {REPO_URL} repo ; "
+        f"cd repo ; "
+        f"apt-get update && apt-get install -y tree ; "
+        f"echo === Directory Structure === && tree ; "
+        f"echo === Current Directory === && pwd ; "
+        f"echo === Config File Location === && ls -la config/train_default.py ; "
+        f"pip install -q -r requirements-dev.txt ; "
+        f"python train.py {train_args} 2>&1 | "
+        f"tee /workspace/train_$(date +%Y%m%d_%H%M%S).log ; "
+        f"tail -f /dev/null'"
     )
     pod = runpod.create_pod(
         name=POD_NAME,
@@ -121,8 +125,8 @@ def start_cloud_training(
         gpu_count=1,
         min_vcpu_count=8,
         min_memory_in_gb=128,
-        volume_in_gb=160,  # persists across stops, billed continuously
-        container_disk_in_gb=100,  # wiped on stop, billed only while running
+        volume_in_gb=180,  # persists across stops
+        container_disk_in_gb=160,  # wiped on stop
         env={
             "WANDB_API_KEY": os.getenv("WANDB_API_KEY", ""),
             "HF_HOME": "/workspace/.cache/huggingface",

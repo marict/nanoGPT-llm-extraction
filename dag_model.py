@@ -258,7 +258,8 @@ class DAGGPT(GPT):
             "all_nodes": all_nodes,
         }
         for tensor in self.last_activations.values():
-            tensor.retain_grad()
+            if tensor.requires_grad:
+                tensor.retain_grad()
 
         dag_result = self.dag(
             initial_nodes, operand_ctx, op_ctx, return_info=return_dag_info

@@ -27,9 +27,9 @@ def test_start_cloud_training(monkeypatch):
 
     docker_args = created["params"]["docker_args"]
     assert docker_args.startswith(
-        f"bash -c '[ -d repo ] && git -C repo pull || git clone {rp.REPO_URL} repo"
+        f"bash -c 'set -e ; cd /workspace ; [ -d repo ] && git -C repo pull || git clone {rp.REPO_URL} repo"
     )
-    assert f"python train.py config.py --wandb_project={rp.POD_NAME}'" in docker_args
+    assert f"python train.py config.py --wandb_project={rp.POD_NAME}" in docker_args
 
 
 def test_visualize_dag_attention(tmp_path):
