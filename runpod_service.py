@@ -124,8 +124,8 @@ def start_cloud_training(
         gpu_type_id=gpu_type_id,
         gpu_count=1,
         min_vcpu_count=8,
-        min_memory_in_gb=128,
-        volume_in_gb=180,  # persists across stops
+        min_memory_in_gb=64,
+        volume_in_gb=700,  # persists across stops
         container_disk_in_gb=160,  # wiped on stop
         env={
             "WANDB_API_KEY": os.getenv("WANDB_API_KEY", ""),
