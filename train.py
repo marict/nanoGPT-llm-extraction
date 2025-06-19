@@ -534,7 +534,9 @@ def train(cfg: TrainConfig) -> None:
     except Exception as e:
         print(f"Fatal error in training loop: {e}")
     finally:
-        print(f"[{time.time() - train_start:.2f}s] Training loop completed in {time.time() - train_start:.2f}s")
+        print(
+            f"[{time.time() - train_start:.2f}s] Training loop completed in {time.time() - train_start:.2f}s"
+        )
         if ddp:
             destroy_process_group()
         if run is not None:
