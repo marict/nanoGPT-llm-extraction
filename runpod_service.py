@@ -115,21 +115,21 @@ def start_cloud_training(
         "exec 2>&1\n"
         "\n"
         "start_time=$(date +%s)\n"
-        "log() { printf '[%6ss] %s\\n'  \"$(( $(date +%s) - start_time ))\" \"$*\"; }\n"
+        'log() { printf \'[%6ss] %s\\n\'  "$(( $(date +%s) - start_time ))" "$*"; }\n'
         "\n"
         "cd /runpod-volume\n"
-        "log \"cwd $(pwd)\"\n"
+        'log "cwd $(pwd)"\n'
         "\n"
-        f"REPO_URL=\"{REPO_URL}\"\n"
+        f'REPO_URL="{REPO_URL}"\n'
         "if [[ -d repo/.git ]]; then\n"
-        "    log \"repo exists – git pull\"\n"
+        '    log "repo exists – git pull"\n'
         "    git -C repo pull\n"
         "else\n"
-        "    log \"cloning repo\"\n"
-        "    git clone \"$REPO_URL\" repo\n"
+        '    log "cloning repo"\n'
+        '    git clone "$REPO_URL" repo\n'
         "fi\n"
         "\n"
-        "log \"running setup script\"\n"
+        'log "running setup script"\n'
         f"bash /runpod-volume/repo/scripts/container_setup.sh {train_args}\n"
     )
 
