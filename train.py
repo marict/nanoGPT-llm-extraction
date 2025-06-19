@@ -175,9 +175,11 @@ def train(cfg: TrainConfig) -> None:
     # --------------------------------------------------------------------- #
     # DDP / environment setup
     # --------------------------------------------------------------------- #
-    print("Starting training")
-    print(f"PyTorch version: {torch.__version__}")
+    setup_start = time.time()
+    print(f"[{time.time() - setup_start:.2f}s] Starting training")
+    print(f"[{time.time() - setup_start:.2f}s] PyTorch version: {torch.__version__}")
 
+    ddp_start = time.time()
     ddp = int(os.environ.get("RANK", -1)) != -1
     if ddp:
         init_process_group(backend=cfg.backend)
@@ -194,6 +196,9 @@ def train(cfg: TrainConfig) -> None:
         master_process = True
         seed_offset = 0
         ddp_world_size = 1
+    print(
+        f"[{time.time() - setup_start:.2f}s] DDP setup completed in {time.time() - ddp_start:.2f}s"
+    )
 
     tokens_per_iter = (
         cfg.gradient_accumulation_steps
@@ -202,8 +207,9 @@ def train(cfg: TrainConfig) -> None:
         * cfg.block_size
     )
     if master_process:
-        print(f"Tokens / iter: {tokens_per_iter:,}")
+        print(f"[{time.time() - setup_start:.2f}s] Tokens / iter: {tokens_per_iter:,}")
 
+    seed_start = time.time()
     torch.manual_seed(1337 + seed_offset)
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
@@ -218,21 +224,30 @@ def train(cfg: TrainConfig) -> None:
         if device == "cpu"
         else torch.amp.autocast(device_type=device, dtype=ptdtype)
     )
+    print(
+        f"[{time.time() - setup_start:.2f}s] Device setup completed in {time.time() - seed_start:.2f}s"
+    )
 
     # --------------------------------------------------------------------- #
     # Data loading
     # --------------------------------------------------------------------- #
-    print("Loading data")
+    data_start = time.time()
+    print(f"[{time.time() - setup_start:.2f}s] Loading data")
     data_dir = Path("data") / cfg.dataset
     if not (data_dir / "train.bin").exists():
         if master_process:
-            print(f"Preparing dataset {cfg.dataset}...")
+            print(
+                f"[{time.time() - setup_start:.2f}s] Preparing dataset {cfg.dataset}..."
+            )
             from data import prepare_dataset  # local import
 
             train_tokens, val_tokens = prepare_dataset(cfg.dataset, data_dir)
-            print(f"Dataset prepared. Train: {train_tokens:,}, Val: {val_tokens:,}")
+            print(
+                f"[{time.time() - setup_start:.2f}s] Dataset prepared. Train: {train_tokens:,}, Val: {val_tokens:,}"
+            )
 
-    print("Loading meta")
+    meta_start = time.time()
+    print(f"[{time.time() - setup_start:.2f}s] Loading meta")
     meta_path = data_dir / "meta.pkl"
     meta_dtype = np.uint16
     vocab_size = None
@@ -242,7 +257,12 @@ def train(cfg: TrainConfig) -> None:
         vocab_size = meta["vocab_size"]
         meta_dtype = np.uint8 if meta.get("byte_level", False) else np.uint16
         if master_process:
-            print(f"Found vocab_size {vocab_size} and dtype {meta_dtype}")
+            print(
+                f"[{time.time() - setup_start:.2f}s] Found vocab_size {vocab_size} and dtype {meta_dtype}"
+            )
+    print(
+        f"[{time.time() - setup_start:.2f}s] Data loading completed in {time.time() - data_start:.2f}s"
+    )
 
     def get_batch(split: str) -> Tuple[torch.Tensor, torch.Tensor]:
         """Return one batch of tokens for <split>."""
@@ -273,7 +293,8 @@ def train(cfg: TrainConfig) -> None:
     # --------------------------------------------------------------------- #
     # Model creation
     # --------------------------------------------------------------------- #
-    print("Initializing model")
+    model_start = time.time()
+    print(f"[{time.time() - setup_start:.2f}s] Initializing model")
     model_args: Dict[str, object] = dict(
         n_layer=cfg.n_layer,
         n_head=cfg.n_head,
@@ -291,7 +312,7 @@ def train(cfg: TrainConfig) -> None:
 
     if cfg.init_from == "scratch":
         if master_process:
-            print("Initializing model from scratch")
+            print(f"[{time.time() - setup_start:.2f}s] Initializing model from scratch")
         gptconf = ModelConfig(**model_args)
         model = ModelClass(gptconf)
     elif cfg.init_from == "resume":
@@ -309,7 +330,9 @@ def train(cfg: TrainConfig) -> None:
         best_val_loss = checkpoint["best_val_loss"]
     elif cfg.init_from.startswith("gpt2"):
         if master_process:
-            print(f"Loading GPT-2 weights {cfg.init_from}")
+            print(
+                f"[{time.time() - setup_start:.2f}s] Loading GPT-2 weights {cfg.init_from}"
+            )
         base_model = GPT.from_pretrained(cfg.init_from, dict(dropout=cfg.dropout))
         for k in ("n_layer", "n_head", "n_embd", "block_size", "bias", "vocab_size"):
             model_args[k] = getattr(base_model.config, k)
@@ -326,8 +349,11 @@ def train(cfg: TrainConfig) -> None:
         model.crop_block_size(cfg.block_size)
         model_args["block_size"] = cfg.block_size
 
-    print(f"Model type: {type(model).__name__}")
+    print(f"[{time.time() - setup_start:.2f}s] Model type: {type(model).__name__}")
     model.to(device)
+    print(
+        f"[{time.time() - setup_start:.2f}s] Model creation completed in {time.time() - model_start:.2f}s"
+    )
 
     # Different scaler for different torch versions
     # One for the local version and one for the runpod version
@@ -338,7 +364,8 @@ def train(cfg: TrainConfig) -> None:
         else torch.amp.GradScaler("cuda", enabled=scalar_enabled)
     )
 
-    print("Initializing optimizer")
+    optimizer_start = time.time()
+    print(f"[{time.time() - setup_start:.2f}s] Initializing optimizer")
     optimizer = model.configure_optimizers(
         cfg.weight_decay,
         cfg.learning_rate,
@@ -347,20 +374,28 @@ def train(cfg: TrainConfig) -> None:
     )
     if cfg.init_from == "resume":
         optimizer.load_state_dict(checkpoint["optimizer"])
+    print(
+        f"[{time.time() - setup_start:.2f}s] Optimizer initialization completed in {time.time() - optimizer_start:.2f}s"
+    )
 
+    compile_start = time.time()
     if cfg.compile:
-        print("Compiling model")
+        print(f"[{time.time() - setup_start:.2f}s] Compiling model")
         model = torch.compile(model)
+        print(
+            f"[{time.time() - setup_start:.2f}s] Model compilation completed in {time.time() - compile_start:.2f}s"
+        )
     else:
-        print("Compilation disabled")
+        print(f"[{time.time() - setup_start:.2f}s] Compilation disabled")
 
     if ddp:
         model = DDP(model, device_ids=[int(device.split(":")[-1])])
 
-    print("Initializing wandb")
     # --------------------------------------------------------------------- #
     # W&B
     # --------------------------------------------------------------------- #
+    wandb_start = time.time()
+    print(f"[{time.time() - setup_start:.2f}s] Initializing wandb")
     if master_process:
         import wandb
 
@@ -373,12 +408,17 @@ def train(cfg: TrainConfig) -> None:
                     start_method="thread"
                 ),  # Use thread-based initialization
             )
-            print(f"W&B URL: {run.url}")
+            print(f"[{time.time() - setup_start:.2f}s] W&B URL: {run.url}")
         except Exception as e:
-            print(f"Warning: Failed to initialize wandb: {e}")
+            print(
+                f"[{time.time() - setup_start:.2f}s] Warning: Failed to initialize wandb: {e}"
+            )
             run = None
+    print(
+        f"[{time.time() - setup_start:.2f}s] W&B initialization completed in {time.time() - wandb_start:.2f}s"
+    )
 
-    print("Entering training loop")
+    print(f"[{time.time() - setup_start:.2f}s] Entering training loop")
 
     # --------------------------------------------------------------------- #
     # Training loop
@@ -510,15 +550,31 @@ def train(cfg: TrainConfig) -> None:
 # Entry point
 # --------------------------------------------------------------------------- #
 def main() -> None:
+    main_start = time.time()
+    print(f"[{time.time() - main_start:.2f}s] Starting main function")
+
+    check_start = time.time()
     check_python_version()
+    print(
+        f"[{time.time() - main_start:.2f}s] Python version check completed in {time.time() - check_start:.2f}s"
+    )
+
+    parser_start = time.time()
     parser = parse_args()
     args, overrides = parser.parse_known_args()
+    print(
+        f"[{time.time() - main_start:.2f}s] Argument parsing completed in {time.time() - parser_start:.2f}s"
+    )
 
+    config_start = time.time()
     cfg = TrainConfig()
     update_config(cfg, load_config_file(args.config))
     apply_overrides(cfg, overrides)
     if args.dag_depth is not None:
         cfg.dag_depth = args.dag_depth
+    print(
+        f"[{time.time() - main_start:.2f}s] Configuration setup completed in {time.time() - config_start:.2f}s"
+    )
 
     if args.wandb_api_key:
         os.environ["WANDB_API_KEY"] = args.wandb_api_key
