@@ -107,13 +107,10 @@ def start_cloud_training(
     gpu_type_id = _resolve_gpu_id(gpu_type)
     # Docker args preparation
     docker_start = time.time()
-    docker_args = (
-        f"bash -c '"
-        f"cd /workspace && "
-        f"curl -s https://raw.githubusercontent.com/marict/nanoGPT-llm-extraction/main/scripts/container_setup.sh > container_setup.sh && "
-        f"chmod +x container_setup.sh && "
-        f"bash container_setup.sh {train_args}'"
-    )
+    # path inside the image after git-clone
+    setup_script="/runpod-volume/repo/scripts/container_setup.sh"
+
+    docker_args = f"bash {setup_script} {train_args}"
     print(
         f"[{time.time() - docker_start:.2f}s] Docker args preparation completed in {time.time() - docker_start:.2f}s"
     )

@@ -1,113 +1,51 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Persist-safe nanoGPT setup and training entry-point
+# Saves logs and checkpoints in /runpod-volume so they survive POD restarts.
 
-# Enable error handling and logging
-set -e
-exec 2>&1  # Redirect stderr to stdout so we capture all output
-
-# Container setup script for nanoGPT training
-# This script handles the complete setup and training process
-
-echo "=== CONTAINER SETUP STARTING ==="
-echo "Script version: $(date)"
-echo "Current directory: $(pwd)"
-echo "User: $(whoami)"
-echo "Environment:"
-env | sort
-echo "=== END ENVIRONMENT ==="
+set -euo pipefail
+exec 2>&1                     # merge stderr into stdout
 
 start_time=$(date +%s)
-echo "[0s] Starting container setup"
 
-# Function to log errors and continue
-log_error() {
-    echo "ERROR: $1" >&2
-    echo "[$(($(date +%s) - start_time))s] ERROR: $1"
-}
+log()   { printf '[%6ss] %s\n'  "$(( $(date +%s) - start_time ))" "$*"; }
+err()   { log "ERROR: $*" >&2; }
+trap 'err "failed at line $LINENO"' ERR
 
-# Function to log info
-log_info() {
-    echo "[$(($(date +%s) - start_time))s] $1"
-}
+#---------------------------------------------------------------------------#
+# workspace & repo
+#---------------------------------------------------------------------------#
+cd /runpod-volume
+log "cwd $(pwd)"
 
-# Trap to catch errors and log them
-trap 'log_error "Script failed at line $LINENO"' ERR
+REPO_URL="https://github.com/marict/nanoGPT-llm-extraction.git"
 
-echo "=== WORKSPACE SETUP ==="
-cd /workspace
-log_info "Changed to /workspace directory"
-log_info "Current directory: $(pwd)"
-log_info "Directory contents:"
-ls -la
-
-echo "=== REPOSITORY SETUP ==="
-log_info "Cloning repository"
-
-# Clone or update the repository with error handling
-if [ -d repo ]; then
-    log_info "Repository exists, pulling latest changes"
-    cd repo
-    git status || log_error "git status failed"
-    git pull || log_error "git pull failed"
+if [[ -d repo/.git ]]; then
+    log "repo exists – git pull"
+    git -C repo pull
 else
-    log_info "Repository does not exist, cloning"
-    git clone https://github.com/marict/nanoGPT-llm-extraction.git repo || log_error "git clone failed"
-    cd repo
+    log "cloning repo"
+    git clone "$REPO_URL" repo
 fi
 
-log_info "Repository setup completed"
-log_info "Current directory: $(pwd)"
-log_info "Repository contents:"
-ls -la
+#---------------------------------------------------------------------------#
+# system pkgs (guard against readonly images)
+#---------------------------------------------------------------------------#
+apt-get update || true
+apt-get install -y --no-install-recommends tree
 
-echo "=== SYSTEM PACKAGES ==="
-log_info "Installing system packages"
-apt-get update || log_error "apt-get update failed"
-apt-get install -y tree || log_error "apt-get install tree failed"
+#---------------------------------------------------------------------------#
+# python deps
+#---------------------------------------------------------------------------#
+cd repo
+log "installing python deps"
+pip install -q -r requirements-dev.txt
 
-log_info "System packages installed"
+#---------------------------------------------------------------------------#
+# training
+#---------------------------------------------------------------------------#
+log_file="/runpod-volume/train_$(date +%Y%m%d_%H%M%S).log"
+log "starting training – output -> $log_file"
+python train.py "$@" 2>&1 | tee "$log_file"
 
-echo "=== DIRECTORY STRUCTURE ==="
-echo "=== Directory Structure ==="
-tree || log_error "tree command failed"
-echo "=== Current Directory ==="
-pwd
-
-echo "=== PYTHON DEPENDENCIES ==="
-log_info "Installing Python dependencies"
-
-# Check if requirements file exists
-if [ ! -f "requirements-dev.txt" ]; then
-    log_error "requirements-dev.txt not found"
-    echo "Available files:"
-    ls -la *.txt || true
-    exit 1
-fi
-
-log_info "Requirements file found, installing dependencies"
-pip install -q -r requirements-dev.txt || log_error "pip install failed"
-
-log_info "Python dependencies installed"
-
-echo "=== TRAINING SETUP ==="
-log_info "Starting training"
-
-# Log the command we're about to run
-echo "Training command: python train.py $@"
-echo "Arguments received: $@"
-
-# Execute the training command passed as arguments
-python train.py "$@" 2>&1 | tee /workspace/train_$(date +%Y%m%d_%H%M%S).log || {
-    log_error "Training failed with exit code $?"
-    echo "Last 50 lines of log:"
-    tail -50 /workspace/train_$(date +%Y%m%d_%H%M%S).log || true
-    exit 1
-}
-
-log_info "Training completed"
-
-echo "=== CONTAINER SETUP COMPLETED ==="
-echo "Total time: $(($(date +%s) - start_time))s"
-
-# Keep container running
-echo "Keeping container alive..."
-tail -f /dev/null 
+log "done in $(( $(date +%s)-start_time ))s – keeping container alive"
+tail -f /dev/null
