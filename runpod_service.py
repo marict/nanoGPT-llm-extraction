@@ -110,28 +110,26 @@ def start_cloud_training(
 
     # Create an inline script that clones the repo first, then runs the setup script
     inline_script = (
-        f"#!/bin/bash\n"
-        f"set -euo pipefail\n"
-        f"exec 2>&1\n"
-        f"\n"
-        f"start_time=$(date +%s)\n"
-        f'log() {{ printf \'[%6ss] %s\\n\'  "$(( $(date +%s) - start_time ))" "$*"; }}\n'
-        f"\n"
-        f"cd /runpod-volume\n"
-        f'log "cwd $(pwd)"\n'
-        f"\n"
-        f'REPO_URL="{REPO_URL}"\n'
-        f"\n"
-        f"if [[ -d repo/.git ]]; then\n"
-        f'    log "repo exists – git pull"\n'
-        f"    git -C repo pull\n"
-        f"else\n"
-        f'    log "cloning repo"\n'
-        f'    git clone "$REPO_URL" repo\n'
-        f"fi\n"
-        f"\n"
-        f"# Now run the setup script\n"
-        f'log "running setup script"\n'
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        "exec 2>&1\n"
+        "\n"
+        "start_time=$(date +%s)\n"
+        "log() { printf '[%6ss] %s\\n'  \"$(( $(date +%s) - start_time ))\" \"$*\"; }\n"
+        "\n"
+        "cd /runpod-volume\n"
+        "log \"cwd $(pwd)\"\n"
+        "\n"
+        f"REPO_URL=\"{REPO_URL}\"\n"
+        "if [[ -d repo/.git ]]; then\n"
+        "    log \"repo exists – git pull\"\n"
+        "    git -C repo pull\n"
+        "else\n"
+        "    log \"cloning repo\"\n"
+        "    git clone \"$REPO_URL\" repo\n"
+        "fi\n"
+        "\n"
+        "log \"running setup script\"\n"
         f"bash /runpod-volume/repo/scripts/container_setup.sh {train_args}\n"
     )
 
