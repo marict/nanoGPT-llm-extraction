@@ -1,0 +1,42 @@
+wandb_project = "dag-gpt"
+wandb_run_name = "daggpt-h100-proofpile-1hr"
+
+batch_size = 32
+block_size = 1024
+gradient_accumulation_steps = 4
+
+max_iters = 50000
+lr_decay_iters = 50000
+
+eval_interval = 500
+eval_iters = 20
+log_interval = 50
+
+weight_decay = 1e-1
+
+dag_depth = 8
+
+n_layer = 12
+n_head = 16
+n_embd = 1024
+dropout = 0.1
+bias = True
+
+learning_rate = 6e-4
+beta1 = 0.9
+beta2 = 0.95
+grad_clip = 1.0
+
+decay_lr = True
+warmup_iters = 2000
+min_lr = 6e-5
+
+dataset = "shakespeare"
+
+backend = "nccl"
+dtype = "bfloat16"
+compile = True
+
+out_dir = "out"
+always_save_checkpoint = True
+init_from = "scratch"
