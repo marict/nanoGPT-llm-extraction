@@ -108,7 +108,7 @@ def start_cloud_training(
     # Docker args preparation
     docker_start = time.time()
     # path inside the image after git-clone
-    setup_script="/runpod-volume/repo/scripts/container_setup.sh"
+    setup_script = "/runpod-volume/repo/scripts/container_setup.sh"
 
     docker_args = f"bash {setup_script} {train_args}"
     print(
