@@ -43,7 +43,7 @@ warmup_iters = 2000
 min_lr = 6e-5
 
 # Dataset
-dataset = "openwebtext"
+dataset = "shakespeare"
 
 # Training infrastructure
 backend = "nccl"  # Use NCCL for multi-GPU training
