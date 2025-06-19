@@ -444,7 +444,6 @@ def train(cfg: TrainConfig) -> None:
                     print(
                         f"step {iter_num}: train {losses['train']:.4f}, val {losses['val']:.4f}"
                     )
-
                     # Log everything to wandb if available
                     if run is not None:
                         try:
