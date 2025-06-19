@@ -14,17 +14,13 @@ trap 'err "failed at line $LINENO"' ERR
 #---------------------------------------------------------------------------#
 # workspace & repo
 #---------------------------------------------------------------------------#
-cd /runpod-volume
+cd /runpod-volume/repo
 log "cwd $(pwd)"
 
-REPO_URL="https://github.com/marict/nanoGPT-llm-extraction.git"
-
-if [[ -d repo/.git ]]; then
-    log "repo exists – git pull"
-    git -C repo pull
-else
-    log "cloning repo"
-    git clone "$REPO_URL" repo
+# Repository should already be cloned by the calling script
+if [[ ! -d .git ]]; then
+    err "Repository not found. Expected to be in /runpod-volume/repo"
+    exit 1
 fi
 
 #---------------------------------------------------------------------------#
@@ -36,7 +32,6 @@ apt-get install -y --no-install-recommends tree
 #---------------------------------------------------------------------------#
 # python deps
 #---------------------------------------------------------------------------#
-cd repo
 log "installing python deps"
 pip install -q -r requirements-dev.txt
 

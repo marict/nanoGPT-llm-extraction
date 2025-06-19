@@ -107,10 +107,34 @@ def start_cloud_training(
     gpu_type_id = _resolve_gpu_id(gpu_type)
     # Docker args preparation
     docker_start = time.time()
-    # path inside the image after git-clone
-    setup_script = "/runpod-volume/repo/scripts/container_setup.sh"
 
-    docker_args = f"bash {setup_script} {train_args}"
+    # Create an inline script that clones the repo first, then runs the setup script
+    inline_script = f"""#!/bin/bash
+set -euo pipefail
+exec 2>&1
+
+start_time=$(date +%s)
+log() {{ printf '[%6ss] %s\\n'  "$(( $(date +%s) - start_time ))" "$*"; }}
+
+cd /runpod-volume
+log "cwd $(pwd)"
+
+REPO_URL="{REPO_URL}"
+
+if [[ -d repo/.git ]]; then
+    log "repo exists – git pull"
+    git -C repo pull
+else
+    log "cloning repo"
+    git clone "$REPO_URL" repo
+fi
+
+# Now run the setup script
+log "running setup script"
+bash /runpod-volume/repo/scripts/container_setup.sh {train_args}
+"""
+
+    docker_args = f"bash -c '{inline_script}'"
     print(
         f"[{time.time() - docker_start:.2f}s] Docker args preparation completed in {time.time() - docker_start:.2f}s"
     )
