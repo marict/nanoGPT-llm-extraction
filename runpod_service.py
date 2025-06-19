@@ -110,29 +110,10 @@ def start_cloud_training(
 
     # Create an inline script that clones the repo first, then runs the setup script
     inline_script = (
-        "#!/bin/bash\n"
-        "set -euo pipefail\n"
-        "exec 2>&1\n"
-        "\n"
-        "start_time=$(date +%s)\n"
-        'log() { printf \'[%6ss] %s\\n\'  "$(( $(date +%s) - start_time ))" "$*"; }\n'
-        "\n"
-        "cd /runpod-volume\n"
-        'log "cwd $(pwd)"\n'
-        "\n"
-        f'REPO_URL="{REPO_URL}"\n'
-        "if [[ -d repo/.git ]]; then\n"
-        '    log "repo exists – git pull"\n'
-        "    git -C repo pull\n"
-        "else\n"
-        '    log "cloning repo"\n'
-        '    git clone "$REPO_URL" repo\n'
-        "fi\n"
-        "\n"
-        'log "running setup script"\n'
-        f"bash /runpod-volume/repo/scripts/container_setup.sh {train_args}\n"
+        f"cd /runpod-volume && "
+        f"( [ -d repo/.git ] && git -C repo pull || git clone {REPO_URL} repo ) && "
+        f"bash /runpod-volume/repo/scripts/container_setup.sh {train_args}"
     )
-
     docker_args = f"bash -c '{inline_script}'"
     print(
         f"[{time.time() - docker_start:.2f}s] Docker args preparation completed in {time.time() - docker_start:.2f}s"
