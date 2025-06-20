@@ -53,7 +53,7 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> Tuple[int
         split_dataset = {"train": dataset["train"], "val": dataset["validation"]}
 
     # Optional: keep only a subset of each split.
-    subset = max(min(args.subset, 1.0), 0.0)
+    subset = max(min(subset, 1.0), 0.0)
     if subset < 1.0:
         for key in ("train", "val"):
             dset = split_dataset[key].shuffle(seed=42)

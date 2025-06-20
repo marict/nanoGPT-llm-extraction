@@ -13,7 +13,9 @@ DATASETS: Dict[str, Callable[[Path], Tuple[int, int]]] = {
 }
 
 
-def prepare_dataset(dataset: str, data_dir: Optional[Path] = None) -> Tuple[int, int]:
+def prepare_dataset(
+    dataset: str, data_dir: Optional[Path] = None, subset: float = 1.0
+) -> Tuple[int, int]:
     """Prepare a dataset for training.
 
     Args:
@@ -34,4 +36,4 @@ def prepare_dataset(dataset: str, data_dir: Optional[Path] = None) -> Tuple[int,
     if data_dir is None:
         data_dir = Path("data") / dataset
 
-    return DATASETS[dataset](data_dir)
+    return DATASETS[dataset](data_dir, subset)

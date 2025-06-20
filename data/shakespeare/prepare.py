@@ -7,13 +7,14 @@ import requests
 from tiktoken import get_encoding
 
 
-def prepare(data_dir: Path) -> tuple[int, int]:
+def prepare(data_dir: Path, subset: float = 1.0) -> tuple[int, int]:
     """Prepare the tiny Shakespeare dataset for training.
 
     Downloads the dataset if needed, splits into train/val, and exports to binary files.
 
     Args:
         data_dir: Directory to save the prepared dataset
+        subset: Fraction of each split to keep (0 < subset ≤ 1)
 
     Returns:
         Tuple of (train_tokens, val_tokens)
@@ -30,6 +31,16 @@ def prepare(data_dir: Path) -> tuple[int, int]:
     n = len(data)
     train_data = data[: int(n * 0.9)]
     val_data = data[int(n * 0.9) :]
+
+    # Optional: keep only a subset of each split.
+    subset = max(min(subset, 1.0), 0.0)
+    if subset < 1.0:
+        train_len = len(train_data)
+        val_len = len(val_data)
+        train_keep = int(train_len * subset)
+        val_keep = int(val_len * subset)
+        train_data = train_data[:train_keep]
+        val_data = val_data[:val_keep]
 
     # encode with tiktoken gpt2 bpe
     enc = get_encoding("gpt2")
@@ -56,7 +67,21 @@ def prepare(data_dir: Path) -> tuple[int, int]:
 
 
 if __name__ == "__main__":
-    train_tokens, val_tokens = prepare(Path(__file__).parent)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Prepare the Shakespeare dataset.")
+    parser.add_argument(
+        "--data-dir", type=Path, default=Path(__file__).parent, help="Output directory."
+    )
+    parser.add_argument(
+        "--subset",
+        type=float,
+        default=1.0,
+        help="Fraction of each split to keep (0 < subset ≤ 1).",
+    )
+
+    args = parser.parse_args()
+    train_tokens, val_tokens = prepare(args.data_dir, args.subset)
     print(f"✅ Preparation complete for shakespeare")
     print(f"Train tokens: {train_tokens:,}")
     print(f"Val tokens:   {val_tokens:,}")

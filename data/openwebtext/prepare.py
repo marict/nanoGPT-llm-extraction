@@ -10,7 +10,7 @@ from datasets import load_dataset
 from tiktoken import get_encoding
 
 
-def prepare(data_dir: Path, num_proc: int = 8) -> tuple[int, int]:
+def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> tuple[int, int]:
     """Prepare the OpenWebText dataset for training.
 
     Downloads the dataset, splits into train/val, and exports to binary files.
@@ -18,6 +18,7 @@ def prepare(data_dir: Path, num_proc: int = 8) -> tuple[int, int]:
     Args:
         data_dir: Directory to save the prepared dataset
         num_proc: Number of processes to use for tokenization
+        subset: Fraction of each split to keep (0 < subset ≤ 1)
 
     Returns:
         Tuple of (train_tokens, val_tokens)
@@ -41,6 +42,14 @@ def prepare(data_dir: Path, num_proc: int = 8) -> tuple[int, int]:
         test_size=0.0005, seed=2357, shuffle=True
     )
     split_dataset["val"] = split_dataset.pop("test")  # rename the test split to val
+
+    # Optional: keep only a subset of each split.
+    subset = max(min(subset, 1.0), 0.0)
+    if subset < 1.0:
+        for key in ("train", "val"):
+            dset = split_dataset[key].shuffle(seed=42)
+            keep = int(len(dset) * subset)
+            split_dataset[key] = dset.select(range(keep))
 
     # this results in:
     # >>> split_dataset
@@ -68,12 +77,15 @@ def prepare(data_dir: Path, num_proc: int = 8) -> tuple[int, int]:
         return out
 
     # tokenize the dataset
-    tokenized = split_dataset.map(
-        process,
-        remove_columns=["text"],
-        desc="tokenizing the splits",
-        num_proc=num_proc,
-    )
+    tokenized = {
+        split: dset.map(
+            process,
+            remove_columns=["text"],
+            desc=f"tokenizing {split} split",
+            num_proc=num_proc,
+        )
+        for split, dset in split_dataset.items()
+    }
 
     # concatenate all the ids in each dataset into one large file we can use for training
     for split, dset in tokenized.items():
@@ -103,11 +115,28 @@ def prepare(data_dir: Path, num_proc: int = 8) -> tuple[int, int]:
     with open(data_dir / "meta.pkl", "wb") as f:
         pickle.dump(meta, f)
 
-    return len(tokenized["train"]), len(tokenized["val"])
+    return int(np.sum(tokenized["train"]["len"])), int(np.sum(tokenized["val"]["len"]))
 
 
 if __name__ == "__main__":
-    train_tokens, val_tokens = prepare(Path(__file__).parent)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Prepare the OpenWebText dataset.")
+    parser.add_argument(
+        "--data-dir", type=Path, default=Path(__file__).parent, help="Output directory."
+    )
+    parser.add_argument(
+        "--num-proc", type=int, default=8, help="Parallel worker processes."
+    )
+    parser.add_argument(
+        "--subset",
+        type=float,
+        default=1.0,
+        help="Fraction of each split to keep (0 < subset ≤ 1).",
+    )
+
+    args = parser.parse_args()
+    train_tokens, val_tokens = prepare(args.data_dir, args.num_proc, args.subset)
     print(f"✅ Preparation complete for openwebtext")
     print(f"Train tokens: {train_tokens:,}")
     print(f"Val tokens:   {val_tokens:,}")
