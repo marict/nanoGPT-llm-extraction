@@ -442,21 +442,22 @@ def train(cfg: TrainConfig) -> None:
         f"[{time.time() - setup_start:.2f}s] W&B initialization completed in {time.time() - wandb_start:.2f}s"
     )
 
-    print(f"[{time.time() - setup_start:.2f}s] Entering training loop")
-
     # --------------------------------------------------------------------- #
     # Training loop
     # --------------------------------------------------------------------- #
     train_start = time.time()
     try:
         X, Y = get_batch("train")
+        print(f"[{time.time() - setup_start:.2f}s] Got batch")
+
         t0 = time.time()
         iter_num = locals().get("iter_num", 0)
         best_val_loss = locals().get("best_val_loss", 1e9)
         running_mfu = -1.0
         raw_model = model.module if ddp else model
-
         extra_vals = {}
+
+        print(f"[{time.time() - setup_start:.2f}s] Entering training loop")
         while True:
             lr = get_lr(iter_num, cfg=cfg) if cfg.decay_lr else cfg.learning_rate
             for pg in optimizer.param_groups:
@@ -569,10 +570,6 @@ def train(cfg: TrainConfig) -> None:
                 run.finish()
             except Exception as e:
                 print(f"Warning: Failed to finish wandb run: {e}")
-
-        # # Stop RunPod instance if we're running on RunPod
-        # if os.getenv("RUNPOD_POD_ID"):
-        #     runpod_service.stop_runpod()
 
 
 # --------------------------------------------------------------------------- #
