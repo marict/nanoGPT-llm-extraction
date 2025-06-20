@@ -83,7 +83,11 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> Tuple[int
         mmap = np.memmap(
             data_dir / f"{split}.bin", dtype=np.uint16, mode="w+", shape=(arr_len,)
         )
-        total_batches = 1024
+        # Use adaptive batching based on dataset size
+        dataset_size = len(dset)
+        total_batches = min(
+            1024, max(1, dataset_size // 100)
+        )  # At least 1 batch, at most 1024
         idx = 0
         for batch_idx in range(total_batches):
             batch = dset.shard(

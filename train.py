@@ -264,7 +264,7 @@ def train(cfg: TrainConfig) -> None:
     if not (data_dir / "train.bin").exists():
         if master_process:
             print(
-                f"[{time.time() - setup_start:.2f}s] Preparing dataset {cfg.dataset}..."
+                f"[{time.time() - setup_start:.2f}s] Preparing dataset {cfg.dataset}... with subset {cfg.subset}"
             )
             from data import prepare_dataset  # local import
 

@@ -57,6 +57,7 @@ def test_train_script_runs(tmp_path: Path, batch_size: int):
         "--n_head=1",
         "--n_embd=32",
         "--block_size=32",
+        "--subset=0.1",
     ]
     # Provide a minimal stub for the wandb library so training can run without
     # network access.
