@@ -30,7 +30,7 @@ decay_lr = True
 warmup_iters = 10000
 min_lr = 3e-5
 
-dataset = "shakespeare"
+dataset = "proofpile"
 
 backend = "nccl"
 dtype = "bfloat16"
