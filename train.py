@@ -182,6 +182,7 @@ def estimate_loss(
     """Return mean loss over <eval_iters> batches for train/val splits."""
     out: Dict[str, torch.Tensor] = {}
     model.eval()
+    print("Estimating loss...")
     for split in ("train", "val"):
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):

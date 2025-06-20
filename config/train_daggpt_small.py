@@ -35,7 +35,7 @@ subset = 0.001
 
 backend = "nccl"
 dtype = "bfloat16"
-compile = True
+compile = False
 
 always_save_checkpoint = True
 init_from = "scratch"
