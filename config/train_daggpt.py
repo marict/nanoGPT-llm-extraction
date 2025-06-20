@@ -1,19 +1,19 @@
 wandb_project = "dag-gpt"
 
-batch_size = 64
-block_size = 4096
-gradient_accumulation_steps = 8
+batch_size = 16
+block_size = 1024
+gradient_accumulation_steps = 4
 
 max_iters = 1500000
 lr_decay_iters = 1500000
 
-eval_interval = 100
-eval_iters = 50
-log_interval = 10
+eval_interval = 1000
+eval_iters = 20
+log_interval = 50
 
 weight_decay = 1e-1
 
-dag_depth = 16
+dag_depth = 8
 
 n_layer = 24
 n_head = 32
