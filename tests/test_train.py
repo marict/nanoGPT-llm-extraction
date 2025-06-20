@@ -46,7 +46,6 @@ def test_train_script_runs(tmp_path: Path, batch_size: int):
         sys.executable,
         str(train_script),
         str(config_file),
-        f"--out_dir={tmp_path / 'out'}",
         "--compile=False",
         "--eval_interval=1",
         "--eval_iters=1",

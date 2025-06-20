@@ -39,6 +39,12 @@ CUDA_AVAILABLE = torch.cuda.is_available()
 # --------------------------------------------------------------------------- #
 # Configuration utilities
 # --------------------------------------------------------------------------- #
+# Use RunPod volume if available, otherwise use local directory
+CHECKPOINT_DIR = (
+    "/runpod-volume/checkpoints" if os.path.exists("/runpod-volume") else "checkpoints"
+)
+
+
 def generate_run_name(cfg) -> str:
     """Generate a nicely formatted run name based on datetime and hyperparameters."""
     # Format datetime as YYYY-MM-DD_HH-MM-SS
@@ -63,7 +69,6 @@ def generate_run_name(cfg) -> str:
 class TrainConfig:
     """Container for all training-related hyperparameters."""
 
-    out_dir: str = "out"
     eval_interval: int = 250
     log_interval: int = 1
     eval_iters: int = 200
@@ -335,7 +340,7 @@ def train(cfg: TrainConfig) -> None:
         gptconf = ModelConfig(**model_args)
         model = ModelClass(gptconf)
     elif cfg.init_from == "resume":
-        ckpt_path = Path(cfg.out_dir) / "ckpt.pt"
+        ckpt_path = Path(CHECKPOINT_DIR) / f"ckpt_{cfg.iter_num}.pt"
         checkpoint = torch.load(ckpt_path, map_location=device)
         for k in ("n_layer", "n_head", "n_embd", "block_size", "bias", "vocab_size"):
             model_args[k] = checkpoint["model_args"][k]
@@ -491,8 +496,10 @@ def train(cfg: TrainConfig) -> None:
                                 "config": cfg.__dict__,
                             }
                             if master_process:
-                                print(f"Saving checkpoint to {cfg.out_dir}")
-                            torch.save(ckpt, Path(cfg.out_dir) / f"ckpt_{iter_num}.pt")
+                                print(f"Saving checkpoint to {CHECKPOINT_DIR}")
+                            torch.save(
+                                ckpt, Path(CHECKPOINT_DIR) / f"ckpt_{iter_num}.pt"
+                            )
                 except Exception as e:
                     print(f"Warning: Error during evaluation: {e}")
 
@@ -594,8 +601,6 @@ def main() -> None:
     apply_overrides(cfg, overrides)
     if args.dag_depth is not None:
         cfg.dag_depth = args.dag_depth
-    # Append persistent workspace path to out_dir
-    cfg.out_dir = str(Path("/runpod-volume") / cfg.out_dir)
     print(
         f"[{time.time() - main_start:.2f}s] Configuration setup completed in {time.time() - config_start:.2f}s"
     )
@@ -616,7 +621,7 @@ def main() -> None:
         )
         return
 
-    Path(cfg.out_dir).mkdir(parents=True, exist_ok=True)
+    Path(CHECKPOINT_DIR).mkdir(parents=True, exist_ok=True)
     train(cfg)
 
 

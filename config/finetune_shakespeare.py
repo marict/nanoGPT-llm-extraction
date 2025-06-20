@@ -1,6 +1,5 @@
 import time
 
-out_dir = "out-shakespeare"
 eval_interval = 5
 eval_iters = 40
 wandb_project = "shakespeare"

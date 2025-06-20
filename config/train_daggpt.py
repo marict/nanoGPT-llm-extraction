@@ -36,6 +36,5 @@ backend = "nccl"
 dtype = "bfloat16"
 compile = True
 
-out_dir = "out"
 always_save_checkpoint = True
 init_from = "scratch"

@@ -2,6 +2,8 @@
 Sample from a trained model
 """
 
+import glob
+import os
 import pickle
 from contextlib import nullcontext
 from pathlib import Path
@@ -16,9 +18,8 @@ check_python_version()
 
 # -----------------------------------------------------------------------------
 init_from = (
-    "resume"  # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
+    "resume"  # either 'resume' (from a checkpoint) or a gpt2 variant (e.g. 'gpt2-xl')
 )
-out_dir = "out"  # ignored if init_from is not 'resume'
 start = "\n"  # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
 num_samples = 10  # number of samples to draw
 max_new_tokens = 500  # number of tokens generated in each sample
@@ -29,7 +30,12 @@ top_k = (
     200  # retain only the top_k most likely tokens, clamp others to have 0 probability
 )
 seed = 1337
-device = "cuda"  # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
+if torch.cuda.is_available():
+    device = "cuda"
+elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    device = "mps"
+else:
+    device = "cpu"
 dtype = (
     "bfloat16"
     if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
@@ -57,11 +63,40 @@ ctx = (
 
 # model
 if init_from == "resume":
-    # init from a model saved in a specific directory
-    ckpt_path = Path(out_dir) / "ckpt.pt"
-    checkpoint = torch.load(ckpt_path, map_location=device)
-    gptconf = GPTConfig(**checkpoint["model_args"])
-    model = GPT(gptconf)
+    # init from a model saved in the checkpoint directory
+    checkpoint_dir = (
+        "/runpod-volume/checkpoints"
+        if os.path.exists("/runpod-volume")
+        else "checkpoints"
+    )
+
+    # Find the latest checkpoint file
+    checkpoint_files = glob.glob(str(Path(checkpoint_dir) / "ckpt_*.pt"))
+    if not checkpoint_files:
+        raise FileNotFoundError(f"No checkpoint files found in {checkpoint_dir}")
+
+    # Sort by iteration number and get the latest
+    def get_iter_num(filename):
+        return int(Path(filename).stem.split("_")[1])
+
+    latest_checkpoint = max(checkpoint_files, key=get_iter_num)
+    print(f"Loading checkpoint from: {latest_checkpoint}")
+
+    checkpoint = torch.load(latest_checkpoint, map_location=device)
+
+    # Determine model type based on checkpoint contents
+    model_args = checkpoint["model_args"]
+    if "dag_depth" in model_args:
+        # This is a DAGGPT model
+        from dag_model import DAGGPT, DAGGPTConfig
+
+        gptconf = DAGGPTConfig(**model_args)
+        model = DAGGPT(gptconf)
+    else:
+        # This is a regular GPT model
+        gptconf = GPTConfig(**model_args)
+        model = GPT(gptconf)
+
     state_dict = checkpoint["model"]
     unwanted_prefix = "_orig_mod."
     for k, v in list(state_dict.items()):
