@@ -11,10 +11,11 @@ init_from = "scratch"
 wandb_project = "dag-gpt"
 
 # tiny dataset and network for quick local testing
-dataset = "shakespeare"
+dataset = "proofpile"
 gradient_accumulation_steps = 1
 batch_size = 16
 block_size = 32
+subset = 0.000001
 
 n_layer = 1
 n_head = 1

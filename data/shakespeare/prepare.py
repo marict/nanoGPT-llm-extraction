@@ -41,6 +41,12 @@ def prepare(data_dir: Path, subset: float = 1.0) -> tuple[int, int]:
         val_keep = int(val_len * subset)
         train_data = train_data[:train_keep]
         val_data = val_data[:val_keep]
+        print(f"  train: {train_len:,} → {train_keep:,} characters")
+        print(f"  val: {val_len:,} → {val_keep:,} characters")
+    else:
+        print(f"Using full dataset")
+        print(f"  train: {len(train_data):,} characters")
+        print(f"  val: {len(val_data):,} characters")
 
     # encode with tiktoken gpt2 bpe
     enc = get_encoding("gpt2")

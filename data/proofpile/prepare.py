@@ -56,9 +56,16 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> Tuple[int
     subset = max(min(subset, 1.0), 0.0)
     if subset < 1.0:
         for key in ("train", "val"):
+            original_size = len(split_dataset[key])
             dset = split_dataset[key].shuffle(seed=42)
             keep = int(len(dset) * subset)
             split_dataset[key] = dset.select(range(keep))
+            print(f"  {key}: {original_size:,} → {keep:,} examples")
+    else:
+        print(f"Using full dataset")
+        for key in ("train", "val"):
+            size = len(split_dataset[key])
+            print(f"  {key}: {size:,} examples")
 
     enc = get_encoding("gpt2")
 
