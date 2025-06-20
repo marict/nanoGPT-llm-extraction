@@ -1,16 +1,22 @@
+from dataclasses import dataclass
 from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# -----------------------------------------------------------------------------
-# Differentiable DAG components
-# -----------------------------------------------------------------------------
+from model import GPT, Block, GPTConfig
 
 
+# ---------------------------------------------------------------------------
+# ops
+# ---------------------------------------------------------------------------
 def add(x, y):
     return x + y
+
+
+def identity(x, _):
+    return x
 
 
 def multiply(x, y):
@@ -25,266 +31,298 @@ def divide(x, y, eps: float = 1e-8):
     return x / (y + eps)
 
 
-def identity(x, _unused=None):
-    return x
-
-
 def power(x, y, max_exp: float = 6.0):
-    """Element-wise power with clamped exponent to avoid overflow."""
-    y_clamped = torch.clamp(y, -max_exp, max_exp)
-    return torch.pow(torch.abs(x) + 1e-6, y_clamped)
+    y = torch.clamp(y, -max_exp, max_exp)
+    return torch.pow(torch.abs(x) + 1e-6, y)
 
 
 def log(x, _unused=None, eps: float = 1e-8):
-    """Element-wise natural log with epsilon for stability."""
     return torch.log(torch.abs(x) + eps)
 
 
 def max_op(x, y):
-    """Element-wise maximum."""
     return torch.max(x, y)
 
 
 def min_op(x, y):
-    """Element-wise minimum."""
     return torch.min(x, y)
 
 
-op_funcs = [
-    add,
-    identity,
-    multiply,
-    subtract,
-    divide,
-    power,
-    log,
-    max_op,
-    min_op,
-]
+op_funcs = [add, identity, multiply, subtract, divide, power, log, max_op, min_op]
 
 
+# ---------------------------------------------------------------------------
+# controller: unchanged except it only sees EMBEDDINGS
+# ---------------------------------------------------------------------------
 class DAGController(nn.Module):
-    """Selects inputs from previous nodes and operation via attention."""
-
-    def __init__(self, hidden_dim):
+    def __init__(self, hidden_dim: int, n_ops: int):
         super().__init__()
         self.query_proj1 = nn.Linear(hidden_dim, hidden_dim)
         self.query_proj2 = nn.Linear(hidden_dim, hidden_dim)
         self.op_query_proj = nn.Linear(hidden_dim, hidden_dim)
         self.key_proj = nn.Linear(hidden_dim, hidden_dim)
-        self.op_selector = nn.Linear(hidden_dim, len(op_funcs))
+        self.op_selector = nn.Linear(hidden_dim, n_ops)
+
         self.last_attn: torch.Tensor | None = None
         self.last_op_weights: torch.Tensor | None = None
 
     def forward(
-        self,
-        nodes: torch.Tensor,
-        operand_ctx: torch.Tensor,
-        op_ctx: torch.Tensor,
+        self, embeds: torch.Tensor, operand_ctx: torch.Tensor, op_ctx: torch.Tensor
     ):
-        """Select two inputs and operation weights for the next DAG node.
+        """embeds : (B , N , H)  – values are *not* needed here."""
+        summary = embeds.mean(dim=1)  # (B , H)
 
-        Args:
-            nodes: Tensor of shape ``(batch, num_nodes, hidden_dim)``.
-            operand_ctx: Context embedding for operand selection.
-            op_ctx: Context embedding for operation selection.
-        """
-        summary = torch.mean(nodes, dim=1)
-        query1 = self.query_proj1(summary) + operand_ctx
-        query2 = self.query_proj2(summary) + operand_ctx
-        keys = self.key_proj(nodes)
-        att1 = torch.einsum("bij,bj->bi", keys, query1) / (nodes.size(-1) ** 0.5)
-        attn1 = F.softmax(att1, dim=1)
-        input1 = torch.sum(attn1.unsqueeze(-1) * nodes, dim=1)
-        att2 = torch.einsum("bij,bj->bi", keys, query2) / (nodes.size(-1) ** 0.5)
-        attn2 = F.softmax(att2, dim=1)
-        input2 = torch.sum(attn2.unsqueeze(-1) * nodes, dim=1)
+        q1 = self.query_proj1(summary) + operand_ctx  # (B , H)
+        q2 = self.query_proj2(summary) + operand_ctx  # (B , H)
+        keys = self.key_proj(embeds)  # (B , N , H)
 
-        op_query = self.op_query_proj(summary) + op_ctx
-        att_op = torch.einsum("bij,bj->bi", keys, op_query) / (nodes.size(-1) ** 0.5)
-        attn_op = F.softmax(att_op, dim=1)
-        op_context = torch.sum(attn_op.unsqueeze(-1) * nodes, dim=1)
-        op_logits = self.op_selector(op_context)
-        op_weights = F.softmax(op_logits, dim=-1)
+        att1 = torch.einsum("bnh,bh->bn", keys, q1) / (embeds.size(-1) ** 0.5)
+        att2 = torch.einsum("bnh,bh->bn", keys, q2) / (embeds.size(-1) ** 0.5)
+
+        attn1 = F.softmax(att1, dim=1)  # (B , N)
+        attn2 = F.softmax(att2, dim=1)  # (B , N)
+
+        # op selection
+        op_q = self.op_query_proj(summary) + op_ctx
+        att_op = torch.einsum("bnh,bh->bn", keys, op_q) / (embeds.size(-1) ** 0.5)
+        attn_op = F.softmax(att_op, dim=1)  # (B , N)
+        op_ctx_vec = torch.sum(attn_op.unsqueeze(-1) * embeds, dim=1)
+        op_weights = F.softmax(self.op_selector(op_ctx_vec), dim=-1)  # (B , n_ops)
 
         self.last_attn = attn1.detach()
         self.last_op_weights = op_weights.detach()
-        return input1, input2, op_weights
+        return attn1, attn2, op_weights  # return just the *distributions*
 
 
+# ---------------------------------------------------------------------------
+# Differentiable DAG with separate VALUE & EMBED streams
+# ---------------------------------------------------------------------------
 class DifferentiableDAG(nn.Module):
-    """Engine that grows a differentiable DAG of intermediate nodes."""
-
-    def __init__(self, hidden_dim, num_steps):
+    def __init__(self, hidden_dim: int, num_steps: int, scalar_to_embed: nn.Module):
         super().__init__()
         self.num_steps = num_steps
-        self.controller = DAGController(hidden_dim)
+        self.controller = DAGController(hidden_dim, len(op_funcs))
         self.step_emb = nn.Embedding(num_steps, hidden_dim)
+        self.scalar_to_embed = scalar_to_embed
+
+        self.embed_mlp = nn.Sequential(
+            nn.Linear(4 * hidden_dim + len(op_funcs), hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
 
     def forward(
         self,
-        initial_nodes,
-        operand_ctx: torch.Tensor,
-        op_ctx: torch.Tensor,
+        embeds_list: list[torch.Tensor],  # each (B , H)
+        values_list: list[torch.Tensor],  # each (B)  scalar
+        operand_ctx: torch.Tensor,  # (B , H)
+        op_ctx: torch.Tensor,  # (B , H)
         return_info: bool = False,
     ):
-        """Build the DAG and return all nodes.
+        attn_hist, op_hist = [], []
+        B, _ = embeds_list[0].shape
+        device = embeds_list[0].device
 
-        Args:
-            initial_nodes: Sequence of ``(batch, hidden_dim)`` tensors.
-            return_info: If True, also return attention and op weight history.
-        """
-        nodes = list(initial_nodes)
-        attn_history = []
-        op_history = []
-        step_embs = self.step_emb.weight[: self.num_steps]
         for step in range(self.num_steps):
-            node_tensor = torch.stack(nodes, dim=1)
-            emb = step_embs[step].unsqueeze(0).expand(node_tensor.size(0), -1)
-            input1, input2, op_weights = self.controller(
-                node_tensor,
-                operand_ctx + emb,
-                op_ctx + emb,
+            # stack existing nodes
+            embeds = torch.stack(embeds_list, dim=1)  # (B , N , H)
+            values = torch.stack(values_list, dim=1)  # (B , N)
+
+            emb_step = self.step_emb.weight[step].unsqueeze(0).expand(B, -1)  # (B , H)
+
+            # controller gives us weights over nodes
+            att1, att2, op_weights = self.controller(
+                embeds,
+                operand_ctx + emb_step,
+                op_ctx + emb_step,
             )
+
+            # select embeddings
+            e1 = torch.sum(att1.unsqueeze(-1) * embeds, dim=1)  # (B , H)
+            e2 = torch.sum(att2.unsqueeze(-1) * embeds, dim=1)  # (B , H)
+
+            # select values
+            v1 = torch.sum(att1 * values, dim=1)  # (B)
+            v2 = torch.sum(att2 * values, dim=1)  # (B)
+
+            # compute new value
+            outs = torch.stack([op(v1, v2) for op in op_funcs], dim=1)  # (B , n_ops)
+            new_val = torch.sum(op_weights * outs, dim=1)  # (B)
+
+            # Project to embedding space to inform the embedding combinator
+            v1_embed = self.scalar_to_embed(v1.unsqueeze(-1))
+            v2_embed = self.scalar_to_embed(v2.unsqueeze(-1))
+
+            # compute new embed
+            concat = torch.cat(
+                [e1, e2, v1_embed, v2_embed, op_weights], dim=-1
+            )  # (B , 2H + n_ops)
+            delta = self.embed_mlp(concat)
+            new_emb = 0.5 * (e1 + e2) + delta  # residual
+
+            embeds_list.append(new_emb)
+            values_list.append(new_val)
+
             if return_info:
-                attn_history.append(self.controller.last_attn)
-                op_history.append(self.controller.last_op_weights)
-            outs = [op(input1, input2) for op in op_funcs]
-            stack = torch.stack(outs, dim=1)
-            new_node = torch.sum(op_weights.unsqueeze(-1) * stack, dim=1)
-            nodes.append(new_node)
-        stacked = torch.stack(nodes, dim=1)
+                attn_hist.append(self.controller.last_attn)
+                op_hist.append(self.controller.last_op_weights)
+
         if return_info:
-            return stacked, attn_history, op_history
-        return stacked
+            return embeds_list, values_list, attn_hist, op_hist
+        return embeds_list, values_list
 
 
-# -----------------------------------------------------------------------------
-# GPT wrapper with DAG
-# -----------------------------------------------------------------------------
-from dataclasses import dataclass
+# ---------------------------------------------------------------------------
+# Learned transformer -> MLP process for converting initial embeddings into values.
+# ---------------------------------------------------------------------------
+class ValueExtractor(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.attn = nn.MultiheadAttention(
+            config.n_embd, config.n_head, batch_first=True
+        )
+        self.proj = nn.Linear(config.n_embd, 1)
 
-from model import GPT, Block, GPTConfig
+    def forward(self, node_embeds):
+        attn_out, _ = self.attn(node_embeds, node_embeds, node_embeds)
+        values = self.proj(attn_out).squeeze(-1)
+        return values
 
 
+# ---------------------------------------------------------------------------
+# DAG-augmented GPT
+# ---------------------------------------------------------------------------
 @dataclass
 class DAGGPTConfig(GPTConfig):
-    dag_depth: int = 4  # Number of DAG steps to perform
+    dag_depth: int = 4
 
 
 class DAGGPT(GPT):
-    """GPT model augmented with differentiable DAG reasoning."""
+    """GPT + differentiable DAG with separated values / embeddings."""
 
     def __init__(self, config: DAGGPTConfig):
         super().__init__(config)
-        # initialize DAG components
-        self.dag = DifferentiableDAG(config.n_embd, config.dag_depth)
+
+        self.value_extractor = ValueExtractor(config)
+        self.scalar_to_embed = nn.Linear(1, config.n_embd)
+
+        self.dag = DifferentiableDAG(
+            config.n_embd, config.dag_depth, self.scalar_to_embed
+        )
         self.mix_gate = nn.Linear(config.n_embd * 2, 1)
+
         self.token_attn = nn.MultiheadAttention(
             config.n_embd, config.n_head, batch_first=True
         )
-        self.attn_to_num = nn.Linear(config.n_embd, 1)
-        self.snap_block = Block(config)
+        self.value_attn = nn.MultiheadAttention(
+            config.n_embd, config.n_head, batch_first=True
+        )
+        self.node_embed_block = Block(config)
         self.operand_ctx_block = Block(config)
         self.op_ctx_block = Block(config)
         self.post_dag_block = Block(config)
 
-    @classmethod
-    def init_from(
-        cls, model_type: str, override_args: Optional[dict] = None
-    ) -> "DAGGPT":
-        """Initialize a DAGGPT model from a pretrained GPT model.
+    # -------------------------------------------------------------
 
-        Args:
-            model_type: Type of pretrained model to load (e.g. 'gpt2')
-            override_args: Optional dict of arguments to override in the config
-
-        Returns:
-            Initialized DAGGPT model
-        """
-        # First initialize the base GPT model
-        base_model = GPT.from_pretrained(model_type, override_args)
-
-        # Create DAGGPT config from base model config
-        config = DAGGPTConfig(**base_model.config.__dict__)
-        if override_args:
-            for k, v in override_args.items():
-                setattr(config, k, v)
-
-        # Create new DAGGPT model
-        model = cls(config)
-
-        # Copy over the base model weights
-        model.load_state_dict(base_model.state_dict(), strict=False)
-
-        return model
-
-    # Expected dimensions:
-    # idx: (batch_size, seq_len)
-    # targets: (batch_size, seq_len)
     def forward(self, idx, targets=None, return_dag_info: bool = False):
-        """Run the model and optionally return DAG attention info."""
+        _, T = idx.shape
         device = idx.device
-        b, t = idx.size()
-        assert (
-            t <= self.config.block_size
-        ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=device)
-        tok_emb = self.transformer.wte(idx)
-        pos_emb = self.transformer.wpe(pos)
-        emb = tok_emb + pos_emb
+        assert T <= self.config.block_size
+
+        # ── GPT backbone ───────────────────────────────────────────
+        pos = torch.arange(T, device=device)
+        emb = self.transformer.wte(idx) + self.transformer.wpe(pos)
         x = self.transformer.drop(emb)
-        for block in self.transformer.h:
-            x = block(x)
-        hidden = self.transformer.ln_f(x)
+        for blk in self.transformer.h:
+            x = blk(x)
+        hidden = self.transformer.ln_f(x)  # (B , T , H)
 
-        snap_hidden = self.snap_block(hidden)
-        attn_out, _ = self.token_attn(snap_hidden, snap_hidden, snap_hidden)
-        operand_ctx = self.operand_ctx_block(hidden).mean(dim=1)
-        op_ctx = self.op_ctx_block(hidden).mean(dim=1)
-        all_vals = self.attn_to_num(attn_out).squeeze(-1)
-        all_nodes = all_vals.unsqueeze(-1).expand(-1, -1, tok_emb.size(-1))
-        initial_nodes = [all_nodes[:, i, :] for i in range(t)]
-        zero_node = torch.zeros_like(tok_emb[:, 0, :])
-        while len(initial_nodes) < 2:
-            initial_nodes.append(zero_node)
+        # ── prepare node embeddings & scalar values ───────────────
+        node_embeds = self.node_embed_block(
+            hidden
+        )  # Contains linguistic context specific to mathematics.
+        node_values = self.value_extractor(
+            node_embeds
+        )  # (B, T) # Values derived from the mathematical linguistic context.
 
-        # Store activations for entropy calculation
-        self.last_activations = {
-            "snap_hidden": snap_hidden,
-            "attn_out": attn_out,
-            "operand_ctx": operand_ctx,
-            "op_ctx": op_ctx,
-            "all_nodes": all_nodes,
-        }
-        for tensor in self.last_activations.values():
-            if tensor.requires_grad:
-                tensor.retain_grad()
+        embeds_list = [
+            node_embeds[:, i, :] for i in range(T)
+        ]  # length-T list of (B , H)
+        values_list = [node_values[:, i] for i in range(T)]  # length-T list of (B)
 
-        dag_result = self.dag(
-            initial_nodes, operand_ctx, op_ctx, return_info=return_dag_info
+        # guarantee at least two nodes
+        while len(embeds_list) < 2:
+            embeds_list.append(torch.zeros_like(embeds_list[0]))
+            values_list.append(torch.zeros_like(values_list[0]))
+
+        # Operand & operator chooser context
+        operand_ctx = self.operand_ctx_block(node_embeds).mean(dim=1)  # (B , H)
+        op_ctx = self.op_ctx_block(node_embeds).mean(dim=1)  # (B , H)
+
+        # ── run DAG ───────────────────────────────────────────────
+        dag_out = self.dag(
+            embeds_list,
+            values_list,
+            operand_ctx,
+            op_ctx,
+            return_info=return_dag_info,
         )
         if return_dag_info:
-            dag_nodes, attn_hist, op_hist = dag_result
+            embeds_list, values_list, att_hist, op_hist = dag_out
         else:
-            dag_nodes = dag_result
-            attn_hist = op_hist = None
-        dag_output = dag_nodes[:, -1, :]
-        dag_sem = self.post_dag_block(dag_output.unsqueeze(1)).squeeze(1)
+            embeds_list, values_list = dag_out
+            att_hist = op_hist = None
+
+        # Project values into H-dim space
+        value_tensor = torch.stack(values_list, dim=1).unsqueeze(-1)  # (B, N, 1)
+        value_proj = self.scalar_to_embed(value_tensor)  # (B, N, H)
+
+        # Aggregate (mean pool) the value embeddings into a single embedding
+        attn_out, _ = self.value_attn(value_proj, value_proj, value_proj)
+        pooled_values = attn_out.mean(dim=1)
+
+        # Refine with post-dag block
+        dag_sem = self.post_dag_block(pooled_values.unsqueeze(1)).squeeze(1)  # (B, H)
+
+        # Fuse into hidden state
         gate = torch.sigmoid(
             self.mix_gate(torch.cat([hidden[:, -1, :], dag_sem], dim=-1))
         )
-        new_last = (1 - gate) * hidden[:, -1, :] + gate * dag_sem
-        hidden = torch.cat([hidden[:, :-1, :], new_last.unsqueeze(1)], dim=1)
+        fused = (1 - gate) * hidden[:, -1, :] + gate * dag_sem
+        hidden = torch.cat([hidden[:, :-1, :], fused.unsqueeze(1)], dim=1)
+
+        # ── keep a few salient activations for diagnostics ──────────────
+        self.last_activations = {
+            "node_embeds": node_embeds,  # (B , T , H)
+            "value_proj": value_proj,  # (B , N , H)
+            "operand_ctx": operand_ctx,  # (B , H)
+            "op_ctx": op_ctx,  # (B , H)
+        }
+        for t in self.last_activations.values():
+            if t.requires_grad:
+                t.retain_grad()
+
         logits = self.lm_head(hidden)
+        loss = None
         if targets is not None:
             loss = self._compute_loss(logits, targets)
-        else:
-            loss = None
+
         if return_dag_info:
-            return logits, loss, dag_output, {"attn": attn_hist, "op": op_hist}
+            return (
+                logits,
+                loss,
+                {
+                    "values": values_list,
+                    "embeds": embeds_list,
+                    "attn": att_hist,
+                    "op": op_hist,
+                },
+            )
         return logits, loss
 
+    # -----------------------------------------------------------------
+    # extra_vals helper (unchanged – still works on stored activations)
+    # -----------------------------------------------------------------
     def extra_vals(self) -> dict[str, float]:
         if not hasattr(self, "last_activations"):
             return {}

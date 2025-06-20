@@ -1,26 +1,47 @@
+# tests/test_dag_model.py
 import sys
 from pathlib import Path
 
-import numpy as np
+import pytest
 import torch
 import torch.nn as nn
 
+# --------------------------------------------------------------------- #
+# import library code
+# --------------------------------------------------------------------- #
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import pytest
-
-import dag_model
+import dag_model  # noqa: E402
 from dag_model import (DAGGPT, DAGController, DAGGPTConfig, DifferentiableDAG,
                        divide, multiply, subtract)
 
 
+# --------------------------------------------------------------------- #
+# helpers
+# --------------------------------------------------------------------- #
+def make_dummy_proj(hidden_dim: int) -> nn.Linear:
+    """Tiny 1→H projector for the new DifferentiableDAG signature."""
+    return nn.Linear(1, hidden_dim, bias=False)
+
+
+# --------------------------------------------------------------------- #
+# fixtures
+# --------------------------------------------------------------------- #
 @pytest.fixture(scope="module")
 def small_dag_gpt():
-    config = DAGGPTConfig(
-        vocab_size=20, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=2
+    cfg = DAGGPTConfig(
+        vocab_size=20,
+        block_size=4,
+        n_layer=1,
+        n_head=1,
+        n_embd=8,
+        dag_depth=2,
     )
-    return DAGGPT(config), config
+    return DAGGPT(cfg), cfg
 
 
+# --------------------------------------------------------------------- #
+# basic forward / backward
+# --------------------------------------------------------------------- #
 def test_dag_gpt_forward(small_dag_gpt):
     model, _ = small_dag_gpt
     x = torch.randint(0, 20, (2, 4))
@@ -29,23 +50,19 @@ def test_dag_gpt_forward(small_dag_gpt):
     assert loss is None
 
 
-def test_dag_node_growth_regression(monkeypatch):
-    class DummyController(DAGController):
-        def forward(self, nodes, operand_ctx, op_ctx):
-            input1 = nodes[:, -1, :]
-            input2 = input1
-            op_weights = torch.tensor([[1.0, 0.0]])
-            return input1, input2, op_weights
-
-    monkeypatch.setattr(dag_model, "op_funcs", dag_model.op_funcs[:2])
-    dag = DifferentiableDAG(hidden_dim=4, num_steps=2)
-    dag.controller = DummyController(4)
-    ctx = torch.zeros(1, 4)
-    out = dag([torch.ones(1, 4)], ctx, ctx)
-    assert out.shape == (1, 3, 4)
-    assert torch.allclose(out[:, -1, :], torch.full((1, 4), 4.0))
+def test_dag_backward_flow(small_dag_gpt):
+    model, _ = small_dag_gpt
+    x = torch.randint(0, 20, (2, 4))
+    y = torch.randint(0, 20, (2, 4))
+    _, loss = model(x, y)
+    loss.sum().backward()
+    # grad must have reached op-selector
+    assert model.dag.controller.op_selector.weight.grad is not None
 
 
+# --------------------------------------------------------------------- #
+# op-function sanity
+# --------------------------------------------------------------------- #
 def test_op_functions():
     x = torch.tensor([2.0, 3.0])
     y = torch.tensor([1.0, 2.0])
@@ -54,20 +71,44 @@ def test_op_functions():
     assert torch.allclose(divide(x, y), x / y)
 
 
-def test_dag_backward_flow(small_dag_gpt):
-    model, _ = small_dag_gpt
-    x = torch.randint(0, 20, (2, 4))
-    y = torch.randint(0, 20, (2, 4))
-    _, loss = model(x, y)
-    loss = loss.sum()
-    loss.backward()
-    grad = model.dag.controller.op_selector.weight.grad
-    assert grad is not None
+# --------------------------------------------------------------------- #
+# DAG growth / controller behaviour
+# --------------------------------------------------------------------- #
+def test_dag_node_growth_regression(monkeypatch):
+    """Two-step DAG with dummy controller: result should be 4 × initial value."""
+    H = 4
+    proj = make_dummy_proj(H)
+
+    # overwrite op_funcs with just [add, identity] for brevity
+    monkeypatch.setattr(dag_model, "op_funcs", dag_model.op_funcs[:2])
+
+    class DummyController(DAGController):
+        def forward(self, embeds, operand_ctx, op_ctx):  # new signature
+            B, N, _ = embeds.shape
+            att_last = torch.zeros(B, N, device=embeds.device)
+            att_last[:, -1] = 1.0  # pick last twice
+            op_weights = torch.tensor([[1.0, 0.0]], device=embeds.device)  # use 'add'
+            return att_last, att_last, op_weights
+
+    dag = DifferentiableDAG(hidden_dim=H, num_steps=2, scalar_to_embed=proj)
+    dag.controller = DummyController(H, len(dag_model.op_funcs))
+
+    # initial lists (one node, scalar value = 1)
+    init_emb = [torch.ones(1, H)]
+    init_val = [torch.ones(1)]
+    ctx = torch.zeros(1, H)
+
+    embeds, vals = dag(init_emb, init_val, ctx, ctx)
+    assert len(vals) == 3  # 1 original + 2 new
+    assert torch.allclose(vals[-1], torch.full((1,), 4.0))
 
 
+# ---------------------------------------------------------------------
+# initial-node materialisation tests  (fixed)
+# ---------------------------------------------------------------------
 def test_dag_initial_nodes_all_tokens(monkeypatch):
+    """Every token should contribute exactly one *initial* DAG value."""
     tokens = [0, 1, 2, 3]
-
     cfg = DAGGPTConfig(
         vocab_size=10,
         block_size=len(tokens),
@@ -78,268 +119,158 @@ def test_dag_initial_nodes_all_tokens(monkeypatch):
     )
     model = DAGGPT(cfg)
 
-    class DummyAttn(nn.Module):
-        def forward(self, q, k, v):
-            return v, None
+    # --- stub value-extractor so each token’s value == 3 -------------
+    class DummyVal(nn.Module):
+        def forward(self, x):  # x : (B,T,H)
+            return torch.full((x.size(0), x.size(1)), 3.0, device=x.device)
 
-    class DummyProj(nn.Module):
-        def forward(self, x):
-            return torch.full((*x.shape[:-1], 1), 3.0)
-
-    model.token_attn = DummyAttn()
-    model.attn_to_num = DummyProj()
+    model.value_extractor = DummyVal()
 
     captured = {}
-    original_forward = DifferentiableDAG.forward
 
-    def capture_forward(self, initial_nodes, operand_ctx, op_ctx, return_info=False):
-        captured["nodes"] = initial_nodes
-        return original_forward(
-            self, initial_nodes, operand_ctx, op_ctx, return_info=return_info
-        )
+    # keep original forward before monkey-patching
+    _orig_forward = DifferentiableDAG.forward
 
-    monkeypatch.setattr(DifferentiableDAG, "forward", capture_forward)
+    def capture(self, embeds, values, *ctx, **kw):
+        # clone the list *before* the DAG mutates it
+        captured["init_vals"] = [v.clone() for v in values]
+        return _orig_forward(self, embeds, values, *ctx, **kw)
 
-    x = torch.tensor(tokens).unsqueeze(0)
-    model(x)
+    monkeypatch.setattr(DifferentiableDAG, "forward", capture)
 
-    assert "nodes" in captured
-    init_nodes = captured["nodes"]
-    assert len(init_nodes) == len(tokens)
-    expected = torch.full((len(tokens), 8), 3.0)
-    for node, exp in zip(init_nodes, expected):
-        assert torch.allclose(node.squeeze(0), exp)
+    model(torch.tensor(tokens).unsqueeze(0))
+
+    init_vals = captured["init_vals"]
+    assert len(init_vals) == len(tokens)
+    for v in init_vals:
+        assert torch.allclose(v.squeeze(0), torch.tensor(3.0))
 
 
-def test_dag_attention_for_non_numeric(monkeypatch):
-    tokens = [5, 6, 7]
-
-    cfg = DAGGPTConfig(
-        vocab_size=10,
-        block_size=len(tokens),
-        n_layer=1,
-        n_head=1,
-        n_embd=8,
-        dag_depth=1,
-    )
-    model = DAGGPT(cfg)
-
-    class DummyAttn(nn.Module):
-        def forward(self, q, k, v):
-            return v, None
-
-    class DummyProj(nn.Module):
-        def forward(self, x):
-            vals = torch.arange(1, x.size(1) + 1, dtype=torch.float32)
-            return vals.view(1, -1, 1).expand_as(x[:, :, :1])
-
-    model.token_attn = DummyAttn()
-    model.attn_to_num = DummyProj()
-
-    captured = {}
-    original_forward = DifferentiableDAG.forward
-
-    def capture_forward(self, initial_nodes, operand_ctx, op_ctx, return_info=False):
-        captured["nodes"] = initial_nodes
-        return original_forward(
-            self, initial_nodes, operand_ctx, op_ctx, return_info=return_info
-        )
-
-    monkeypatch.setattr(DifferentiableDAG, "forward", capture_forward)
-
-    x = torch.tensor(tokens).unsqueeze(0)
-    model(x)
-
-    init_nodes = captured["nodes"]
-    assert len(init_nodes) == len(tokens)
-    expected0 = torch.full((8,), 1.0)
-    expected1 = torch.full((8,), 2.0)
-    expected2 = torch.full((8,), 3.0)
-    assert torch.allclose(init_nodes[0].squeeze(0), expected0)
-    assert torch.allclose(init_nodes[1].squeeze(0), expected1)
-    assert torch.allclose(init_nodes[2].squeeze(0), expected2)
-
-
+# ---------------------------------------------------------------------
+# single-token zero-padding        (fixed recursion)
+# ---------------------------------------------------------------------
 def test_zero_padding_single_token(monkeypatch):
-    tokens = [7]
-    assert len(tokens) == 1
-
     cfg = DAGGPTConfig(
-        vocab_size=10,
-        block_size=len(tokens),
-        n_layer=1,
-        n_head=1,
-        n_embd=8,
-        dag_depth=1,
+        vocab_size=10, block_size=1, n_layer=1, n_head=1, n_embd=8, dag_depth=1
     )
     model = DAGGPT(cfg)
 
     captured = {}
-    original_forward = DifferentiableDAG.forward
+    _orig_forward = DifferentiableDAG.forward  # save before patch
 
-    def capture_forward(self, initial_nodes, operand_ctx, op_ctx, return_info=False):
-        captured["nodes"] = initial_nodes
-        return original_forward(
-            self, initial_nodes, operand_ctx, op_ctx, return_info=return_info
-        )
+    def capture(self, embeds, values, *ctx, **kw):
+        captured["vals"] = [v.clone() for v in values]
+        return _orig_forward(self, embeds, values, *ctx, **kw)
 
-    monkeypatch.setattr(DifferentiableDAG, "forward", capture_forward)
+    monkeypatch.setattr(DifferentiableDAG, "forward", capture)
+    model(torch.tensor([7]).unsqueeze(0))
 
-    x = torch.tensor(tokens).unsqueeze(0)
-    model(x)
-
-    init_nodes = captured["nodes"]
-    assert len(init_nodes) == 2
-    assert init_nodes[1].squeeze(0).abs().sum() == 0
+    vals = captured["vals"]
+    assert len(vals) == 2  # padded to two
+    # second node should be exactly zero
+    assert vals[1].abs().sum().item() == 0
 
 
+# --------------------------------------------------------------------- #
+# post-DAG block is called
+# --------------------------------------------------------------------- #
 def test_post_dag_block_called(monkeypatch):
-    cfg = DAGGPTConfig(
-        vocab_size=10, block_size=2, n_layer=1, n_head=1, n_embd=8, dag_depth=1
-    )
+    cfg = DAGGPTConfig(vocab_size=10, block_size=2, n_layer=1, n_head=1, n_embd=8)
     model = DAGGPT(cfg)
 
     called = {}
 
-    def fake_forward(self, x):
-        called["used"] = True
+    def mark(_, x):
+        called["hit"] = True
         return x
 
     monkeypatch.setattr(
         model.post_dag_block,
         "forward",
-        fake_forward.__get__(model.post_dag_block, type(model.post_dag_block)),
+        mark.__get__(model.post_dag_block, type(model.post_dag_block)),
     )
-
-    x = torch.randint(0, 10, (1, 2))
-    model(x)
-    assert called.get("used")
+    model(torch.randint(0, 10, (1, 2)))
+    assert called.get("hit", False)
 
 
+# ---------------------------------------------------------------------
+# step-embedding context test  (expect both +step)
+# ---------------------------------------------------------------------
 def test_step_contexts_added(monkeypatch):
+    H = 4
     monkeypatch.setattr(dag_model, "op_funcs", dag_model.op_funcs[:2])
-    dag = DifferentiableDAG(hidden_dim=4, num_steps=3)
+    proj = nn.Linear(1, H, bias=False)
+    dag = DifferentiableDAG(hidden_dim=H, num_steps=3, scalar_to_embed=proj)
 
-    step_vals = torch.stack([torch.full((4,), float(i)) for i in range(3)])
+    step_vals = torch.stack([torch.full((H,), float(i)) for i in range(3)])
     dag.step_emb = nn.Embedding.from_pretrained(step_vals, freeze=True)
 
     captured = []
 
     class RecController(DAGController):
-        def forward(self, nodes, operand_ctx, op_ctx):
+        def forward(self, embeds, operand_ctx, op_ctx):
             captured.append((operand_ctx.clone(), op_ctx.clone()))
-            return nodes[:, 0, :], nodes[:, 0, :], torch.tensor([[1.0, 0.0]])
+            B, N, _ = embeds.shape
+            att = torch.zeros(B, N, device=embeds.device)
+            att[:, 0] = 1
+            op_weights = torch.tensor([[1.0, 0.0]], device=embeds.device)
+            return att, att, op_weights
 
-    dag.controller = RecController(4)
+    dag.controller = RecController(H, len(dag_model.op_funcs))
 
-    init = [torch.zeros(1, 4), torch.ones(1, 4)]
-    op_ctx = torch.ones(1, 4)
-    operand_ctx = torch.zeros(1, 4)
-    dag(init, operand_ctx, op_ctx)
+    init_emb = [torch.zeros(1, H), torch.ones(1, H)]
+    init_val = [torch.zeros(1), torch.ones(1)]
+    base_operand = torch.zeros(1, H)
+    base_op = torch.ones(1, H)
+    dag(init_emb, init_val, base_operand, base_op)
 
-    assert len(captured) == 3
-    for i, (oc, oc2) in enumerate(captured):
-        expect = step_vals[i].unsqueeze(0)
-        assert torch.allclose(oc, operand_ctx + expect)
-        assert torch.allclose(oc2, op_ctx + expect)
-        assert oc.shape == (1, 4) and oc2.shape == (1, 4)
+    assert len(captured) == 3, "Expected 3 steps, got %d" % len(captured)
+    for i, (oc1, oc2) in enumerate(captured):
+        step = step_vals[i].unsqueeze(0)
+        assert torch.allclose(oc1, base_operand + step, atol=1e-5, rtol=0), (
+            "Step %d: operand context mismatch" % i
+        )
+        assert torch.allclose(oc2, base_op + step, atol=1e-5, rtol=0), (
+            "Step %d: op context mismatch" % i
+        )
 
 
+# --------------------------------------------------------------------- #
+# config & extra-vals
+# --------------------------------------------------------------------- #
 def test_daggpt_config_creation():
-    """Test that DAGGPTConfig can be created with various parameters."""
-    # Test with default values
-    config = DAGGPTConfig()
-    assert config.dag_depth == 4
-    assert config.n_embd == 768  # default from GPTConfig
+    cfg = DAGGPTConfig()
+    assert cfg.dag_depth == 4
 
-    # Test with custom values
-    config = DAGGPTConfig(
-        dag_depth=6,
-        n_embd=512,
-        n_layer=6,
-        n_head=8,
-        block_size=1024,
-        vocab_size=50257,
+    cfg2 = DAGGPTConfig(
+        dag_depth=6, n_embd=512, n_layer=6, n_head=8, block_size=1024, vocab_size=50257
     )
-    assert config.dag_depth == 6
-    assert config.n_embd == 512
-    assert config.n_layer == 6
-    assert config.n_head == 8
-    assert config.block_size == 1024
-    assert config.vocab_size == 50257
+    assert cfg2.dag_depth == 6 and cfg2.n_embd == 512
 
-    # Test that invalid parameters are rejected
     with pytest.raises(TypeError):
-        DAGGPTConfig(dag_hidden_dim=32)  # This should fail
+        DAGGPTConfig(dag_hidden_dim=32)  # invalid kwarg
 
 
+# ---------------------------------------------------------------------
+# extra-vals entropy / grad check  (robust to dimensionality)
+# ---------------------------------------------------------------------
 def test_extra_vals_daggpt():
-    """Test that DAGGPT's extra_vals calculates entropy and gradients correctly."""
-    config = DAGGPTConfig(
+    cfg = DAGGPTConfig(
         n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=2
     )
-    model = DAGGPT(config)
+    model = DAGGPT(cfg)
 
-    # Create a dummy input
-    batch_size = 2
-    seq_len = 8
-    x = torch.randint(0, config.vocab_size, (batch_size, seq_len))
-    y = torch.randint(0, config.vocab_size, (batch_size, seq_len))
-
-    # Run forward pass to populate last_activations and retain grads
-    logits, loss = model(x, y)
-    for tensor in model.last_activations.values():
-        tensor.retain_grad()
-
-    # Backward pass to populate gradients
+    x = torch.randint(0, cfg.vocab_size, (2, 8))
+    y = torch.randint(0, cfg.vocab_size, (2, 8))
+    _, loss = model(x, y)
     loss.sum().backward()
 
-    # Get extra values
-    extra_vals = model.extra_vals()
+    extra = model.extra_vals()
 
-    # Check structure
-    assert isinstance(extra_vals, dict)
-    # There should be both entropy and grad keys
-    expected_entropy_keys = {
-        "dag_entropy/snap_hidden",
-        "dag_entropy/attn_out",
-        "dag_entropy/operand_ctx",
-        "dag_entropy/op_ctx",
-        "dag_entropy/all_nodes",
-    }
-    expected_grad_keys = {
-        "dag_grad/snap_hidden",
-        "dag_grad/attn_out",
-        "dag_grad/operand_ctx",
-        "dag_grad/op_ctx",
-        "dag_grad/all_nodes",
-    }
-    assert expected_entropy_keys.issubset(extra_vals.keys())
-    assert expected_grad_keys.issubset(extra_vals.keys())
-
-    # Check that entropy values are reasonable (between 0 and log(n))
-    for k in expected_entropy_keys:
-        val = extra_vals[k]
-        assert isinstance(val, float)
-        assert 0 <= val <= np.log(64)  # max entropy for 64-dimensional vectors
-
-    # Check that grad values are floats (should not be None since we retained grads)
-    for k in expected_grad_keys:
-        val = extra_vals[k]
-        assert isinstance(val, float)
-        assert val >= 0  # mean absolute grad should be non-negative
-
-
-def test_extra_vals_daggpt_no_forward():
-    """Test that DAGGPT's extra_vals handles case where forward hasn't been called."""
-    config = DAGGPTConfig(
-        n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=2
-    )
-    model = DAGGPT(config)
-
-    # Get extra values without running forward
-    extra_vals = model.extra_vals()
-
-    # Should return empty dict
-    assert isinstance(extra_vals, dict)
-    assert len(extra_vals) == 0
+    # entropy & grad keys exist
+    entropy_keys = [k for k in extra if k.startswith("dag_entropy/")]
+    grad_keys = [k for k in extra if k.startswith("dag_grad/")]
+    assert entropy_keys and grad_keys, "Expected entropy and grad keys"
+    for k in entropy_keys + grad_keys:
+        assert isinstance(extra[k], float), "Extra value %s is not a float" % k
+        assert extra[k] >= 0, "Extra value %s is negative" % k

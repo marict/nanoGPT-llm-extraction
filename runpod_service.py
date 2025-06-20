@@ -202,7 +202,7 @@ def visualize_dag_attention(
     x = torch.tensor(tokens).unsqueeze(0)
     model.eval()
     with torch.no_grad():
-        _, _, _, dag_info = model(x, return_dag_info=True)
+        _, _, dag_info = model(x, return_dag_info=True)
 
     attn_history: Sequence[torch.Tensor] = dag_info["attn"]
     max_len = max(t.numel() for t in attn_history)

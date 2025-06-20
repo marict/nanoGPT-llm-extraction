@@ -80,24 +80,60 @@ def test_start_cloud_training(monkeypatch):
     assert f"config.py --wandb_project={rp.POD_NAME}" in docker_args
 
 
+from pathlib import Path
+
+import pytest
+import torch
+
+import dag_model
+from dag_model import DAGGPT, DAGController, DAGGPTConfig, op_funcs
+
+
+# ---------------------------------------------------------------------------
+# helper: very small tokenizer for the test
+# ---------------------------------------------------------------------------
+class SimpleTokenizer:
+    def __init__(self, ids):
+        self._ids = ids
+
+    def encode(self, text):
+        # Return the pre-baked token list irrespective of text (good enough for a unit test)
+        return self._ids
+
+
+# ---------------------------------------------------------------------------
+# the test
+# ---------------------------------------------------------------------------
 def test_visualize_dag_attention(tmp_path):
-    import torch
+    """
+    Smoke-test the visualisation helper.
+    A dummy controller returns a fixed attention pattern and op-weights;
+    we check that these values are reflected in the model after running
+    `visualize_dag_attention`.
+    """
 
-    import dag_model
-    from dag_model import DAGGPT, DAGController, DAGGPTConfig
-
+    # ---------------------------------------------------------------------
+    # dummy controller that produces deterministic attentions / op-weights
+    # ---------------------------------------------------------------------
     class DummyController(DAGController):
-        def forward(self, nodes, operand_ctx, op_ctx):
-            self.last_attn = torch.tensor([[1.0, 0.0]])
-            input1 = nodes[:, 0, :]
-            input2 = nodes[:, 1, :]
-            weights = torch.zeros(1, len(dag_model.op_funcs))
-            weights[0, 2] = 1.0
-            self.last_op_weights = weights
-            return input1, input2, self.last_op_weights
+        def forward(self, embeds, operand_ctx, op_ctx):
+            # two existing nodes → length-2 distributions
+            att1 = torch.tensor([[1.0, 0.0]], device=embeds.device)  # (B=1 , N=2)
+            att2 = torch.tensor([[0.0, 1.0]], device=embeds.device)  # (B=1 , N=2)
 
-    prompt = "2 3"
-    tokens = [2, 3]
+            # one-hot op selection: use the 3rd op (index 2)
+            op_w = torch.zeros(1, len(op_funcs), device=embeds.device)
+            op_w[0, 2] = 1.0
+
+            # store for assertions
+            self.last_attn = att1.detach()
+            self.last_op_weights = op_w.detach()
+            return att1, att2, op_w
+
+    # ---------------------------------------------------------------------
+    # tiny DAG-GPT model
+    # ---------------------------------------------------------------------
+    tokens = [2, 3]  # pretend these came from the prompt
     cfg = DAGGPTConfig(
         vocab_size=10,
         block_size=len(tokens),
@@ -107,18 +143,30 @@ def test_visualize_dag_attention(tmp_path):
         dag_depth=1,
     )
     model = DAGGPT(cfg)
-    model.dag.controller = DummyController(cfg.n_embd)
+    model.dag.controller = DummyController(cfg.n_embd, n_ops=len(op_funcs))
+
+    # ---------------------------------------------------------------------
+    # run visualiser
+    # ---------------------------------------------------------------------
     out_path = tmp_path / "viz.png"
 
-    class SimpleTokenizer:
-        def encode(self, text):
-            return tokens
+    result_file = rp.visualize_dag_attention(
+        model,
+        SimpleTokenizer(tokens),
+        prompt="2 3",
+        save_path=str(out_path),
+    )
 
-    result = rp.visualize_dag_attention(
-        model, SimpleTokenizer(), prompt, save_path=str(out_path)
-    )
-    assert Path(result).exists()
+    # ---------------------------------------------------------------------
+    # assertions
+    # ---------------------------------------------------------------------
+    assert Path(result_file).exists(), "Visualization file not created"
     assert torch.allclose(
-        model.dag.controller.last_attn.squeeze(), torch.tensor([1.0, 0.0])
-    )
-    assert torch.argmax(model.dag.controller.last_op_weights).item() == 2
+        model.dag.controller.last_attn.squeeze(),
+        torch.tensor([1.0, 0.0]),
+        atol=1e-5,
+        rtol=0,
+    ), "Last attention distribution mismatch"
+    assert (
+        torch.argmax(model.dag.controller.last_op_weights).item() == 2
+    ), "Last op weights mismatch"
