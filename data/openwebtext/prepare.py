@@ -6,7 +6,7 @@ import pickle
 from pathlib import Path
 
 import numpy as np
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from tiktoken import get_encoding
 
 
@@ -32,31 +32,59 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> tuple[int
     # it is better than 1 usually though
     num_proc_load_dataset = num_proc
 
-    # takes 54GB in huggingface .cache dir, at least 30GB more to run
-    dataset = load_dataset(
-        "openwebtext", num_proc=num_proc_load_dataset, trust_remote_code=True
-    )
-
-    # owt by default only contains the 'train' split, so create a test split
-    split_dataset = dataset["train"].train_test_split(
-        test_size=0.0005, seed=2357, shuffle=True
-    )
-    split_dataset["val"] = split_dataset.pop("test")  # rename the test split to val
-
-    # Optional: keep only a subset of each split.
+    # Validate subset parameter
     subset = max(min(subset, 1.0), 0.0)
+
     if subset < 1.0:
-        for key in ("train", "val"):
-            original_size = len(split_dataset[key])
-            dset = split_dataset[key].shuffle(seed=42)
-            keep = int(len(dset) * subset)
-            split_dataset[key] = dset.select(range(keep))
-            print(f"  {key}: {original_size:,} → {keep:,} examples")
+        print(f"Using subset {subset:.6f} - will download only required examples")
     else:
         print(f"Using full dataset")
-        for key in ("train", "val"):
-            size = len(split_dataset[key])
-            print(f"  {key}: {size:,} examples")
+
+    # Load the OpenWebText dataset with streaming for subset selection
+    if subset < 1.0:
+        # For subsets, use streaming to avoid downloading full dataset
+        dataset = load_dataset("openwebtext", streaming=True, trust_remote_code=True)
+
+        # Calculate how many examples to take from train split
+        # OpenWebText has ~8M train examples, we'll create val from train
+        train_size = 8009762
+
+        train_take = max(1, int(train_size * subset))
+        val_take = max(1, int(train_take * 0.0005))  # Same ratio as original
+
+        print(
+            f"  Will take {train_take:,} train examples and {val_take:,} val examples"
+        )
+
+        # Take only the subset we need
+        train_data = dataset["train"].take(train_take)
+
+        # Convert streaming dataset to regular dataset for processing
+        train_dataset = Dataset.from_list(list(train_data))
+
+        # Create validation split from train data
+        split_dataset = train_dataset.train_test_split(
+            test_size=0.0005, seed=2357, shuffle=True
+        )
+        split_dataset["val"] = split_dataset.pop("test")  # rename the test split to val
+
+    else:
+        # For full dataset, use regular loading
+        # takes 54GB in huggingface .cache dir, at least 30GB more to run
+        dataset = load_dataset(
+            "openwebtext", num_proc=num_proc_load_dataset, trust_remote_code=True
+        )
+
+        # owt by default only contains the 'train' split, so create a test split
+        split_dataset = dataset["train"].train_test_split(
+            test_size=0.0005, seed=2357, shuffle=True
+        )
+        split_dataset["val"] = split_dataset.pop("test")  # rename the test split to val
+
+    # Print final sizes
+    for key in ("train", "val"):
+        size = len(split_dataset[key])
+        print(f"  {key}: {size:,} examples")
 
     # this results in:
     # >>> split_dataset
