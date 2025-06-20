@@ -47,8 +47,12 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> Tuple[int
     VAL_N = 46_251
 
     if pct >= 1.0:  # huggingface doesn't support < 1%
-        train_split = f"train[:{pct:.5f}%]"
-        val_split = f"validation[:{pct:.5f}%]"
+        if subset >= 1.0:
+            train_split = "train"
+            val_split = "validation"
+        else:
+            train_split = f"train[:{pct:.0f}%]"
+            val_split = f"validation[:{pct:.0f}%]"
     else:  # fallback to absolute counts
         n_train = max(1, int(TRAIN_N * subset))
         n_val = max(1, int(VAL_N * subset))
