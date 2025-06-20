@@ -1,6 +1,6 @@
 wandb_project = "dag-gpt"
 
-batch_size = 32
+batch_size = 16
 block_size = 1024
 gradient_accumulation_steps = 4
 

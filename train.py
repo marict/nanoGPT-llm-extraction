@@ -79,6 +79,7 @@ class TrainConfig:
     wandb_project: str = "owt"
 
     dataset: str = "openwebtext"
+    subset: float = 1.0  # Fraction of dataset to use (0.0 < subset <= 1.0)
     gradient_accumulation_steps: int = 5 * 8
     batch_size: int = 12
     block_size: int = 1024
@@ -154,6 +155,7 @@ def parse_args() -> argparse.ArgumentParser:
     parser.add_argument("--dag-depth", type=int)
     parser.add_argument("--gpu-type")
     parser.add_argument("--wandb-api-key")
+    parser.add_argument("--subset", type=float)
     return parser
 
 
@@ -266,7 +268,9 @@ def train(cfg: TrainConfig) -> None:
             )
             from data import prepare_dataset  # local import
 
-            train_tokens, val_tokens = prepare_dataset(cfg.dataset, data_dir)
+            train_tokens, val_tokens = prepare_dataset(
+                cfg.dataset, data_dir, cfg.subset
+            )
             print(
                 f"[{time.time() - setup_start:.2f}s] Dataset prepared. Train: {train_tokens:,}, Val: {val_tokens:,}"
             )
@@ -596,6 +600,8 @@ def main() -> None:
     cfg = TrainConfig()
     update_config(cfg, load_config_file(args.config))
     apply_overrides(cfg, overrides)
+    if args.subset is not None:
+        cfg.subset = args.subset
     if args.dag_depth is not None:
         cfg.dag_depth = args.dag_depth
     print(

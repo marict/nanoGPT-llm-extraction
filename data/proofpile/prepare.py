@@ -22,7 +22,7 @@ from datasets import load_dataset
 from tiktoken import get_encoding
 
 
-def prepare(data_dir: Path, num_proc: int = 8) -> Tuple[int, int]:
+def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> Tuple[int, int]:
     """Prepare the Proof‑Pile dataset for training.
 
     Downloads the dataset, ensures train and validation splits exist,
@@ -51,6 +51,14 @@ def prepare(data_dir: Path, num_proc: int = 8) -> Tuple[int, int]:
         split_dataset["val"] = split_dataset.pop("test")
     else:
         split_dataset = {"train": dataset["train"], "val": dataset["validation"]}
+
+    # Optional: keep only a subset of each split.
+    subset = max(min(args.subset, 1.0), 0.0)
+    if subset < 1.0:
+        for key in ("train", "val"):
+            dset = split_dataset[key].shuffle(seed=42)
+            keep = int(len(dset) * subset)
+            split_dataset[key] = dset.select(range(keep))
 
     enc = get_encoding("gpt2")
 
@@ -103,12 +111,18 @@ def parse_args() -> argparse.ArgumentParser:
     parser.add_argument(
         "--num-proc", type=int, default=8, help="Parallel worker processes."
     )
+    parser.add_argument(
+        "--subset",
+        type=float,
+        default=1.0,
+        help="Fraction of each split to keep (0 < subset ≤ 1).",
+    )
     return parser
 
 
 if __name__ == "__main__":
     args = parse_args().parse_args()
-    train_tokens, val_tokens = prepare(args.data_dir, args.num_proc)
+    train_tokens, val_tokens = prepare(args.data_dir, args.num_proc, args.subset)
     print(f"✅ Preparation complete for proofpile")
     print(f"Train tokens: {train_tokens:,}")
     print(f"Val tokens:   {val_tokens:,}")

@@ -240,3 +240,73 @@ def test_generate_run_name_edge_cases(monkeypatch):
     name = generate_run_name(cfg)
     # Should be in scientific notation
     assert re.search(r"lr[\d\.-]+e-\d+", name), name
+
+
+def test_subset_config_edge_cases():
+    """Test subset configuration with various edge cases and validation."""
+    from train import TrainConfig, apply_overrides
+
+    # Test default value
+    cfg = TrainConfig()
+    assert cfg.subset == 1.0, f"Expected default subset to be 1.0, got {cfg.subset}"
+
+    # Test valid subset values
+    test_cases = [
+        (0.1, 0.1),  # 10% of dataset
+        (0.5, 0.5),  # 50% of dataset
+        (0.99, 0.99),  # 99% of dataset
+        (1.0, 1.0),  # 100% of dataset
+    ]
+
+    for input_val, expected in test_cases:
+        cfg = TrainConfig()
+        apply_overrides(cfg, [f"--subset={input_val}"])
+        assert cfg.subset == expected, f"Expected subset {expected}, got {cfg.subset}"
+
+    # Test that subset is included in config dict for wandb logging
+    cfg = TrainConfig()
+    cfg.subset = 0.5
+    config_dict = cfg.__dict__
+    assert "subset" in config_dict, "subset should be in config dict"
+    assert (
+        config_dict["subset"] == 0.5
+    ), "subset value should be preserved in config dict"
+
+    # Test that subset is included in run name generation
+    from train import generate_run_name
+
+    cfg = TrainConfig()
+    cfg.subset = 0.25
+    cfg.batch_size = 16
+    cfg.n_layer = 2
+    cfg.n_head = 4
+    cfg.n_embd = 128
+    cfg.dag_depth = 0
+    cfg.dataset = "testset"
+    cfg.learning_rate = 1e-4
+
+    run_name = generate_run_name(cfg)
+    # The run name should contain the hyperparameters but not necessarily subset
+    # since subset is not currently included in the run name generation
+    assert (
+        "b16_l2_h4_d128_dag0_testset" in run_name
+    ), f"Run name should contain hyperparameters: {run_name}"
+
+    # Test that subset can be overridden via CLI
+    cfg = TrainConfig()
+    apply_overrides(cfg, ["--subset=0.75"])
+    assert cfg.subset == 0.75, f"Expected subset 0.75 after override, got {cfg.subset}"
+
+    # Test type validation (should raise ValueError for invalid types)
+    cfg = TrainConfig()
+    try:
+        apply_overrides(cfg, ["--subset=invalid"])
+        assert False, "Should have raised ValueError for invalid subset type"
+    except ValueError:
+        pass  # Expected
+
+    try:
+        apply_overrides(cfg, ["--subset=true"])
+        assert False, "Should have raised ValueError for boolean subset"
+    except ValueError:
+        pass  # Expected
