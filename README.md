@@ -40,25 +40,36 @@ result back into the token stream**.
 flowchart TD
     A["Input tokens  (B × T)"] --> B["Token ⨁ Pos embed  (B × T × H)"]
     B --> C["GPT blocks"]
-    C --> D["Node-embed block  ▶  node_embeds (B × T × H)"]
-    D --> E["Value extractor  ▶  values (B × T)"]
-    C --> F["Operand-ctx block  ▶  (B × H)"]
-    C --> G["Op-ctx block       ▶  (B × H)"]
 
-    subgraph DAG
-        D --> H["Initial DAG nodes<br>(embeds & values)"]
-        H --> I["DAG controller +k steps"]
+    %% branches that prepare DAG inputs
+    C --> D["Node-embed block ▶ node_embeds (B × T × H)"]
+    D --> E["Value extractor ▶ values (B × T)"]
+
+    %% operand / operator contexts
+    C --> F["Operand-ctx block ▶ (B × H)"]
+    C --> G["Op-ctx block ▶ (B × H)"]
+
+    %% DAG
+    subgraph Differentiable DAG
+        direction TB
+        H["Initial DAG nodes ⟨embeds, values⟩"] --> I["DAG controller + k steps"]
         F --> I
         G --> I
     end
 
-    I --> J["Scalar→Embed proj"]
-    J --> K["Value self-attn + pool  ▶  (B × H)"]
-    K --> L["Post-DAG block  ▶ dag_sem"]
+    %% connect embeddings and values to DAG input
+    D -->|embeds| H
+    E -->|values| H
 
-    C --> M["Gate (sigmoid)"]
+    %% post-DAG aggregation
+    I --> J["Scalar → Embed proj"]
+    J --> K["Value self-attn + pool ▶ (B × H)"]
+    K --> L["Post-DAG block ▶ dag_sem"]
+
+    %% fuse with transformer stream
+    C --> M["Gate (sigmoid mix)"]
     L --> M
-    M --> N["LM head  ▶  logits (B × T × |V|)"]
+    M --> N["LM head ▶ logits (B × T × |V|)"]
 ```
 
 ---
