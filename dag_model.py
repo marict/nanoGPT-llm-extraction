@@ -285,25 +285,21 @@ class DAGGPT(GPT):
             return logits, loss, dag_output, {"attn": attn_hist, "op": op_hist}
         return logits, loss
 
-    def extra_vals(self):
-        """Calculate entropy and gradients of activations in the DAG components."""
+    def extra_vals(self) -> dict[str, float]:
         if not hasattr(self, "last_activations"):
             return {}
 
-        entropy_vals = {}
-        grad_vals = {}
-        for name, tensor in self.last_activations.items():
-            # Calculate entropy along the last dimension
-            probs = F.softmax(tensor, dim=-1)
-            entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1)
-            # Average over batch and sequence dimensions
-            entropy_vals[f"dag_entropy/{name}"] = entropy.mean().item()
+        out = {}
+        for name, act in self.last_activations.items():
+            # Entropy (no_grad for safety)
+            with torch.no_grad():
+                prob = torch.softmax(act, dim=-1)
+                ent = -(prob * (prob + 1e-8).log()).sum(-1).mean()
+                out[f"dag_entropy/{name}"] = ent.item()
 
-            # Get mean absolute gradient if available
-            grad = getattr(tensor, "grad", None)
-            if grad is not None:
-                grad_vals[f"dag_grad/{name}"] = grad.abs().mean().item()
-            else:
-                grad_vals[f"dag_grad/{name}"] = None
+            # Gradients
+            g = act.grad
+            if g is not None:
+                out[f"dag_grad/{name}"] = g.detach().abs().mean().item()
 
-        return {**entropy_vals, **grad_vals}
+        return out

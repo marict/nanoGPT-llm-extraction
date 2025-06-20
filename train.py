@@ -13,7 +13,6 @@ import math
 import os
 import pickle
 import runpy
-import subprocess
 import time
 from ast import literal_eval
 from contextlib import nullcontext
@@ -471,6 +470,7 @@ def train(cfg: TrainConfig) -> None:
             if iter_num % cfg.eval_interval == 0 and master_process:
                 try:
                     losses = estimate_loss(model, cfg.eval_iters, get_batch, ctx)
+                    eval_extra = model.extra_vals()
                     print(
                         f"step {iter_num}: train {losses['train']:.4f}, val {losses['val']:.4f}"
                     )
@@ -479,13 +479,15 @@ def train(cfg: TrainConfig) -> None:
                         try:
                             wandb.log(
                                 {
+                                    "step": iter_num,
                                     "iter": iter_num,
                                     "train/loss": losses["train"],
                                     "val/loss": losses["val"],
                                     "lr": lr,
                                     "mfu": running_mfu * 100,
-                                    **extra_vals,  # Add any extra values from the model
-                                }
+                                    **eval_extra,
+                                },
+                                commit=False,
                             )
                         except Exception as e:
                             print(f"Warning: Failed to log to wandb: {e}")
@@ -519,7 +521,7 @@ def train(cfg: TrainConfig) -> None:
                             micro_step == cfg.gradient_accumulation_steps - 1
                         )
                     with ctx:
-                        logits, loss = model(X, Y)
+                        _, loss = model(X, Y)
                         loss = loss / cfg.gradient_accumulation_steps
                     X, Y = get_batch("train")
                     scaler.scale(loss).backward()
@@ -536,7 +538,14 @@ def train(cfg: TrainConfig) -> None:
 
                 dt = time.time() - t0
                 t0 = time.time()
-                if iter_num % cfg.log_interval == 0 and master_process:
+                if (
+                    iter_num % cfg.log_interval == 0
+                    and master_process
+                    and run is not None
+                ):
+                    wandb.log(
+                        {"step": iter_num, "iter": iter_num, **extra_vals}, commit=True
+                    )
                     lossf = loss.item() * cfg.gradient_accumulation_steps
                     if iter_num >= 5:
                         mfu = raw_model.estimate_mfu(
