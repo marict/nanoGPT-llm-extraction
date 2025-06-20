@@ -18,6 +18,7 @@ import time
 from ast import literal_eval
 from contextlib import nullcontext
 from dataclasses import dataclass, fields
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple
 
@@ -38,6 +39,26 @@ CUDA_AVAILABLE = torch.cuda.is_available()
 # --------------------------------------------------------------------------- #
 # Configuration utilities
 # --------------------------------------------------------------------------- #
+def generate_run_name(cfg) -> str:
+    """Generate a nicely formatted run name based on datetime and hyperparameters."""
+    # Format datetime as YYYY-MM-DD_HH-MM-SS
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    # Create a string representation of key hyperparameters
+    param_str = f"b{cfg.batch_size}_l{cfg.n_layer}_h{cfg.n_head}_d{cfg.n_embd}"
+
+    param_str += f"_dag{cfg.dag_depth}"
+
+    # Add dataset info
+    param_str += f"_{cfg.dataset}"
+
+    # Add learning rate info (formatted to avoid scientific notation)
+    lr_str = f"{cfg.learning_rate:.0e}".replace("e-0", "e-").replace("e+0", "e")
+    param_str += f"_lr{lr_str}"
+
+    return f"{timestamp}_{param_str}"
+
+
 @dataclass
 class TrainConfig:
     """Container for all training-related hyperparameters."""
@@ -51,7 +72,6 @@ class TrainConfig:
     init_from: str = "scratch"
 
     wandb_project: str = "owt"
-    wandb_run_name: str = "gpt2"
 
     dataset: str = "openwebtext"
     gradient_accumulation_steps: int = 5 * 8
@@ -405,7 +425,7 @@ def train(cfg: TrainConfig) -> None:
         try:
             run = wandb.init(
                 project=cfg.wandb_project,
-                name=cfg.wandb_run_name,
+                name=generate_run_name(cfg),
                 config=cfg.__dict__,
                 settings=wandb.Settings(
                     start_method="thread"

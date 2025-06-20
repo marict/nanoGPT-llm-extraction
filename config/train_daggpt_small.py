@@ -1,5 +1,4 @@
 wandb_project = "dag-gpt"
-wandb_run_name = "daggpt-h100-proofpile-1hr"
 
 batch_size = 32
 block_size = 1024

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import torch
 
-from train import estimate_loss
+from train import estimate_loss, generate_run_name
 
 REPO_ROOT = Path(__file__).parent.parent
 
@@ -154,3 +154,90 @@ def test_estimate_loss_with_cuda():
     assert all(isinstance(v, torch.Tensor) for v in losses.values())
     assert all(v.item() == 1.0 for v in losses.values())
     assert model.training  # Model should be back in training mode
+
+
+def test_generate_run_name_edge_cases(monkeypatch):
+    import re
+    from types import SimpleNamespace
+
+    # Patch datetime to return a fixed value for reproducibility
+    class FixedDatetime:
+        @classmethod
+        def now(cls):
+            return cls()
+
+        def strftime(self, fmt):
+            return "2024-01-01_00-00-00"
+
+    monkeypatch.setattr("train.datetime", FixedDatetime)
+
+    # Edge case: zero values
+    cfg = SimpleNamespace(
+        batch_size=0,
+        n_layer=0,
+        n_head=0,
+        n_embd=0,
+        dag_depth=0,
+        dataset="testset",
+        learning_rate=0.0,
+    )
+    name = generate_run_name(cfg)
+    assert name.startswith("2024-01-01_00-00-00_b0_l0_h0_d0_dag0_testset_lr0e0"), name
+
+    # Edge case: negative values
+    cfg = SimpleNamespace(
+        batch_size=-1,
+        n_layer=-2,
+        n_head=-3,
+        n_embd=-4,
+        dag_depth=-5,
+        dataset="negset",
+        learning_rate=-1e-5,
+    )
+    name = generate_run_name(cfg)
+    assert (
+        "b-1_l-2_h-3_d-4" in name
+        and "_dag-5" in name
+        and "negset" in name
+        and "lr-1e-5" in name
+    ), name
+
+    # Edge case: large values
+    cfg = SimpleNamespace(
+        batch_size=10**6,
+        n_layer=512,
+        n_head=256,
+        n_embd=4096,
+        dag_depth=128,
+        dataset="largeset",
+        learning_rate=1e2,
+    )
+    name = generate_run_name(cfg)
+    assert "b1000000_l512_h256_d4096_dag128_largeset_lr1e2" in name, name
+
+    # Edge case: dataset with special characters
+    cfg = SimpleNamespace(
+        batch_size=1,
+        n_layer=1,
+        n_head=1,
+        n_embd=1,
+        dag_depth=1,
+        dataset="weird set!@#",
+        learning_rate=1e-4,
+    )
+    name = generate_run_name(cfg)
+    assert "weird set!@#" in name, name
+
+    # Edge case: learning rate with many decimals
+    cfg = SimpleNamespace(
+        batch_size=2,
+        n_layer=2,
+        n_head=2,
+        n_embd=2,
+        dag_depth=2,
+        dataset="decimals",
+        learning_rate=0.000123456789,
+    )
+    name = generate_run_name(cfg)
+    # Should be in scientific notation
+    assert re.search(r"lr[\d\.-]+e-\d+", name), name

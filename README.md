@@ -111,8 +111,9 @@ can monitor progress.
 ### Viewing Weights & Biases logs
 
 Training always logs to Weights & Biases. ``train.py`` calls ``wandb.init`` with
-``wandb_project`` and ``wandb_run_name`` from the config. The project is created
-if it does not exist or attached to if it already exists.
+¬``wandb_project`` from the config and automatically generates a run name based on
+the current datetime and hyperparameters. The project is created if it does not
+exist or attached to if it already exists.
 
 After initialization, ``train.py`` prints ``W&B run URL: <link>`` where ``<link>``
 is a direct link to the run such as
