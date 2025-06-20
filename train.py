@@ -563,9 +563,9 @@ def train(cfg: TrainConfig) -> None:
             except Exception as e:
                 print(f"Warning: Failed to finish wandb run: {e}")
 
-        # Stop RunPod instance if we're running on RunPod
-        if os.getenv("RUNPOD_POD_ID"):
-            runpod_service.stop_runpod()
+        # # Stop RunPod instance if we're running on RunPod
+        # if os.getenv("RUNPOD_POD_ID"):
+        #     runpod_service.stop_runpod()
 
 
 # --------------------------------------------------------------------------- #
