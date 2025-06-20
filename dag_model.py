@@ -121,7 +121,6 @@ class DifferentiableDAG(nn.Module):
     ):
         attn_hist, op_hist = [], []
         B, _ = embeds_list[0].shape
-        device = embeds_list[0].device
 
         for step in range(self.num_steps):
             # stack existing nodes
