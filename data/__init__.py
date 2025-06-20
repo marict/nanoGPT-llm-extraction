@@ -6,7 +6,7 @@ from .proofpile.prepare import prepare as prepare_proofpile
 from .shakespeare.prepare import prepare as prepare_shakespeare
 
 # Available datasets and their prepare functions
-DATASETS: Dict[str, Callable[[Path], Tuple[int, int]]] = {
+DATASETS: Dict[str, Callable] = {
     "shakespeare": prepare_shakespeare,
     "openwebtext": prepare_openwebtext,
     "proofpile": prepare_proofpile,
@@ -14,13 +14,18 @@ DATASETS: Dict[str, Callable[[Path], Tuple[int, int]]] = {
 
 
 def prepare_dataset(
-    dataset: str, data_dir: Optional[Path] = None, subset: float = 1.0
+    dataset: str,
+    data_dir: Optional[Path] = None,
+    subset: float = 1.0,
+    num_proc: int = 8,
 ) -> Tuple[int, int]:
     """Prepare a dataset for training.
 
     Args:
         dataset: Name of the dataset to prepare
         data_dir: Optional path to prepare the dataset in. If None, uses the dataset's default location.
+        subset: Fraction of each split to keep (0 < subset ≤ 1)
+        num_proc: Number of processes to use for tokenization (only used by openwebtext and proofpile)
 
     Returns:
         Tuple of (train_tokens, val_tokens)
@@ -36,4 +41,8 @@ def prepare_dataset(
     if data_dir is None:
         data_dir = Path("data") / dataset
 
-    return DATASETS[dataset](data_dir, subset)
+    # Shakespeare only takes data_dir and subset, others take num_proc as well
+    if dataset == "shakespeare":
+        return DATASETS[dataset](data_dir, subset)
+    else:
+        return DATASETS[dataset](data_dir, num_proc, subset)
