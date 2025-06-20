@@ -31,7 +31,7 @@ warmup_iters = 2000
 min_lr = 6e-5
 
 dataset = "proofpile"
-subset = 0.00002
+subset = 0.001
 
 backend = "nccl"
 dtype = "bfloat16"
