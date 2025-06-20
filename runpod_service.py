@@ -24,8 +24,11 @@ check_python_version()
 # - NVIDIA RTX A6000
 # - NVIDIA RTX PRO 6000 Blackwell Workstation Edition
 
-DEFAULT_GPU_TYPE = "NVIDIA GeForce RTX 5090"
+# DEFAULT_GPU_TYPE = "NVIDIA GeForce RTX 5090"
 # DEFAULT_GPU_TYPE = "NVIDIA H100 80GB HBM3"
+DEFAULT_GPU_TYPE = (
+    "NVIDIA RTX 6000 Ada Generation"  # What is available in the WA network volume
+)
 REPO_URL = "https://github.com/marict/nanoGPT-llm-extraction.git"
 POD_NAME = "daggpt-train"
 
@@ -143,8 +146,9 @@ def start_cloud_training(
 
     # Create an inline script that clones the repo first, then runs the setup script
     inline_script = (
+        f"apt-get update && apt-get install -y git && "
         f"cd /workspace && "
-        f"( [ -d repo/.git ] && git -C repo pull || git clone {REPO_URL} repo ) && "
+        f"( [ -d repo/.git ] && git -C repo pull || git clone https://github.com/marict/nanoGPT-llm-extraction.git repo ) && "
         f"bash /workspace/repo/scripts/container_setup.sh {train_args}"
     )
     docker_args = f"bash -c '{inline_script}'"
@@ -160,7 +164,7 @@ def start_cloud_training(
         min_memory_in_gb=64,
         volume_in_gb=1000,  # persists across stops
         container_disk_in_gb=1000,  # wiped on stop
-        volume_id="xfv5wps96a",
+        network_volume_id="xfv5wps96a",
         env={
             "WANDB_API_KEY": os.getenv("WANDB_API_KEY", ""),
             "HF_HOME": "/workspace/.cache/huggingface",

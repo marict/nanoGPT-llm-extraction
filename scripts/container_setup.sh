@@ -2,6 +2,9 @@
 # Persist-safe nanoGPT setup and training entry-point
 # Saves logs and checkpoints in /runpod-volume so they survive POD restarts.
 
+set -xe            # prints every command before it runs
+mountpoint -q /runpod-volume || echo "/runpod-volume not mounted"
+
 set -euo pipefail
 exec 2>&1                     # merge stderr into stdout
 
