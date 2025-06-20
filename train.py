@@ -266,7 +266,6 @@ def train(cfg: TrainConfig) -> None:
                 f"[{time.time() - setup_start:.2f}s] Dataset prepared. Train: {train_tokens:,}, Val: {val_tokens:,}"
             )
 
-    meta_start = time.time()
     print(f"[{time.time() - setup_start:.2f}s] Loading meta")
     meta_path = data_dir / "meta.pkl"
     meta_dtype = np.uint16
