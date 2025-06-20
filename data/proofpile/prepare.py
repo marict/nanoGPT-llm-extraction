@@ -46,7 +46,7 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> Tuple[int
     TRAIN_N = 2_035_895
     VAL_N = 46_251
 
-    if pct >= 0.01:  # ≥ 0.01 %
+    if pct >= 1.0:  # huggingface doesn't support < 1%
         train_split = f"train[:{pct:.5f}%]"
         val_split = f"validation[:{pct:.5f}%]"
     else:  # fallback to absolute counts
