@@ -330,9 +330,6 @@ def train(cfg: TrainConfig) -> None:
     else:
         ModelConfig, ModelClass = GPTConfig, GPT
 
-    # Append persistent workspace path to out_dir
-    cfg.out_dir = str(Path("/workspace") / cfg.out_dir)
-
     if cfg.init_from == "scratch":
         if master_process:
             print(f"[{time.time() - setup_start:.2f}s] Initializing model from scratch")
@@ -598,6 +595,8 @@ def main() -> None:
     apply_overrides(cfg, overrides)
     if args.dag_depth is not None:
         cfg.dag_depth = args.dag_depth
+    # Append persistent workspace path to out_dir
+    cfg.out_dir = str(Path("/runpod-volume") / cfg.out_dir)
     print(
         f"[{time.time() - main_start:.2f}s] Configuration setup completed in {time.time() - config_start:.2f}s"
     )

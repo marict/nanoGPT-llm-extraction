@@ -24,8 +24,8 @@ check_python_version()
 # - NVIDIA RTX A6000
 # - NVIDIA RTX PRO 6000 Blackwell Workstation Edition
 
-# DEFAULT_GPU_TYPE = "NVIDIA GeForce RTX 5090"
-DEFAULT_GPU_TYPE = "NVIDIA H100 80GB HBM3"
+DEFAULT_GPU_TYPE = "NVIDIA GeForce RTX 5090"
+# DEFAULT_GPU_TYPE = "NVIDIA H100 80GB HBM3"
 REPO_URL = "https://github.com/marict/nanoGPT-llm-extraction.git"
 POD_NAME = "daggpt-train"
 
@@ -160,6 +160,7 @@ def start_cloud_training(
         min_memory_in_gb=64,
         volume_in_gb=1000,  # persists across stops
         container_disk_in_gb=1000,  # wiped on stop
+        volume_id="xfv5wps96a",
         env={
             "WANDB_API_KEY": os.getenv("WANDB_API_KEY", ""),
             "HF_HOME": "/workspace/.cache/huggingface",
