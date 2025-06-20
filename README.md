@@ -1,122 +1,120 @@
-# nanoGPT DAG Experiment
 
-This repository adds a differentiable DAG layer to [nanoGPT](https://github.com/karpathy/nanoGPT)
-for lightweight numeric reasoning. The DAG controller attends over earlier nodes
-and selects simple arithmetic operations (see `dag_model.py`). `DAGGPT` keeps a
-copy of the input embeddings for the DAG stream and mixes the resulting value
-back with the transformer state before decoding the final token.
-The module implements basic ops (`add`, `multiply`, `subtract`, `divide`, `identity`,
-`power`, `log`, `max`, `min`) and learns to compose them via attention.
-The experiment evaluates whether this reasoning layer improves performance on small arithmetic problems.
+# nanoGPT-DAG ✧ _lightweight numeric reasoning for tiny GPTs_
 
-## Architecture
+This fork drops a **differentiable directed-acyclic-graph (DAG) module** on top of
+[nanoGPT](https://github.com/karpathy/nanoGPT).  
+The goal is to give a very small language model a dedicated sub-network that can
+**read numbers out of text, perform a few arithmetic steps, then fold the
+result back into the token stream**.
 
-The figure below illustrates how the differentiable DAG layer plugs into the regular GPT pipeline. After the final layer
-normalization, the model splits into three branches. One path "snaps" each token to a numeric value used to seed a
-differentiable DAG. Two additional attention blocks derive operand and operation context vectors from the same hidden
-states. The DAG uses these contexts to choose its inputs and operations. Its final node is passed through a small
-transformer block to return to the semantic space before a gating layer mixes this result with the transformer state prior
-to decoding the final token.
+---
+
+## How it works — one-paragraph version
+
+1. **Plain GPT** runs as usual up to the final layer-norm.  
+2. Those hidden states are **split three ways**  
+
+   | branch | job |
+   |--------|-----|
+   | *node-embed block* | turn each token hidden state into a richer **embedding** that will live in the DAG |
+   | *value extractor*  | attend over that embedding and spit out a **scalar value** (trying to recover the number the token represents, if any) |
+   | *operand / op ctx blocks* | compress the sequence into two context vectors that will help the DAG choose its inputs and operations |
+
+3. The **DAG controller** repeatedly  
+   * attends over previous nodes (embeddings *and* values),  
+   * picks two of them and an operation (`+ × − ÷ log pow max min identity`),  
+   * creates a new node (new value + new embedding) and appends it.
+
+4. After *k* steps we project **all DAG values back to embeddings**, do one
+   self-attention + mean-pool, clean it with a tiny transformer block, and get a
+   single vector `dag_sem`.
+
+5. A learned **gate** mixes `dag_sem` with the last token’s hidden state, then
+   the usual `lm_head` produces logits.
+
+---
+
+## Architecture diagram
 
 ```mermaid
 flowchart TD
-    A["Input Tokens<br/>(B, T)"] --> B["Embedding<br/>(B, T, d)"]
-    B --> C["Add Position Embeddings<br/>(B, T, d)"]
-    C --> D["Transformer Blocks<br/>(B, T, d)"]
-    D --> E["LayerNorm<br/>(B, T, d)"]
-    E --> F["Snap Block<br/>(B, T, d)"]
-    F --> G["Token Attention<br/>(B, T, d)"]
-    G --> H["Project to float & round<br/>out: (B, T)"]
-    H --> I["Initial DAG Nodes<br/>(B, T, d)"]
-    E --> O["Operand Attention<br/>out: (B, d)"]
-    E --> P["Operation Attention<br/>out: (B, d)"]
-    I --> J["Differentiable DAG<br/>out: (B, T + depth, d)"]
-    O --> J
-    P --> J
-    J --> K["Post-DAG Block<br/>(B, d)"]
-    E --> L["Gate<br/>(B, d) → (B, T, d)"]
-    K --> L
-    L --> M["LM Head<br/>out: (B, T, V)"]
+    A["Input tokens  (B × T)"] --> B["Token ⨁ Pos embed  (B × T × H)"]
+    B --> C["GPT blocks"]
+    C --> D["Node-embed block  ▶  node_embeds (B × T × H)"]
+    D --> E["Value extractor  ▶  values (B × T)"]
+    C --> F["Operand-ctx block  ▶  (B × H)"]
+    C --> G["Op-ctx block       ▶  (B × H)"]
+
+    subgraph DAG
+        D --> H["Initial DAG nodes<br>(embeds & values)"]
+        H --> I["DAG controller +k steps"]
+        F --> I
+        G --> I
+    end
+
+    I --> J["Scalar→Embed proj"]
+    J --> K["Value self-attn + pool  ▶  (B × H)"]
+    K --> L["Post-DAG block  ▶ dag_sem"]
+
+    C --> M["Gate (sigmoid)"]
+    L --> M
+    M --> N["LM head  ▶  logits (B × T × |V|)"]
 ```
 
-## Installation
+---
+
+## Install
 
 ```bash
 pip install -r requirements-dev.txt
 ```
 
-## Training
+---
 
-Run a toy training job on CPU using the default configuration:
+## Quick run (CPU toy)
 
 ```bash
 python train.py config/train_default.py --dag_depth=4
 ```
 
-Any option in `TrainConfig` can be overridden on the command line, e.g.
-`--max_iters=100` or `--batch_size=4`.
+Any field in `TrainConfig` can be overridden, e.g.
+`--batch_size=4 --max_iters=100`.
 
-## Testing
+---
+
+## Tests
 
 ```bash
 pytest
 ```
 
-The tests cover the DAG logic and the training script.
+Tests cover:
 
-## Benchmark
+* arithmetic op helpers  
+* DAG growth & gradients  
+* `extra_vals()` diagnostic hook  
+* training-loop integration.
 
-```bash
-python bench.py
-```
+---
 
-This benchmarks a minimal model forward and backward pass.
-
-## RunPod
-
-Set up a virtual environment and install the dependencies:
+## Cloud training on RunPod
 
 ```bash
-python3 -m venv env
-source env/bin/activate
+python3 -m venv env && source env/bin/activate
 pip install requests runpod
+export RUNPOD_API_KEY=<your_key>      # RunPod
+export WANDB_API_KEY=<your_wandb_key> # Weights & Biases
+python runpod_service.py train config/train_default.py --gpu-type "NVIDIA A100-40GB"
 ```
 
-Launch training in the cloud using your API and SSH key. The helper script now
-opens an SSH session and runs the training command interactively so you can
-watch the logs directly:
+The helper prints the pod-id, GPU type and a direct W&B link so you can watch
+loss curves live.
 
-```bash
-export RUNPOD_API_KEY=YOUR_KEY
-python runpod_service.py train config/train_default.py --gpu-type "NVIDIA A100-SXM4-40GB"
-```
+---
 
-Training requires Weights & Biases. Authenticate by setting your
-``WANDB_API_KEY``:
+## Why learn the number extractor?
 
-```bash
-export RUNPOD_API_KEY=YOUR_KEY
-export WANDB_API_KEY=YOUR_WANDB_KEY
-python runpod_service.py train config/train_daggpt_lambda.py
-```
-The helper will report the pod id, GPU type and a link to your W&B run so you
-can monitor progress.
-
-### Troubleshooting tips
-
-* **Authentication errors** – confirm the ``RUNPOD_API_KEY`` is valid.
-* **Storage full** – check disk usage with ``df -h`` and remove large files.
-* **Leaked API keys** – revoke the compromised key from the console.
-
-### Viewing Weights & Biases logs
-
-Training always logs to Weights & Biases. ``train.py`` calls ``wandb.init`` with
-¬``wandb_project`` from the config and automatically generates a run name based on
-the current datetime and hyperparameters. The project is created if it does not
-exist or attached to if it already exists.
-
-After initialization, ``train.py`` prints ``W&B run URL: <link>`` where ``<link>``
-is a direct link to the run such as
-``https://wandb.ai/<user>/<project>/runs/<run-id>``. Open this address in your
-browser to monitor metrics, loss curves and system stats live. You can also find
-the run from your dashboard at ``https://wandb.ai``.
+* **Multi-token numerals** – “12 345” is often `Ġ12`, `Ġ34`, `Ġ5`.  
+* **Context disambiguation** – “route 66” ≠ numeric `66`.  
+* **Unit scaling** – learn that “3 k” ⇒ `3000`.  
+* **End-to-end gradients** – the extractor and embeddings co-adapt.
