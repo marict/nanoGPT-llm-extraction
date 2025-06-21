@@ -467,7 +467,7 @@ def train(cfg: TrainConfig) -> None:
             for pg in optimizer.param_groups:
                 pg["lr"] = lr
 
-            if iter_num % cfg.eval_interval == 0 and master_process:
+            if iter_num % cfg.eval_interval == 0 and iter_num > 0 and master_process:
                 try:
                     losses = estimate_loss(model, cfg.eval_iters, get_batch, ctx)
                     eval_extra = model.extra_vals()

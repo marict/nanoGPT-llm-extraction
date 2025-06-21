@@ -15,9 +15,10 @@ weight_decay = 1e-1
 
 dag_depth = 8
 
+# n_embed must be divisible by n_head
 n_layer = 24
-n_head = 32
-n_embd = 2048
+n_head = 16
+n_embd = 1024
 dropout = 0.1
 bias = True
 
