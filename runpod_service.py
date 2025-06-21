@@ -26,9 +26,10 @@ check_python_version()
 
 # DEFAULT_GPU_TYPE = "NVIDIA GeForce RTX 5090"
 # DEFAULT_GPU_TYPE = "NVIDIA H100 80GB HBM3"
-DEFAULT_GPU_TYPE = (
-    "NVIDIA RTX 6000 Ada Generation"  # What is available in the WA network volume
-)
+# DEFAULT_GPU_TYPE = (
+#     "NVIDIA RTX 6000 Ada Generation"  # What is available in the WA network volume
+# )
+DEFAULT_GPU_TYPE = "NVIDIA A100-SXM4-80GB"
 REPO_URL = "https://github.com/marict/nanoGPT-llm-extraction.git"
 POD_NAME = "daggpt-train"
 
