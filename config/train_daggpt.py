@@ -1,4 +1,4 @@
-wandb_project = "dag-gpt-2"
+wandb_project = "dag-gpt-train-daggpt"
 
 batch_size = 16
 block_size = 1024
