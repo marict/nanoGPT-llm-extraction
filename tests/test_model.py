@@ -77,6 +77,29 @@ def test_extra_vals_gpt():
     """Test that GPT's extra_vals returns an empty dict."""
     config = GPTConfig(n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100)
     model = GPT(config)
+
+    # Test that extra_vals returns empty dict before any forward pass
     extra_vals = model.extra_vals()
     assert isinstance(extra_vals, dict)
     assert len(extra_vals) == 0
+
+    # Test that extra_vals still returns empty dict after forward pass
+    x = torch.randint(0, config.vocab_size, (2, 8))
+    model(x)
+    extra_vals_after_forward = model.extra_vals()
+    assert isinstance(extra_vals_after_forward, dict)
+    assert len(extra_vals_after_forward) == 0
+
+
+def test_extra_vals_consistency():
+    """Test that extra_vals always returns the same structure."""
+    config = GPTConfig(n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100)
+    model = GPT(config)
+
+    # Call extra_vals multiple times and ensure consistency
+    extra_vals_1 = model.extra_vals()
+    extra_vals_2 = model.extra_vals()
+
+    assert extra_vals_1 == extra_vals_2
+    assert type(extra_vals_1) == type(extra_vals_2)
+    assert len(extra_vals_1) == len(extra_vals_2)

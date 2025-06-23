@@ -119,7 +119,7 @@ def test_dag_initial_nodes_all_tokens(monkeypatch):
     )
     model = DAGGPT(cfg)
 
-    # --- stub value-extractor so each token’s value == 3 -------------
+    # --- stub value-extractor so each token's value == 3 -------------
     class DummyVal(nn.Module):
         def forward(self, x):  # x : (B,T,H)
             return torch.full((x.size(0), x.size(1)), 3.0, device=x.device)
@@ -255,22 +255,213 @@ def test_daggpt_config_creation():
 # extra-vals entropy / grad check  (robust to dimensionality)
 # ---------------------------------------------------------------------
 def test_extra_vals_daggpt():
+    """Test DAGGPT's extra_vals returns entropy and gradient information."""
     cfg = DAGGPTConfig(
         n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=2
     )
     model = DAGGPT(cfg)
 
+    # Test that extra_vals returns empty dict before any forward pass
+    extra_before = model.extra_vals()
+    assert isinstance(extra_before, dict)
+    assert len(extra_before) == 0
+
+    # Forward pass to populate activations
+    x = torch.randint(0, cfg.vocab_size, (2, 8))
+    y = torch.randint(0, cfg.vocab_size, (2, 8))
+    _, loss = model(x, y)
+
+    # Test extra_vals after forward pass but before backward pass
+    extra_after_forward = model.extra_vals()
+    assert isinstance(extra_after_forward, dict)
+
+    # Should have entropy keys but no gradient keys yet
+    entropy_keys = [k for k in extra_after_forward if k.startswith("dag_entropy/")]
+    grad_keys = [k for k in extra_after_forward if k.startswith("dag_grad/")]
+
+    assert len(entropy_keys) > 0, "Expected entropy keys after forward pass"
+    assert len(grad_keys) == 0, "Expected no gradient keys before backward pass"
+
+    # Verify entropy values are reasonable
+    for k in entropy_keys:
+        assert isinstance(
+            extra_after_forward[k], float
+        ), f"Entropy value {k} is not a float"
+        assert extra_after_forward[k] >= 0, f"Entropy value {k} is negative"
+        assert not torch.isnan(
+            torch.tensor(extra_after_forward[k])
+        ), f"Entropy value {k} is NaN"
+
+    # Backward pass to populate gradients
+    loss.sum().backward()
+
+    # Test extra_vals after backward pass
+    extra_after_backward = model.extra_vals()
+
+    # Should have both entropy and gradient keys
+    entropy_keys_after = [
+        k for k in extra_after_backward if k.startswith("dag_entropy/")
+    ]
+    grad_keys_after = [k for k in extra_after_backward if k.startswith("dag_grad/")]
+
+    assert len(entropy_keys_after) > 0, "Expected entropy keys after backward pass"
+    assert len(grad_keys_after) > 0, "Expected gradient keys after backward pass"
+
+    # Verify all values are reasonable
+    for k in entropy_keys_after + grad_keys_after:
+        assert isinstance(
+            extra_after_backward[k], float
+        ), f"Extra value {k} is not a float"
+        assert not torch.isnan(
+            torch.tensor(extra_after_backward[k])
+        ), f"Extra value {k} is NaN"
+
+        # Only entropy values should be non-negative, gradients can be negative
+        if k.startswith("dag_entropy/"):
+            assert extra_after_backward[k] >= 0, f"Entropy value {k} is negative"
+
+
+def test_extra_vals_consistency_daggpt():
+    """Test that DAGGPT's extra_vals returns consistent structure across calls."""
+    cfg = DAGGPTConfig(
+        n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=2
+    )
+    model = DAGGPT(cfg)
+
+    # Forward and backward pass
     x = torch.randint(0, cfg.vocab_size, (2, 8))
     y = torch.randint(0, cfg.vocab_size, (2, 8))
     _, loss = model(x, y)
     loss.sum().backward()
 
-    extra = model.extra_vals()
+    # Call extra_vals multiple times
+    extra_vals_1 = model.extra_vals()
+    extra_vals_2 = model.extra_vals()
 
-    # entropy & grad keys exist
-    entropy_keys = [k for k in extra if k.startswith("dag_entropy/")]
-    grad_keys = [k for k in extra if k.startswith("dag_grad/")]
-    assert entropy_keys and grad_keys, "Expected entropy and grad keys"
-    for k in entropy_keys + grad_keys:
-        assert isinstance(extra[k], float), "Extra value %s is not a float" % k
-        assert extra[k] >= 0, "Extra value %s is negative" % k
+    # Should be identical
+    assert extra_vals_1.keys() == extra_vals_2.keys()
+    for k in extra_vals_1.keys():
+        assert extra_vals_1[k] == extra_vals_2[k], f"Inconsistent value for key {k}"
+
+
+def test_hook_behavior():
+    """Test that gradient hooks are properly registered and capture gradients."""
+    cfg = DAGGPTConfig(
+        n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=2
+    )
+    model = DAGGPT(cfg)
+
+    # Ensure dag_grads is initially empty
+    assert not hasattr(model, "dag_grads") or len(model.dag_grads) == 0
+
+    # Forward pass
+    x = torch.randint(0, cfg.vocab_size, (2, 8))
+    y = torch.randint(0, cfg.vocab_size, (2, 8))
+    _, loss = model(x, y)
+
+    # Check that last_activations are populated
+    assert hasattr(model, "last_activations")
+    assert len(model.last_activations) > 0
+
+    # Check that dag_grads dict exists but is still empty (no backward pass yet)
+    assert hasattr(model, "dag_grads")
+    assert len(model.dag_grads) == 0
+
+    # Verify hooks are registered by checking tensors require grad
+    for name, tensor in model.last_activations.items():
+        if tensor.requires_grad:
+            # Tensor should have a hook registered (we can't directly test this,
+            # but we can verify the tensor requires grad)
+            assert (
+                tensor.requires_grad
+            ), f"Tensor {name} should require grad for hook registration"
+
+    # Backward pass should trigger hooks
+    loss.sum().backward()
+
+    # Now dag_grads should be populated
+    assert len(model.dag_grads) > 0, "dag_grads should be populated after backward pass"
+
+    # Verify gradient values are reasonable
+    for name, grad_val in model.dag_grads.items():
+        assert isinstance(grad_val, float), f"Gradient {name} is not a float"
+        assert not torch.isnan(torch.tensor(grad_val)), f"Gradient {name} is NaN"
+
+
+def test_hook_behavior_multiple_backward_passes():
+    """Test that hooks work correctly across multiple backward passes."""
+    cfg = DAGGPTConfig(
+        n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=2
+    )
+    model = DAGGPT(cfg)
+
+    # First forward and backward pass
+    x1 = torch.randint(0, cfg.vocab_size, (2, 8))
+    y1 = torch.randint(0, cfg.vocab_size, (2, 8))
+    _, loss1 = model(x1, y1)
+    loss1.sum().backward()
+
+    first_grads = model.dag_grads.copy()
+    assert len(first_grads) > 0
+
+    # Clear gradients and do a second forward pass with same data
+    model.zero_grad()
+    _, loss2 = model(x1, y1)
+    loss2.sum().backward()
+
+    second_grads = model.dag_grads.copy()
+    assert len(second_grads) > 0
+
+    # With same inputs, gradients should be identical (or very close)
+    assert first_grads.keys() == second_grads.keys()
+    for k in first_grads.keys():
+        assert (
+            abs(first_grads[k] - second_grads[k]) < 1e-5
+        ), f"Gradient {k} differs too much between identical passes"
+
+    # Now test with different data to ensure hooks can capture different gradients
+    x3 = torch.ones_like(x1) * (cfg.vocab_size - 1)  # Very different input
+    y3 = torch.zeros_like(y1)  # Very different target
+    model.zero_grad()
+    _, loss3 = model(x3, y3)
+    loss3.sum().backward()
+
+    third_grads = model.dag_grads.copy()
+    assert len(third_grads) > 0
+
+    # Verify that the hooks are still working by checking gradients exist
+    assert third_grads.keys() == first_grads.keys()
+    for k in third_grads.keys():
+        assert isinstance(third_grads[k], float)
+        assert not torch.isnan(torch.tensor(third_grads[k]))
+
+
+def test_hook_behavior_no_grad_context():
+    """Test that hooks don't interfere when in no_grad context."""
+    cfg = DAGGPTConfig(
+        n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=2
+    )
+    model = DAGGPT(cfg)
+
+    # Forward pass in no_grad context
+    with torch.no_grad():
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss = model(x)
+
+        # Should still have last_activations
+        assert hasattr(model, "last_activations")
+        assert len(model.last_activations) > 0
+
+        # dag_grads should exist but be empty
+        assert hasattr(model, "dag_grads")
+        assert len(model.dag_grads) == 0
+
+        # extra_vals should work and return entropy values
+        extra = model.extra_vals()
+        entropy_keys = [k for k in extra if k.startswith("dag_entropy/")]
+        grad_keys = [k for k in extra if k.startswith("dag_grad/")]
+
+        assert (
+            len(entropy_keys) > 0
+        ), "Should have entropy values even in no_grad context"
+        assert len(grad_keys) == 0, "Should have no gradient values in no_grad context"

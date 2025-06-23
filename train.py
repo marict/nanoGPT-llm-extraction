@@ -479,7 +479,6 @@ def train(cfg: TrainConfig) -> None:
                         try:
                             wandb.log(
                                 {
-                                    "step": iter_num,
                                     "iter": iter_num,
                                     "train/loss": losses["train"],
                                     "val/loss": losses["val"],
@@ -487,6 +486,7 @@ def train(cfg: TrainConfig) -> None:
                                     "mfu": running_mfu * 100,
                                     **eval_extra,
                                 },
+                                step=iter_num,
                                 commit=False,
                             )
                         except Exception as e:
@@ -544,7 +544,7 @@ def train(cfg: TrainConfig) -> None:
                     and run is not None
                 ):
                     wandb.log(
-                        {"step": iter_num, "iter": iter_num, **extra_vals}, commit=True
+                        {"iter": iter_num, **extra_vals}, step=iter_num, commit=True
                     )
                     lossf = loss.item() * cfg.gradient_accumulation_steps
                     if iter_num >= 5:

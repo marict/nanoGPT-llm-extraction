@@ -292,14 +292,23 @@ class DAGGPT(GPT):
 
         # ── keep a few salient activations for diagnostics ──────────────
         self.last_activations = {
-            "node_embeds": node_embeds,  # (B , T , H)
-            "value_proj": value_proj,  # (B , N , H)
-            "operand_ctx": operand_ctx,  # (B , H)
-            "op_ctx": op_ctx,  # (B , H)
+            "node_embeds": node_embeds,
+            "value_proj": value_proj,
+            "operand_ctx": operand_ctx,
+            "op_ctx": op_ctx,
         }
-        for t in self.last_activations.values():
+
+        # Prepare gradients dict
+        self.dag_grads = {}
+
+        # Register hooks to capture gradients after backward
+        for name, t in self.last_activations.items():
             if t.requires_grad:
-                t.retain_grad()
+
+                def save_grad(grad, n=name):
+                    self.dag_grads[n] = grad.detach().mean().item()
+
+                t.register_hook(save_grad)
 
         logits = self.lm_head(hidden)
         loss = None
@@ -323,20 +332,19 @@ class DAGGPT(GPT):
     # extra_vals helper (unchanged – still works on stored activations)
     # -----------------------------------------------------------------
     def extra_vals(self) -> dict[str, float]:
-        if not hasattr(self, "last_activations"):
-            return {}
-
         out = {}
+
+        # Handle case where forward pass hasn't been called yet
+        if not hasattr(self, "last_activations"):
+            return out
+
         for name, act in self.last_activations.items():
-            # Entropy (no_grad for safety)
             with torch.no_grad():
                 prob = torch.softmax(act, dim=-1)
                 ent = -(prob * (prob + 1e-8).log()).sum(-1).mean()
                 out[f"dag_entropy/{name}"] = ent.item()
-
-            # Gradients
-            g = act.grad
-            if g is not None:
-                out[f"dag_grad/{name}"] = g.detach().abs().mean().item()
-
+            if hasattr(self, "dag_grads") and name in self.dag_grads:
+                out[f"dag_grad/{name}"] = self.dag_grads[name]
+            else:
+                out[f"dag_grad/{name}"] = -1  # Error signal
         return out
