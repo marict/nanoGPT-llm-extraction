@@ -26,6 +26,7 @@ import torch
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
+import run_math_eval
 import runpod_service
 from dag_model import DAGGPT, DAGGPTConfig
 from model import GPT, GPTConfig
@@ -74,6 +75,15 @@ class TrainConfig:
     eval_only: bool = False
     always_save_checkpoint: bool = True
     init_from: str = "scratch"
+
+    # Math evaluation settings
+    eval_math: bool = True  # Whether to run math evaluation during training
+    math_eval_tasks: List[str] = None  # Math tasks to evaluate (default: ["gsm8k"])
+    math_eval_max_examples: int = 50  # Max examples per math task during training
+
+    def __post_init__(self):
+        if self.math_eval_tasks is None:
+            self.math_eval_tasks = ["gsm8k", "svamp"]
 
     wandb_project: str = "owt"
 
@@ -192,6 +202,26 @@ def estimate_loss(
         out[split] = losses.mean()
     model.train()
     return out
+
+
+def evaluate_math(
+    model: torch.nn.Module, device: str, tasks: List[str] = None, max_examples: int = 50
+) -> Dict[str, float]:
+    """Run math evaluation during training."""
+    if tasks is None:
+        tasks = ["gsm8k", "svamp"]  # Default to both GSM8K and SVAMP during training
+
+    try:
+        print(
+            f"Running math evaluation on {tasks} (max {max_examples} examples each)..."
+        )
+        scores = run_math_eval.run_eval(
+            model, device, tasks=tasks, max_examples=max_examples
+        )
+        return scores
+    except Exception as e:
+        print(f"Warning: Math evaluation failed: {e}")
+        return {task: -1.0 for task in tasks}
 
 
 # --------------------------------------------------------------------------- #
@@ -471,24 +501,45 @@ def train(cfg: TrainConfig) -> None:
                 try:
                     losses = estimate_loss(model, cfg.eval_iters, get_batch, ctx)
                     eval_extra = model.extra_vals()
+
+                    # Run math evaluation if enabled
+                    math_scores = {}
+                    if cfg.eval_math:
+                        math_scores = evaluate_math(
+                            model,
+                            device,
+                            tasks=cfg.math_eval_tasks,
+                            max_examples=cfg.math_eval_max_examples,
+                        )
+
                     print(
                         f"step {iter_num}: train {losses['train']:.4f}, val {losses['val']:.4f}"
                     )
+                    if math_scores:
+                        math_str = ", ".join(
+                            [
+                                f"{task}: {score:.4f}"
+                                for task, score in math_scores.items()
+                            ]
+                        )
+                        print(f"math eval: {math_str}")
+
                     # Log everything to wandb if available
                     if run is not None:
                         try:
-                            wandb.log(
-                                {
-                                    "iter": iter_num,
-                                    "train/loss": losses["train"],
-                                    "val/loss": losses["val"],
-                                    "lr": lr,
-                                    "mfu": running_mfu * 100,
-                                    **eval_extra,
-                                },
-                                step=iter_num,
-                                commit=False,
-                            )
+                            log_dict = {
+                                "iter": iter_num,
+                                "train/loss": losses["train"],
+                                "val/loss": losses["val"],
+                                "lr": lr,
+                                "mfu": running_mfu * 100,
+                                **eval_extra,
+                            }
+                            # Add math evaluation scores
+                            for task, score in math_scores.items():
+                                log_dict[f"math_eval/{task}"] = score
+
+                            wandb.log(log_dict, step=iter_num, commit=False)
                         except Exception as e:
                             print(f"Warning: Failed to log to wandb: {e}")
 

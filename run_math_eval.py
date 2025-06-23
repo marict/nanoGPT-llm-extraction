@@ -27,6 +27,7 @@ def _make_prompt(task: str, ex: dict) -> str:
     if task == "gsm8k":
         return f"{ex['question'].strip()}\nAnswer:"
     if task == "svamp":
+        # ChilleD/SVAMP dataset format uses 'Body' and 'Question' fields
         return f"{ex['Body'].strip()} {ex['Question'].strip()}\nAnswer:"
     raise ValueError(f"Unsupported task {task}")
 
@@ -35,6 +36,7 @@ def _gold_answer(task: str, ex: dict) -> str:
     if task == "gsm8k":
         return ex["answer"].split("####")[-1].strip()
     if task == "svamp":
+        # ChilleD/SVAMP dataset format uses 'Answer' field
         return str(ex["Answer"]).strip()
     raise ValueError(f"Unsupported task {task}")
 
@@ -44,7 +46,8 @@ def _load_dataset(task: str, split: str = "test"):
     if task == "gsm8k":
         return datasets.load_dataset("gsm8k", "main", split=split)
     elif task == "svamp":
-        return datasets.load_dataset("svamp", split=split)
+        # Use the correct SVAMP dataset from Hugging Face
+        return datasets.load_dataset("ChilleD/SVAMP", split=split)
     else:
         raise ValueError(f"Unsupported task {task}")
 
@@ -127,6 +130,7 @@ def run_eval(
                 ds = ds.select(range(min(max_examples, len(ds))))
 
             correct = 0
+            failed_examples = False
             for ex in tqdm(ds, desc=f"eval:{task}", leave=False):
                 try:
                     prompt = _make_prompt(task, ex)
@@ -144,13 +148,18 @@ def run_eval(
                     correct += int(prediction == gold)
                 except Exception as e:
                     print(f"Warning: Error processing example in {task}: {e}")
+                    failed_examples = True
                     # Continue with next example
                     continue
 
-            scores[task] = correct / len(ds) if len(ds) > 0 else 0.0
+            # If any examples failed, return -1.0 to signal evaluation issues
+            if failed_examples:
+                scores[task] = -1.0
+            else:
+                scores[task] = correct / len(ds) if len(ds) > 0 else 0.0
         except Exception as e:
             print(f"Error evaluating task {task}: {e}")
-            scores[task] = 0.0
+            scores[task] = -1.0
 
     model.train()
     return scores

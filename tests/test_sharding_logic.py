@@ -7,12 +7,13 @@ from unittest.mock import MagicMock
 import numpy as np
 
 
+def calculate_total_batches(dataset_size):
+    """Replicate the adaptive batching logic from prepare functions."""
+    return min(1024, max(1, dataset_size // 100))
+
+
 def test_adaptive_sharding_logic():
     """Test the adaptive sharding logic with different dataset sizes."""
-
-    def calculate_total_batches(dataset_size):
-        """Replicate the adaptive batching logic from prepare functions."""
-        return min(1024, max(1, dataset_size // 100))
 
     # Test cases: (dataset_size, expected_batches)
     test_cases = [
@@ -95,9 +96,6 @@ def test_sharding_with_large_dataset():
 def test_sharding_edge_cases():
     """Test edge cases in the sharding logic."""
 
-    def calculate_total_batches(dataset_size):
-        return min(1024, max(1, dataset_size // 100))
-
     # Test edge cases
     edge_cases = [
         (0, 1),  # Zero size dataset - should default to 1 batch
@@ -117,9 +115,6 @@ def test_sharding_edge_cases():
 
 def test_sharding_consistency():
     """Test that the sharding logic is consistent across different dataset sizes."""
-
-    def calculate_total_batches(dataset_size):
-        return min(1024, max(1, dataset_size // 100))
 
     # Test that the function is monotonic (larger datasets get more or equal batches)
     sizes = [1, 50, 100, 500, 1000, 5000, 10000, 50000, 100000, 200000]

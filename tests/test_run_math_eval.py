@@ -93,9 +93,9 @@ class TestRunMathEval(TestCase):
         mock_load.assert_called_with("gsm8k", "main", split="test")
         self.assertEqual(result, mock_dataset)
 
-        # Test SVAMP dataset loading
+        # Test SVAMP dataset loading with correct dataset name
         result = run_math_eval._load_dataset("svamp")
-        mock_load.assert_called_with("svamp", split="test")
+        mock_load.assert_called_with("ChilleD/SVAMP", split="test")
         self.assertEqual(result, mock_dataset)
 
         # Test unsupported task
@@ -248,8 +248,8 @@ class TestRunMathEval(TestCase):
         model = DummyModel()
         scores = run_math_eval.run_eval(model, device="cpu", tasks=["gsm8k"])
 
-        # Should return 0.0 for failed tasks
-        self.assertEqual(scores["gsm8k"], 0.0)
+        # Should return -1.0 for failed tasks
+        self.assertEqual(scores["gsm8k"], -1.0)
 
     @mock.patch("run_math_eval._load_dataset")
     def test_run_eval_processing_error(self, mock_load_ds):
@@ -273,7 +273,7 @@ class TestRunMathEval(TestCase):
         scores = run_math_eval.run_eval(model, device="cpu", tasks=["gsm8k"])
 
         # Should handle error gracefully
-        self.assertEqual(scores["gsm8k"], 0.0)
+        self.assertEqual(scores["gsm8k"], -1.0)
 
     def test_run_eval_default_tasks(self):
         """Test that default tasks are used when none specified."""
