@@ -48,6 +48,28 @@ def min_op(x, y):
 
 
 op_funcs = [add, identity, multiply, subtract, divide, power, log, max_op, min_op]
+op_names = [
+    "add",
+    "identity",
+    "multiply",
+    "subtract",
+    "divide",
+    "power",
+    "log",
+    "max",
+    "min",
+]
+
+
+def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
+    # choose a head-room margin so exp(max_val) is still finite
+    if logits.dtype == torch.float16:
+        max_val = 8.0  # exp(8)  ≈ 2981  fits in fp16
+    elif logits.dtype == torch.bfloat16:
+        max_val = 20.0  # exp(20) ≈ 4.85e8 fits in bf16
+    else:  # float32 or higher
+        max_val = 40.0  # exp(40) ≈ 2.35e17 fits in fp32
+    return logits.clamp(-max_val, max_val)
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +87,7 @@ class DAGController(nn.Module):
 
         self.last_attn: torch.Tensor | None = None
         self.last_op_weights: torch.Tensor | None = None
+        self.last_op_logits: torch.Tensor | None = None
 
     def forward(
         self, embeds: torch.Tensor, operand_ctx: torch.Tensor, op_ctx: torch.Tensor
@@ -80,8 +103,8 @@ class DAGController(nn.Module):
         att2 = torch.einsum("bnh,bh->bn", keys, q2) / (embeds.size(-1) ** 0.5)
 
         # Clamp extreme logits for numerical stability
-        att1 = torch.clamp(att1, min=-10.0, max=10.0)
-        att2 = torch.clamp(att2, min=-10.0, max=10.0)
+        att1 = safe_clamp(att1)
+        att2 = safe_clamp(att2)
 
         # Use Gumbel softmax for discrete operand selection
         attn1 = F.gumbel_softmax(
@@ -99,7 +122,7 @@ class DAGController(nn.Module):
         op_logits = self.op_selector(op_ctx_vec)
 
         # Clamp extreme logits for numerical stability
-        op_logits = torch.clamp(op_logits, min=-10.0, max=10.0)
+        op_logits = safe_clamp(op_logits)
 
         # Use Gumbel softmax for discrete operation selection
         op_weights = F.gumbel_softmax(
@@ -108,6 +131,11 @@ class DAGController(nn.Module):
 
         self.last_attn = attn1.detach()
         self.last_op_weights = op_weights.detach()
+        self.last_op_logits = op_logits.detach()
+
+        # Store the tensor with gradients for gradient tracking
+        self.last_op_logits_with_grad = op_logits
+
         return attn1, attn2, op_weights  # return just the *distributions*
 
 
@@ -325,6 +353,7 @@ class DAGGPT(GPT):
             "value_proj": value_proj,
             "operand_ctx": operand_ctx,
             "op_ctx": op_ctx,
+            "op_logits": self.dag.controller.last_op_logits,
         }
 
         # Prepare gradients dict
@@ -332,12 +361,31 @@ class DAGGPT(GPT):
 
         # Register hooks to capture gradients after backward
         for name, t in self.last_activations.items():
-            if t.requires_grad:
+            if t is not None and t.requires_grad:
 
                 def save_grad(grad, n=name):
                     self.dag_grads[n] = grad.detach().mean().item()
 
                 t.register_hook(save_grad)
+
+        # Special handling for op_logits gradients - ensure we capture them
+        if (
+            hasattr(self.dag.controller, "last_op_logits_with_grad")
+            and self.dag.controller.last_op_logits_with_grad is not None
+            and self.dag.controller.last_op_logits_with_grad.requires_grad
+        ):
+            # Store reference to capture gradients later
+            self._op_logits_tensor = self.dag.controller.last_op_logits_with_grad
+
+            def save_op_grad(grad):
+                # Save both mean and per-operation gradients
+                self.dag_grads["op_logits_mean"] = grad.detach().mean().item()
+                # Save individual operation gradients
+                op_grads = grad.detach().mean(dim=0).cpu().numpy()  # Average over batch
+                for i, op_name in enumerate(op_names):
+                    self.dag_grads[f"op_grad/{op_name}"] = float(op_grads[i])
+
+            self._op_logits_tensor.register_hook(save_op_grad)
 
         logits = self.lm_head(hidden)
         loss = None
@@ -368,10 +416,54 @@ class DAGGPT(GPT):
             return out
 
         for name, act in self.last_activations.items():
-            with torch.no_grad():
-                prob = torch.softmax(act, dim=-1)
-                ent = -(prob * (prob + 1e-8).log()).sum(-1).mean()
-                out[f"dag_entropy/{name}"] = ent.item()
+            if act is not None:
+                with torch.no_grad():
+                    prob = torch.softmax(act, dim=-1)
+                    ent = -(prob * (prob + 1e-8).log()).sum(-1).mean()
+                    out[f"dag_entropy/{name}"] = ent.item()
             if hasattr(self, "dag_grads") and name in self.dag_grads:
                 out[f"dag_grad/{name}"] = self.dag_grads[name]
+
+        # Add all captured dag gradients
+        if hasattr(self, "dag_grads"):
+            for grad_name, grad_val in self.dag_grads.items():
+                if grad_name not in out:  # Don't overwrite existing entries
+                    out[grad_name] = grad_val
+
         return out
+
+    def get_op_probabilities(self) -> dict[str, float]:
+        """Return the current operation probabilities as a dictionary."""
+        if (
+            not hasattr(self, "last_activations")
+            or "op_logits" not in self.last_activations
+        ):
+            return {}
+
+        op_logits = self.last_activations["op_logits"]
+        if op_logits is None:
+            return {}
+
+        with torch.no_grad():
+            # Take the first sample in the batch and convert to probabilities
+            probs = F.softmax(op_logits, dim=-1)[0].detach().cpu().numpy()
+            return {f"op_probs/{op}": float(p) for op, p in zip(op_names, probs)}
+
+    def get_op_logits_dict(self) -> dict[str, float]:
+        """Return the raw operation logits as a dictionary."""
+        if (
+            not hasattr(self, "last_activations")
+            or "op_logits" not in self.last_activations
+        ):
+            return {}
+
+        op_logits = self.last_activations["op_logits"]
+        if op_logits is None:
+            return {}
+
+        with torch.no_grad():
+            # Take the first sample in the batch
+            logits = op_logits[0].detach().cpu().numpy()
+            return {
+                f"op_logits/{op}": float(logit) for op, logit in zip(op_names, logits)
+            }

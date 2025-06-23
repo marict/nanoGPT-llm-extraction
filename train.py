@@ -305,6 +305,9 @@ def train(cfg: TrainConfig) -> None:
     meta_path = data_dir / "meta.pkl"
     meta_dtype = np.uint16
     vocab_size = None
+
+    # Load tokenizer for text generation
+    encode = decode = None
     if meta_path.exists():
         with open(meta_path, "rb") as f:
             meta = pickle.load(f)
@@ -314,6 +317,31 @@ def train(cfg: TrainConfig) -> None:
             print(
                 f"[{time.time() - setup_start:.2f}s] Found vocab_size {vocab_size} and dtype {meta_dtype}"
             )
+        # Set up encoder/decoder for text generation
+        if "stoi" in meta and "itos" in meta:
+            stoi, itos = meta["stoi"], meta["itos"]
+            encode = lambda s: [stoi[c] for c in s]
+            decode = lambda l: "".join([itos[i] for i in l])
+
+    # Fallback to GPT-2 tokenizer if no meta available
+    if encode is None or decode is None:
+        try:
+            import tiktoken
+
+            enc = tiktoken.get_encoding("gpt2")
+            encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
+            decode = lambda l: enc.decode(l)
+            if master_process:
+                print(
+                    f"[{time.time() - setup_start:.2f}s] Using GPT-2 tokenizer fallback"
+                )
+        except ImportError:
+            encode = decode = None
+            if master_process:
+                print(
+                    f"[{time.time() - setup_start:.2f}s] Warning: No tokenizer available for text generation"
+                )
+
     print(
         f"[{time.time() - setup_start:.2f}s] Data loading completed in {time.time() - data_start:.2f}s"
     )
@@ -498,6 +526,54 @@ def train(cfg: TrainConfig) -> None:
                     losses = estimate_loss(model, cfg.eval_iters, get_batch, ctx)
                     eval_extra = model.extra_vals()
 
+                    # Get operation probabilities and logits for logging
+                    op_probs = {}
+                    op_logits_dict = {}
+                    if hasattr(raw_model, "get_op_probabilities"):
+                        op_probs = raw_model.get_op_probabilities()
+                        if op_probs:
+                            print("Operation probabilities:")
+                            for op_name, prob in op_probs.items():
+                                print(
+                                    f"  {op_name.replace('op_probs/', '')}: {prob:.4f}"
+                                )
+
+                    if hasattr(raw_model, "get_op_logits_dict"):
+                        op_logits_dict = raw_model.get_op_logits_dict()
+                        if op_logits_dict:
+                            print("Operation logits:")
+                            for op_name, logit in op_logits_dict.items():
+                                print(
+                                    f"  {op_name.replace('op_logits/', '')}: {logit:.4f}"
+                                )
+
+                    # Generate a sample sentence to track generation quality
+                    generated_sample = ""
+                    if encode is not None and decode is not None:
+                        try:
+                            # Simple prompt for generation
+                            sample_prompt = "The answer to the math problem is"
+                            encoded = encode(sample_prompt)
+                            prompt_ids = torch.tensor(
+                                encoded, dtype=torch.long, device=device
+                            ).unsqueeze(0)
+
+                            with torch.no_grad():
+                                generated = raw_model.generate(
+                                    prompt_ids,
+                                    max_new_tokens=20,
+                                    temperature=0.8,
+                                    top_k=40,
+                                )
+                                generated_sample = decode(generated[0].cpu().tolist())
+                                print(f"Generated sample: {generated_sample}")
+                        except Exception as e:
+                            print(f"Warning: Failed to generate sample text: {e}")
+                            generated_sample = f"Error: {str(e)}"
+                    else:
+                        print("Skipping text generation (no tokenizer available)")
+                        generated_sample = "No tokenizer available"
+
                     # Run math evaluation if enabled
                     math_scores = {}
                     if cfg.eval_math:
@@ -530,10 +606,16 @@ def train(cfg: TrainConfig) -> None:
                                 "lr": lr,
                                 "mfu": running_mfu * 100,
                                 **eval_extra,
+                                **op_probs,  # Add operation probabilities
+                                **op_logits_dict,  # Add operation logits
                             }
                             # Add math evaluation scores
                             for task, score in math_scores.items():
                                 log_dict[f"math_eval/{task}"] = score
+
+                            # Log generated sample as text
+                            if generated_sample:
+                                log_dict["generated_sample"] = generated_sample
 
                             wandb.log(log_dict, step=iter_num, commit=False)
                         except Exception as e:
@@ -590,9 +672,21 @@ def train(cfg: TrainConfig) -> None:
                     and master_process
                     and run is not None
                 ):
-                    wandb.log(
-                        {"iter": iter_num, **extra_vals}, step=iter_num, commit=True
-                    )
+                    # Get current operation probabilities and logits for regular logging too
+                    current_op_probs = {}
+                    current_op_logits = {}
+                    if hasattr(raw_model, "get_op_probabilities"):
+                        current_op_probs = raw_model.get_op_probabilities()
+                    if hasattr(raw_model, "get_op_logits_dict"):
+                        current_op_logits = raw_model.get_op_logits_dict()
+
+                    log_dict = {
+                        "iter": iter_num,
+                        **extra_vals,
+                        **current_op_probs,
+                        **current_op_logits,
+                    }
+                    wandb.log(log_dict, step=iter_num, commit=True)
                     lossf = loss.item() * cfg.gradient_accumulation_steps
                     if iter_num >= 5:
                         mfu = raw_model.estimate_mfu(
