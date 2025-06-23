@@ -16,7 +16,7 @@ import runpy
 import time
 from ast import literal_eval
 from contextlib import nullcontext
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple
@@ -78,12 +78,8 @@ class TrainConfig:
 
     # Math evaluation settings
     eval_math: bool = True  # Whether to run math evaluation during training
-    math_eval_tasks: List[str] = None  # Math tasks to evaluate (default: ["gsm8k"])
+    math_eval_tasks: List[str] = field(default_factory=lambda: ["gsm8k", "svamp"])
     math_eval_max_examples: int = 50  # Max examples per math task during training
-
-    def __post_init__(self):
-        if self.math_eval_tasks is None:
-            self.math_eval_tasks = ["gsm8k", "svamp"]
 
     wandb_project: str = "owt"
 

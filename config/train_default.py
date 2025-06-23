@@ -8,6 +8,9 @@ eval_only = False
 always_save_checkpoint = True
 init_from = "scratch"
 
+# Math evaluation settings for quick testing
+math_eval_examples = 1
+
 wandb_project = "dag-gpt"
 
 # tiny dataset and network for quick local testing
@@ -31,6 +34,8 @@ weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
+
+math_eval_max_examples = 1
 
 decay_lr = False
 warmup_iters = 2000

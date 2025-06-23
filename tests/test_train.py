@@ -425,3 +425,21 @@ def test_math_eval_config_integration():
     assert cfg.eval_math == False
     assert cfg.math_eval_tasks == ["gsm8k", "svamp"]
     assert cfg.math_eval_max_examples == 100
+
+
+def test_math_eval_examples_parameter():
+    """Test the new math_eval_examples parameter."""
+    cfg = train.TrainConfig()
+
+    # Test default value
+    assert cfg.math_eval_examples == 50
+
+    # Test config override
+    override_data = {"math_eval_examples": 10}
+    train.update_config(cfg, override_data)
+    assert cfg.math_eval_examples == 10
+
+    # Test CLI override
+    cfg = train.TrainConfig()
+    train.apply_overrides(cfg, ["--math_eval_examples=5"])
+    assert cfg.math_eval_examples == 5
