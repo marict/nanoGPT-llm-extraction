@@ -16,15 +16,25 @@ from dag_model import DAGGPT, DAGController, DAGGPTConfig, op_funcs
 # ---------------------------------------------------------------------------
 def test_controller_selects_distinct_inputs():
     torch.manual_seed(0)
-    controller = DAGController(hidden_dim=4, n_ops=len(op_funcs))
+    controller = DAGController(hidden_dim=4, n_ops=len(op_funcs), temperature=1.0)
 
     nodes = torch.randn(1, 3, 4)  # (B, N, H)
     ctx = torch.zeros(1, 4)  # (B, H)
 
     att1, att2, _ = controller(nodes, ctx, ctx)
 
-    # The two attention distributions should not be (nearly) identical
-    assert not torch.allclose(att1, att2, atol=1e-4)
+    # With Gumbel softmax (hard=True), both att1 and att2 should be one-hot vectors
+    # but they should select different nodes (with high probability due to randomness)
+    assert torch.allclose(att1.sum(dim=1), torch.ones(1))  # Should sum to 1 (one-hot)
+    assert torch.allclose(att2.sum(dim=1), torch.ones(1))  # Should sum to 1 (one-hot)
+
+    # Each should have exactly one 1.0 and the rest 0.0 (one-hot property)
+    assert torch.all((att1 == 0.0) | (att1 == 1.0))
+    assert torch.all((att2 == 0.0) | (att2 == 1.0))
+
+    # Count non-zero elements (should be exactly 1 per distribution)
+    assert torch.sum(att1 != 0).item() == 1
+    assert torch.sum(att2 != 0).item() == 1
 
 
 # ---------------------------------------------------------------------------

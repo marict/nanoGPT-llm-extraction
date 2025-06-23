@@ -83,6 +83,9 @@ def test_dag_node_growth_regression(monkeypatch):
     monkeypatch.setattr(dag_model, "op_funcs", dag_model.op_funcs[:2])
 
     class DummyController(DAGController):
+        def __init__(self, hidden_dim, n_ops, temperature=1.0):
+            super().__init__(hidden_dim, n_ops, temperature)
+
         def forward(self, embeds, operand_ctx, op_ctx):  # new signature
             B, N, _ = embeds.shape
             att_last = torch.zeros(B, N, device=embeds.device)
@@ -90,7 +93,9 @@ def test_dag_node_growth_regression(monkeypatch):
             op_weights = torch.tensor([[1.0, 0.0]], device=embeds.device)  # use 'add'
             return att_last, att_last, op_weights
 
-    dag = DifferentiableDAG(hidden_dim=H, num_steps=2, scalar_to_embed=proj)
+    dag = DifferentiableDAG(
+        hidden_dim=H, num_steps=2, scalar_to_embed=proj, temperature=1.0
+    )
     dag.controller = DummyController(H, len(dag_model.op_funcs))
 
     # initial lists (one node, scalar value = 1)
@@ -208,6 +213,9 @@ def test_step_contexts_added(monkeypatch):
     captured = []
 
     class RecController(DAGController):
+        def __init__(self, hidden_dim, n_ops, temperature=1.0):
+            super().__init__(hidden_dim, n_ops, temperature)
+
         def forward(self, embeds, operand_ctx, op_ctx):
             captured.append((operand_ctx.clone(), op_ctx.clone()))
             B, N, _ = embeds.shape

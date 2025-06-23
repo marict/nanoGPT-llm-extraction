@@ -116,6 +116,9 @@ def test_visualize_dag_attention(tmp_path):
     # dummy controller that produces deterministic attentions / op-weights
     # ---------------------------------------------------------------------
     class DummyController(DAGController):
+        def __init__(self, hidden_dim, n_ops, temperature=1.0):
+            super().__init__(hidden_dim, n_ops, temperature)
+
         def forward(self, embeds, operand_ctx, op_ctx):
             # two existing nodes → length-2 distributions
             att1 = torch.tensor([[1.0, 0.0]], device=embeds.device)  # (B=1 , N=2)

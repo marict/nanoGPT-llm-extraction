@@ -55,13 +55,14 @@ op_funcs = [add, identity, multiply, subtract, divide, power, log, max_op, min_o
 # controller: unchanged except it only sees EMBEDDINGS
 # ---------------------------------------------------------------------------
 class DAGController(nn.Module):
-    def __init__(self, hidden_dim: int, n_ops: int):
+    def __init__(self, hidden_dim: int, n_ops: int, temperature: float = 1.0):
         super().__init__()
         self.query_proj1 = nn.Linear(hidden_dim, hidden_dim)
         self.query_proj2 = nn.Linear(hidden_dim, hidden_dim)
         self.op_query_proj = nn.Linear(hidden_dim, hidden_dim)
         self.key_proj = nn.Linear(hidden_dim, hidden_dim)
         self.op_selector = nn.Linear(hidden_dim, n_ops)
+        self.temperature = temperature
 
         self.last_attn: torch.Tensor | None = None
         self.last_op_weights: torch.Tensor | None = None
@@ -79,15 +80,25 @@ class DAGController(nn.Module):
         att1 = torch.einsum("bnh,bh->bn", keys, q1) / (embeds.size(-1) ** 0.5)
         att2 = torch.einsum("bnh,bh->bn", keys, q2) / (embeds.size(-1) ** 0.5)
 
-        attn1 = F.softmax(att1, dim=1)  # (B , N)
-        attn2 = F.softmax(att2, dim=1)  # (B , N)
+        # Use Gumbel softmax for discrete operand selection
+        attn1 = F.gumbel_softmax(
+            att1, tau=self.temperature, hard=True, dim=1
+        )  # (B , N)
+        attn2 = F.gumbel_softmax(
+            att2, tau=self.temperature, hard=True, dim=1
+        )  # (B , N)
 
         # op selection
         op_q = self.op_query_proj(summary) + op_ctx
         att_op = torch.einsum("bnh,bh->bn", keys, op_q) / (embeds.size(-1) ** 0.5)
         attn_op = F.softmax(att_op, dim=1)  # (B , N)
         op_ctx_vec = torch.sum(attn_op.unsqueeze(-1) * embeds, dim=1)
-        op_weights = F.softmax(self.op_selector(op_ctx_vec), dim=-1)  # (B , n_ops)
+        op_logits = self.op_selector(op_ctx_vec)
+
+        # Use Gumbel softmax for discrete operation selection
+        op_weights = F.gumbel_softmax(
+            op_logits, tau=self.temperature, hard=True, dim=-1
+        )  # (B , n_ops)
 
         self.last_attn = attn1.detach()
         self.last_op_weights = op_weights.detach()
@@ -98,10 +109,16 @@ class DAGController(nn.Module):
 # Differentiable DAG with separate VALUE & EMBED streams
 # ---------------------------------------------------------------------------
 class DifferentiableDAG(nn.Module):
-    def __init__(self, hidden_dim: int, num_steps: int, scalar_to_embed: nn.Module):
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_steps: int,
+        scalar_to_embed: nn.Module,
+        temperature: float = 1.0,
+    ):
         super().__init__()
         self.num_steps = num_steps
-        self.controller = DAGController(hidden_dim, len(op_funcs))
+        self.controller = DAGController(hidden_dim, len(op_funcs), temperature)
         self.step_emb = nn.Embedding(num_steps, hidden_dim)
         self.scalar_to_embed = scalar_to_embed
 
@@ -129,23 +146,25 @@ class DifferentiableDAG(nn.Module):
 
             emb_step = self.step_emb.weight[step].unsqueeze(0).expand(B, -1)  # (B , H)
 
-            # controller gives us weights over nodes
+            # controller gives us discrete selections via Gumbel softmax
             att1, att2, op_weights = self.controller(
                 embeds,
                 operand_ctx + emb_step,
                 op_ctx + emb_step,
             )
 
-            # select embeddings
+            # select embeddings using discrete attention (one-hot from Gumbel softmax)
             e1 = torch.sum(att1.unsqueeze(-1) * embeds, dim=1)  # (B , H)
             e2 = torch.sum(att2.unsqueeze(-1) * embeds, dim=1)  # (B , H)
 
-            # select values
+            # select values using discrete attention (one-hot from Gumbel softmax)
             v1 = torch.sum(att1 * values, dim=1)  # (B)
             v2 = torch.sum(att2 * values, dim=1)  # (B)
 
-            # compute new value
+            # compute operation outputs for all operations
             outs = torch.stack([op(v1, v2) for op in op_funcs], dim=1)  # (B , n_ops)
+
+            # select single operation using discrete selection (one-hot from Gumbel softmax)
             new_val = torch.sum(op_weights * outs, dim=1)  # (B)
 
             # Project to embedding space to inform the embedding combinator
@@ -155,7 +174,7 @@ class DifferentiableDAG(nn.Module):
             # compute new embed
             concat = torch.cat(
                 [e1, e2, v1_embed, v2_embed, op_weights], dim=-1
-            )  # (B , 2H + n_ops)
+            )  # (B , 4H + n_ops)
             delta = self.embed_mlp(concat)
             new_emb = 0.5 * (e1 + e2) + delta  # residual
 
@@ -194,6 +213,7 @@ class ValueExtractor(nn.Module):
 @dataclass
 class DAGGPTConfig(GPTConfig):
     dag_depth: int = 4
+    gumbel_temperature: float = 1.0
 
 
 class DAGGPT(GPT):
@@ -206,7 +226,10 @@ class DAGGPT(GPT):
         self.scalar_to_embed = nn.Linear(1, config.n_embd)
 
         self.dag = DifferentiableDAG(
-            config.n_embd, config.dag_depth, self.scalar_to_embed
+            config.n_embd,
+            config.dag_depth,
+            self.scalar_to_embed,
+            config.gumbel_temperature,
         )
         self.mix_gate = nn.Linear(config.n_embd * 2, 1)
 
