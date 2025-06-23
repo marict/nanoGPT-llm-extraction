@@ -345,6 +345,4 @@ class DAGGPT(GPT):
                 out[f"dag_entropy/{name}"] = ent.item()
             if hasattr(self, "dag_grads") and name in self.dag_grads:
                 out[f"dag_grad/{name}"] = self.dag_grads[name]
-            else:
-                out[f"dag_grad/{name}"] = -1  # Error signal
         return out
