@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -55,7 +54,7 @@ op_funcs = [add, identity, multiply, subtract, divide, power, log, max_op, min_o
 # controller: unchanged except it only sees EMBEDDINGS
 # ---------------------------------------------------------------------------
 class DAGController(nn.Module):
-    def __init__(self, hidden_dim: int, n_ops: int, temperature: float = 1.0):
+    def __init__(self, hidden_dim: int, n_ops: int, temperature: float = 2.0):
         super().__init__()
         self.query_proj1 = nn.Linear(hidden_dim, hidden_dim)
         self.query_proj2 = nn.Linear(hidden_dim, hidden_dim)
@@ -80,6 +79,10 @@ class DAGController(nn.Module):
         att1 = torch.einsum("bnh,bh->bn", keys, q1) / (embeds.size(-1) ** 0.5)
         att2 = torch.einsum("bnh,bh->bn", keys, q2) / (embeds.size(-1) ** 0.5)
 
+        # Clamp extreme logits for numerical stability
+        att1 = torch.clamp(att1, min=-10.0, max=10.0)
+        att2 = torch.clamp(att2, min=-10.0, max=10.0)
+
         # Use Gumbel softmax for discrete operand selection
         attn1 = F.gumbel_softmax(
             att1, tau=self.temperature, hard=True, dim=1
@@ -94,6 +97,9 @@ class DAGController(nn.Module):
         attn_op = F.softmax(att_op, dim=1)  # (B , N)
         op_ctx_vec = torch.sum(attn_op.unsqueeze(-1) * embeds, dim=1)
         op_logits = self.op_selector(op_ctx_vec)
+
+        # Clamp extreme logits for numerical stability
+        op_logits = torch.clamp(op_logits, min=-10.0, max=10.0)
 
         # Use Gumbel softmax for discrete operation selection
         op_weights = F.gumbel_softmax(
@@ -114,7 +120,7 @@ class DifferentiableDAG(nn.Module):
         hidden_dim: int,
         num_steps: int,
         scalar_to_embed: nn.Module,
-        temperature: float = 1.0,
+        temperature: float = 2.0,
     ):
         super().__init__()
         self.num_steps = num_steps
@@ -213,7 +219,7 @@ class ValueExtractor(nn.Module):
 @dataclass
 class DAGGPTConfig(GPTConfig):
     dag_depth: int = 4
-    gumbel_temperature: float = 1.0
+    gumbel_temperature: float = 2.0
 
 
 class DAGGPT(GPT):

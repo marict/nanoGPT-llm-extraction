@@ -417,8 +417,13 @@ class GPT(nn.Module):
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float("Inf")
+
             # apply softmax to convert logits to (normalized) probabilities
             probs = F.softmax(logits, dim=-1)
+
+            # Ensure probabilities are normalized (sometimes numerical errors can cause slight deviations)
+            probs = probs / probs.sum(dim=-1, keepdim=True)
+
             # sample from the distribution
             idx_next = torch.multinomial(probs, num_samples=1)
             # append sampled index to the running sequence and continue

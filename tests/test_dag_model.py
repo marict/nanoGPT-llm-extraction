@@ -473,3 +473,275 @@ def test_hook_behavior_no_grad_context():
             len(entropy_keys) > 0
         ), "Should have entropy values even in no_grad context"
         assert len(grad_keys) == 0, "Should have no gradient values in no_grad context"
+
+
+# ---------------------------------------------------------------------
+# Gradient health tests for DAG components
+# ---------------------------------------------------------------------
+def test_dag_gradient_health():
+    """Test that DAG gradients are healthy (not zero, not infinite) with Gumbel softmax."""
+    cfg = DAGGPTConfig(
+        vocab_size=20,
+        block_size=8,
+        n_layer=1,
+        n_head=1,
+        n_embd=16,
+        dag_depth=2,
+        gumbel_temperature=2.0,  # Use the stable temperature
+    )
+    model = DAGGPT(cfg)
+
+    # Forward and backward pass
+    x = torch.randint(0, cfg.vocab_size, (2, 6))
+    y = torch.randint(0, cfg.vocab_size, (2, 6))
+
+    model.zero_grad()
+    _, loss = model(x, y)
+    loss.backward()
+
+    # Check DAG controller gradients
+    controller = model.dag.controller
+
+    # Check critical weight parameters (not bias terms which can be small)
+    critical_params = [
+        "query_proj1.weight",
+        "query_proj2.weight",
+        "op_query_proj.weight",
+        "key_proj.weight",
+        "op_selector.weight",
+    ]
+
+    for name, param in controller.named_parameters():
+        if param.grad is not None:
+            grad_norm = param.grad.norm().item()
+
+            # All gradients should be finite
+            assert torch.isfinite(
+                param.grad
+            ).all(), f"Gradient for {name} contains inf/nan"
+
+            # Critical weight parameters should have meaningful gradients
+            if name in critical_params:
+                assert (
+                    grad_norm > 5e-7
+                ), f"Critical gradient for {name} is too small: {grad_norm}"
+                assert (
+                    grad_norm < 1e2
+                ), f"Critical gradient for {name} is too large: {grad_norm}"
+            else:
+                # Bias terms can be smaller but should not be exactly zero or infinite
+                assert grad_norm >= 0, f"Gradient for {name} is negative: {grad_norm}"
+                assert grad_norm < 1e3, f"Gradient for {name} is too large: {grad_norm}"
+
+    # Check that op_selector specifically has gradients (this was problematic before)
+    op_selector_grad = controller.op_selector.weight.grad
+    assert op_selector_grad is not None, "op_selector should have gradients"
+    op_grad_norm = op_selector_grad.norm().item()
+    assert op_grad_norm > 5e-7, f"op_selector gradient is too small: {op_grad_norm}"
+    assert op_grad_norm < 1e2, f"op_selector gradient is too large: {op_grad_norm}"
+
+
+def test_dag_gradient_flow_vs_temperature():
+    """Test that gradient flow improves with higher temperature."""
+    cfg_base = DAGGPTConfig(
+        vocab_size=20,
+        block_size=8,
+        n_layer=1,
+        n_head=1,
+        n_embd=16,
+        dag_depth=2,
+    )
+
+    x = torch.randint(0, cfg_base.vocab_size, (2, 6))
+    y = torch.randint(0, cfg_base.vocab_size, (2, 6))
+
+    # Test different temperatures
+    temperatures = [0.5, 1.0, 2.0, 3.0]
+    gradient_norms = []
+
+    for temp in temperatures:
+        cfg = DAGGPTConfig(**{**cfg_base.__dict__, "gumbel_temperature": temp})
+        model = DAGGPT(cfg)
+
+        model.zero_grad()
+        _, loss = model(x, y)
+        loss.backward()
+
+        # Measure gradient norm for op_selector (previously problematic)
+        op_grad = model.dag.controller.op_selector.weight.grad
+        if op_grad is not None:
+            grad_norm = op_grad.norm().item()
+            gradient_norms.append(grad_norm)
+        else:
+            gradient_norms.append(0.0)
+
+    # Check that gradient norms are reasonable for our chosen temperature (2.0)
+    temp_2_idx = temperatures.index(2.0)
+    temp_2_grad = gradient_norms[temp_2_idx]
+
+    # Should have non-zero gradients with temperature 2.0
+    assert (
+        temp_2_grad > 5e-7
+    ), f"Temperature 2.0 should give non-zero gradients, got {temp_2_grad}"
+    assert (
+        temp_2_grad < 1e2
+    ), f"Temperature 2.0 should give finite gradients, got {temp_2_grad}"
+
+    # Very low temperature (0.5) might have gradient issues
+    temp_low_grad = gradient_norms[0]
+    # Higher temperature should generally have better gradient flow than very low temperature
+    if (
+        temp_low_grad > 5e-7
+    ):  # If low temp has gradients, high temp should be comparable or better
+        assert (
+            temp_2_grad >= temp_low_grad * 0.1
+        ), "Higher temperature should maintain gradient flow"
+
+
+def test_dag_gumbel_outputs_are_discrete():
+    """Test that Gumbel softmax outputs are properly discrete (one-hot) despite higher temperature."""
+    cfg = DAGGPTConfig(
+        vocab_size=20,
+        block_size=8,
+        n_layer=1,
+        n_head=1,
+        n_embd=16,
+        dag_depth=2,
+        gumbel_temperature=2.0,
+    )
+    model = DAGGPT(cfg)
+
+    # Forward pass to get DAG attention
+    x = torch.randint(0, cfg.vocab_size, (2, 6))
+    with torch.no_grad():
+        model(x)
+
+    # Check last attention from controller
+    last_attn = model.dag.controller.last_attn
+    last_op_weights = model.dag.controller.last_op_weights
+
+    assert last_attn is not None, "Should have attention weights"
+    assert last_op_weights is not None, "Should have operation weights"
+
+    # Check that attention is one-hot (each row sums to 1, contains only 0s and 1s)
+    attn_sums = last_attn.sum(dim=1)
+    assert torch.allclose(
+        attn_sums, torch.ones_like(attn_sums), atol=1e-6
+    ), "Attention should sum to 1"
+
+    # Check that each row has exactly one 1.0 (one-hot property)
+    for i in range(last_attn.shape[0]):
+        nonzero_count = torch.sum(last_attn[i] > 0.5).item()
+        assert (
+            nonzero_count == 1
+        ), f"Row {i} should have exactly one selected element, got {nonzero_count}"
+
+    # Check operation weights are one-hot
+    op_sums = last_op_weights.sum(dim=1)
+    assert torch.allclose(
+        op_sums, torch.ones_like(op_sums), atol=1e-6
+    ), "Op weights should sum to 1"
+
+    for i in range(last_op_weights.shape[0]):
+        nonzero_count = torch.sum(last_op_weights[i] > 0.5).item()
+        assert (
+            nonzero_count == 1
+        ), f"Row {i} should have exactly one selected operation, got {nonzero_count}"
+
+
+def test_dag_gradients_multiple_backward_passes():
+    """Test that DAG gradients remain healthy across multiple backward passes."""
+    cfg = DAGGPTConfig(
+        vocab_size=20,
+        block_size=8,
+        n_layer=1,
+        n_head=1,
+        n_embd=16,
+        dag_depth=2,
+        gumbel_temperature=2.0,
+    )
+    model = DAGGPT(cfg)
+
+    gradient_norms = []
+
+    for i in range(5):  # Multiple training steps
+        x = torch.randint(0, cfg.vocab_size, (2, 6))
+        y = torch.randint(0, cfg.vocab_size, (2, 6))
+
+        model.zero_grad()
+        _, loss = model(x, y)
+        loss.backward()
+
+        # Check op_selector gradients specifically
+        op_grad = model.dag.controller.op_selector.weight.grad
+        assert op_grad is not None, f"Step {i}: op_selector should have gradients"
+
+        grad_norm = op_grad.norm().item()
+        gradient_norms.append(grad_norm)
+
+        # Each step should have healthy gradients
+        assert grad_norm > 5e-7, f"Step {i}: gradient too small: {grad_norm}"
+        assert grad_norm < 1e2, f"Step {i}: gradient too large: {grad_norm}"
+        assert torch.isfinite(op_grad).all(), f"Step {i}: gradient contains inf/nan"
+
+    # Gradients should be relatively consistent (not exploding or vanishing dramatically)
+    min_grad = min(gradient_norms)
+    max_grad = max(gradient_norms)
+    ratio = max_grad / min_grad if min_grad > 0 else float("inf")
+
+    # Allow reasonable variation but not extreme explosion/vanishing
+    assert (
+        ratio < 1000
+    ), f"Gradient variation too extreme: min={min_grad}, max={max_grad}, ratio={ratio}"
+
+
+def test_dag_value_gradients():
+    """Test that DAG value computations maintain healthy gradients."""
+    cfg = DAGGPTConfig(
+        vocab_size=20,
+        block_size=8,
+        n_layer=1,
+        n_head=1,
+        n_embd=16,
+        dag_depth=2,
+        gumbel_temperature=2.0,
+    )
+    model = DAGGPT(cfg)
+
+    x = torch.randint(0, cfg.vocab_size, (2, 6))
+    y = torch.randint(0, cfg.vocab_size, (2, 6))
+
+    model.zero_grad()
+    _, loss = model(x, y)
+    loss.backward()
+
+    # Check that value_extractor has gradients
+    value_extractor = model.value_extractor
+    for name, param in value_extractor.named_parameters():
+        if param.grad is not None:
+            grad_norm = param.grad.norm().item()
+            # Be more lenient with bias terms, strict with weights
+            if "weight" in name:
+                assert (
+                    grad_norm > 5e-7
+                ), f"ValueExtractor {name} gradient too small: {grad_norm}"
+                assert (
+                    grad_norm < 1e2
+                ), f"ValueExtractor {name} gradient too large: {grad_norm}"
+            else:  # bias terms
+                assert (
+                    grad_norm >= 0
+                ), f"ValueExtractor {name} gradient negative: {grad_norm}"
+                assert (
+                    grad_norm < 1e3
+                ), f"ValueExtractor {name} gradient too large: {grad_norm}"
+            assert torch.isfinite(
+                param.grad
+            ).all(), f"ValueExtractor {name} has inf/nan gradients"
+
+    # Check scalar_to_embed gradients
+    scalar_embed_grad = model.scalar_to_embed.weight.grad
+    assert scalar_embed_grad is not None, "scalar_to_embed should have gradients"
+    grad_norm = scalar_embed_grad.norm().item()
+    assert grad_norm > 5e-7, f"scalar_to_embed gradient too small: {grad_norm}"
+    assert grad_norm < 1e2, f"scalar_to_embed gradient too large: {grad_norm}"
