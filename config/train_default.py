@@ -1,7 +1,7 @@
 """Minimal CPU configuration used by default when running ``train.py``."""
 
 # evaluate every step and run a single iteration by default
-eval_interval = 1
+eval_interval = 5
 log_interval = 1
 eval_iters = 1
 eval_only = False
