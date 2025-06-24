@@ -3,8 +3,7 @@ import argparse
 import tiktoken
 import torch
 
-from dag_model import DAGGPT, DAGGPTConfig
-from model import GPT, GPTConfig
+from dag_model import GPT, GPTConfig
 from python_version_check import check_python_version
 
 check_python_version()
@@ -13,12 +12,10 @@ check_python_version()
 def load_model(ckpt_path, device):
     ckpt = torch.load(ckpt_path, map_location=device)
     model_args = ckpt["model_args"]
-    if "dag_depth" in model_args:
-        cfg = DAGGPTConfig(**model_args)
-        model = DAGGPT(cfg)
-    else:
-        cfg = GPTConfig(**model_args)
-        model = GPT(cfg)
+    # Ensure dag_depth is set (default to 0 for standard GPT)
+    model_args.setdefault("dag_depth", 0)
+    cfg = GPTConfig(**model_args)
+    model = GPT(cfg)
     state_dict = ckpt["model"]
     unwanted_prefix = "_orig_mod."
     for k in list(state_dict.keys()):

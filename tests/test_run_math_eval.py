@@ -355,7 +355,7 @@ class TestRunMathEval(TestCase):
 
         # Mock model creation and evaluation
         with mock.patch("run_math_eval.run_eval") as mock_run_eval:
-            with mock.patch("model.GPT") as mock_gpt_class:
+            with mock.patch("dag_model.GPT") as mock_gpt_class:
                 mock_model = DummyModel()
                 mock_gpt_class.return_value = mock_model
                 mock_run_eval.return_value = {"gsm8k": 0.5, "svamp": 0.3}
@@ -371,7 +371,7 @@ class TestRunMathEval(TestCase):
         "sys.argv", ["run_math_eval.py", "fake_dag_checkpoint.pt", "--tasks", "gsm8k"]
     )
     def test_main_function_daggpt(self, mock_torch_load):
-        """Test main function with DAGGPT model."""
+        """Test main function with GPT model."""
         # Mock checkpoint loading
         mock_checkpoint = {
             "model_args": {
@@ -387,13 +387,13 @@ class TestRunMathEval(TestCase):
 
         # Mock model creation and evaluation
         with mock.patch("run_math_eval.run_eval") as mock_run_eval:
-            with mock.patch("dag_model.DAGGPT") as mock_daggpt_class:
+            with mock.patch("dag_model.GPT") as mock_daggpt_class:
                 mock_model = DummyModel()
                 mock_daggpt_class.return_value = mock_model
                 mock_run_eval.return_value = {"gsm8k": 0.4}
 
                 run_math_eval.main()
 
-                # Verify DAGGPT model creation and evaluation were called
+                # Verify GPT model creation and evaluation were called
                 mock_daggpt_class.assert_called_once()
                 mock_run_eval.assert_called_once()

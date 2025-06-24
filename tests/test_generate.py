@@ -4,11 +4,13 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from model import GPT, GPTConfig
+from dag_model import GPT, GPTConfig
 
 
 def test_generate_handles_cropping():
-    cfg = GPTConfig(vocab_size=10, block_size=4, n_layer=1, n_head=1, n_embd=8)
+    cfg = GPTConfig(
+        vocab_size=10, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=0
+    )
     model = GPT(cfg)
     model.eval()
     torch.manual_seed(0)

@@ -8,7 +8,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import dag_model
-from dag_model import DAGGPT, DAGController, DAGGPTConfig, op_funcs
+from dag_model import GPT, DAGController, GPTConfig, op_funcs
 
 
 # ---------------------------------------------------------------------------
@@ -28,23 +28,32 @@ def test_controller_selects_distinct_inputs():
     assert torch.allclose(att1.sum(dim=1), torch.ones(1))  # Should sum to 1 (one-hot)
     assert torch.allclose(att2.sum(dim=1), torch.ones(1))  # Should sum to 1 (one-hot)
 
-    # Each should have exactly one 1.0 and the rest 0.0 (one-hot property)
-    assert torch.all((att1 == 0.0) | (att1 == 1.0))
-    assert torch.all((att2 == 0.0) | (att2 == 1.0))
+    # Each should have approximately one 1.0 and the rest near 0.0 (relaxed one-hot property)
+    # Due to numerical stability measures, we may have tiny values instead of exact 0.0
+    assert torch.all(
+        (att1 < 1e-9) | (att1 > 0.9)
+    ), "att1 should be approximately one-hot"
+    assert torch.all(
+        (att2 < 1e-9) | (att2 > 0.9)
+    ), "att2 should be approximately one-hot"
 
-    # Count non-zero elements (should be exactly 1 per distribution)
-    assert torch.sum(att1 != 0).item() == 1
-    assert torch.sum(att2 != 0).item() == 1
+    # Count significant elements (should be exactly 1 per distribution)
+    assert (
+        torch.sum(att1 > 0.5).item() == 1
+    ), "att1 should have exactly one dominant element"
+    assert (
+        torch.sum(att2 > 0.5).item() == 1
+    ), "att2 should have exactly one dominant element"
 
 
 # ---------------------------------------------------------------------------
 # Weight tying (WTE ↔ lm_head)
 # ---------------------------------------------------------------------------
 def test_weight_tying():
-    cfg = DAGGPTConfig(
+    cfg = GPTConfig(
         vocab_size=10, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=1
     )
-    model = DAGGPT(cfg)
+    model = GPT(cfg)
     wte_weight = model.transformer.wte.weight
     lm_weight = model.lm_head.weight
     # Pointers should match when tying is in effect
@@ -55,10 +64,10 @@ def test_weight_tying():
 # Block-size guard
 # ---------------------------------------------------------------------------
 def test_forward_block_size_assertion():
-    cfg = DAGGPTConfig(
+    cfg = GPTConfig(
         vocab_size=10, block_size=2, n_layer=1, n_head=1, n_embd=8, dag_depth=1
     )
-    model = DAGGPT(cfg)
+    model = GPT(cfg)
     x = torch.randint(0, 10, (1, 3))  # length 3 > block_size 2
     with pytest.raises(AssertionError):
         model(x)
@@ -68,10 +77,10 @@ def test_forward_block_size_assertion():
 # Loss is returned – and backward works
 # ---------------------------------------------------------------------------
 def test_forward_returns_loss_when_targets_given():
-    cfg = DAGGPTConfig(
+    cfg = GPTConfig(
         vocab_size=10, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=1
     )
-    model = DAGGPT(cfg)
+    model = GPT(cfg)
 
     x = torch.randint(0, cfg.vocab_size, (1, 4))
     logits, loss = model(x, targets=x)

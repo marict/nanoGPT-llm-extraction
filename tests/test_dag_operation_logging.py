@@ -10,7 +10,8 @@ import torch.nn.functional as F
 # import library code
 # --------------------------------------------------------------------- #
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from dag_model import DAGGPT, DAGGPTConfig, op_names
+from dag_logger import DAGLogger
+from dag_model import GPT, GPTConfig, op_names
 
 
 # --------------------------------------------------------------------- #
@@ -19,7 +20,7 @@ from dag_model import DAGGPT, DAGGPTConfig, op_names
 @pytest.fixture
 def small_dag_model():
     """Create a small DAG model for testing."""
-    cfg = DAGGPTConfig(
+    cfg = GPTConfig(
         vocab_size=50,
         block_size=8,
         n_layer=2,
@@ -29,7 +30,7 @@ def small_dag_model():
         dropout=0.0,
         bias=False,
     )
-    model = DAGGPT(cfg)
+    model = GPT(cfg)
     model.train()  # Enable training mode for gradient computation
     return model, cfg
 
@@ -58,8 +59,9 @@ def test_get_op_probabilities(small_dag_model, sample_batch):
     # Forward pass
     logits, loss = model(input_ids, target_ids)
 
-    # Get operation probabilities
-    op_probs = model.get_op_probabilities()
+    # Get operation probabilities using DAGLogger
+    logger = DAGLogger()
+    op_probs = logger.get_op_probabilities(model)
 
     # Check that we have probabilities for all operations
     expected_keys = [f"op_probs/{op}" for op in op_names]
@@ -83,7 +85,8 @@ def test_get_op_probabilities_no_forward_pass(small_dag_model):
     model, _ = small_dag_model
 
     # No forward pass yet
-    op_probs = model.get_op_probabilities()
+    logger = DAGLogger()
+    op_probs = logger.get_op_probabilities(model)
 
     # Should return empty dict
     assert op_probs == {}
@@ -100,8 +103,9 @@ def test_get_op_logits_dict(small_dag_model, sample_batch):
     # Forward pass
     logits, loss = model(input_ids, target_ids)
 
-    # Get operation logits
-    op_logits = model.get_op_logits_dict()
+    # Get operation logits using DAGLogger
+    logger = DAGLogger()
+    op_logits = logger.get_op_logits_dict(model)
 
     # Check that we have logits for all operations
     expected_keys = [f"op_logits/{op}" for op in op_names]
@@ -123,9 +127,10 @@ def test_op_logits_to_probabilities_consistency(small_dag_model, sample_batch):
     # Forward pass
     logits, loss = model(input_ids, target_ids)
 
-    # Get both probabilities and logits
-    op_probs = model.get_op_probabilities()
-    op_logits = model.get_op_logits_dict()
+    # Get both probabilities and logits using DAGLogger
+    logger = DAGLogger()
+    op_probs = logger.get_op_probabilities(model)
+    op_logits = logger.get_op_logits_dict(model)
 
     # Convert logits to probabilities manually
     logit_values = [op_logits[f"op_logits/{op}"] for op in op_names]
@@ -152,11 +157,15 @@ def test_operation_gradient_capture(small_dag_model, sample_batch):
     # Forward pass
     logits, loss = model(input_ids, target_ids)
 
+    # Set up gradient tracking before backward pass
+    logger = DAGLogger()
+    logger.setup_gradient_tracking(model)
+
     # Backward pass to compute gradients
     loss.backward()
 
     # Get extra values which should include gradients
-    extra_vals = model.extra_vals()
+    extra_vals = logger.get_extra_vals(model)
 
     # Check for operation gradient keys
     expected_grad_keys = [f"op_grad/{op}" for op in op_names]
@@ -180,10 +189,14 @@ def test_gradient_computation_consistency(small_dag_model, sample_batch):
     gradients_run1 = []
     gradients_run2 = []
 
+    # Set up logger
+    logger = DAGLogger()
+
     # First run
     logits1, loss1 = model(input_ids, target_ids)
+    logger.setup_gradient_tracking(model)
     loss1.backward()
-    extra_vals1 = model.extra_vals()
+    extra_vals1 = logger.get_extra_vals(model)
     gradients_run1 = [extra_vals1.get(f"op_grad/{op}", 0.0) for op in op_names]
 
     # Reset model gradients
@@ -191,8 +204,9 @@ def test_gradient_computation_consistency(small_dag_model, sample_batch):
 
     # Second run with same input (gradients may vary due to Gumbel sampling)
     logits2, loss2 = model(input_ids, target_ids)
+    logger.setup_gradient_tracking(model)
     loss2.backward()
-    extra_vals2 = model.extra_vals()
+    extra_vals2 = logger.get_extra_vals(model)
     gradients_run2 = [extra_vals2.get(f"op_grad/{op}", 0.0) for op in op_names]
 
     # Verify gradients are reasonable (finite, not too large)
@@ -219,10 +233,15 @@ def test_extra_vals_includes_all_logging_info(small_dag_model, sample_batch):
 
     # Forward and backward pass
     logits, loss = model(input_ids, target_ids)
+
+    # Set up gradient tracking before backward pass
+    logger = DAGLogger()
+    logger.setup_gradient_tracking(model)
+
     loss.backward()
 
-    # Get extra values
-    extra_vals = model.extra_vals()
+    # Get extra values using DAGLogger
+    extra_vals = logger.get_extra_vals(model)
 
     # Check for entropy values
     entropy_keys = [key for key in extra_vals.keys() if key.startswith("dag_entropy/")]
@@ -248,7 +267,7 @@ def test_extra_vals_includes_all_logging_info(small_dag_model, sample_batch):
 # --------------------------------------------------------------------- #
 def test_logging_with_no_dag_depth(sample_batch):
     """Test that logging functions work correctly when dag_depth=0 (no DAG)."""
-    cfg = DAGGPTConfig(
+    cfg = GPTConfig(
         vocab_size=50,
         block_size=8,
         n_layer=2,
@@ -259,8 +278,8 @@ def test_logging_with_no_dag_depth(sample_batch):
         bias=False,
     )
 
-    # This should create a regular GPT model, not DAGGPT
-    from model import GPT
+    # This should create a regular GPT model
+    from dag_model import GPT
 
     model = GPT(cfg)
 
@@ -279,16 +298,20 @@ def test_logging_after_multiple_forward_passes(small_dag_model, sample_batch):
     model, _ = small_dag_model
     input_ids, target_ids = sample_batch
 
+    # Set up logger
+    logger = DAGLogger()
+
     # Multiple forward passes
     for i in range(3):
         logits, loss = model(input_ids, target_ids)
+        logger.setup_gradient_tracking(model)
         loss.backward()
         model.zero_grad()
 
-        # Check that logging still works
-        op_probs = model.get_op_probabilities()
-        op_logits = model.get_op_logits_dict()
-        extra_vals = model.extra_vals()
+        # Check that logging still works using DAGLogger
+        op_probs = logger.get_op_probabilities(model)
+        op_logits = logger.get_op_logits_dict(model)
+        extra_vals = logger.get_extra_vals(model)
 
         assert len(op_probs) == len(
             op_names
@@ -308,15 +331,16 @@ def test_gradient_tracking_with_grad_context(small_dag_model, sample_batch):
     with torch.no_grad():
         logits, loss = model(input_ids, target_ids)
 
-    # Should still be able to get probabilities and logits
-    op_probs = model.get_op_probabilities()
-    op_logits = model.get_op_logits_dict()
+    # Should still be able to get probabilities and logits using DAGLogger
+    logger = DAGLogger()
+    op_probs = logger.get_op_probabilities(model)
+    op_logits = logger.get_op_logits_dict(model)
 
     assert len(op_probs) == len(op_names), "Probabilities not available under no_grad"
     assert len(op_logits) == len(op_names), "Logits not available under no_grad"
 
     # But gradients should be empty or zero since no backward pass
-    extra_vals = model.extra_vals()
+    extra_vals = logger.get_extra_vals(model)
     grad_keys = [key for key in extra_vals.keys() if key.startswith("op_grad/")]
 
     # Gradients might be present but should be zero or very small
@@ -333,6 +357,9 @@ def test_logging_integration_training_scenario(small_dag_model):
     """Test logging functionality in a training-like scenario with multiple batches."""
     model, cfg = small_dag_model
 
+    # Set up logger
+    logger = DAGLogger()
+
     # Simulate training loop
     all_op_probs = []
     all_op_logits = []
@@ -348,13 +375,16 @@ def test_logging_integration_training_scenario(small_dag_model):
         # Forward pass
         logits, loss = model(input_ids, target_ids)
 
+        # Set up gradient tracking before backward pass
+        logger.setup_gradient_tracking(model)
+
         # Backward pass
         loss.backward()
 
-        # Collect logging information
-        op_probs = model.get_op_probabilities()
-        op_logits = model.get_op_logits_dict()
-        extra_vals = model.extra_vals()
+        # Collect logging information using DAGLogger
+        op_probs = logger.get_op_probabilities(model)
+        op_logits = logger.get_op_logits_dict(model)
+        extra_vals = logger.get_extra_vals(model)
 
         all_op_probs.append(op_probs)
         all_op_logits.append(op_logits)

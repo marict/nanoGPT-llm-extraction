@@ -11,7 +11,7 @@ from pathlib import Path
 import tiktoken
 import torch
 
-from model import GPT, GPTConfig
+from dag_model import GPT, GPTConfig
 from python_version_check import check_python_version
 
 check_python_version()
@@ -88,12 +88,13 @@ if init_from == "resume":
     model_args = checkpoint["model_args"]
     if "dag_depth" in model_args:
         # This is a DAGGPT model
-        from dag_model import DAGGPT, DAGGPTConfig
+        from dag_model import GPT, GPTConfig
 
-        gptconf = DAGGPTConfig(**model_args)
-        model = DAGGPT(gptconf)
+        gptconf = GPTConfig(**model_args)
+        model = GPT(gptconf)
     else:
-        # This is a regular GPT model
+        # This is a regular GPT model (dag_depth=0 by default)
+        model_args.setdefault("dag_depth", 0)
         gptconf = GPTConfig(**model_args)
         model = GPT(gptconf)
 

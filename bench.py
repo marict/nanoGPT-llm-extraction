@@ -12,7 +12,7 @@ import torch
 from python_version_check import check_python_version
 
 check_python_version()
-from model import GPT, GPTConfig
+from dag_model import GPT, GPTConfig
 
 # -----------------------------------------------------------------------------
 batch_size = 12
@@ -87,6 +87,7 @@ gptconf = GPTConfig(
     n_embd=768,  # size of the model
     dropout=0,  # for determinism
     bias=bias,
+    dag_depth=0,  # standard GPT mode
 )
 model = GPT(gptconf)
 model.to(device)

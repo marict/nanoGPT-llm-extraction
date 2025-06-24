@@ -195,16 +195,12 @@ def main():
 
     # Determine model type based on checkpoint
     model_args = checkpoint["model_args"]
-    if "dag_depth" in model_args and model_args["dag_depth"] > 0:
-        from dag_model import DAGGPT, DAGGPTConfig
+    from dag_model import GPT, GPTConfig
 
-        config = DAGGPTConfig(**model_args)
-        model = DAGGPT(config)
-    else:
-        from model import GPT, GPTConfig
-
-        config = GPTConfig(**model_args)
-        model = GPT(config)
+    # Ensure dag_depth is set (default to 0 for standard GPT)
+    model_args.setdefault("dag_depth", 0)
+    config = GPTConfig(**model_args)
+    model = GPT(config)
 
     # Load weights
     model.load_state_dict(checkpoint["model"])

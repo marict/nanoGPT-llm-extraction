@@ -4,12 +4,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest
 
-from model import GPT, GPTConfig
+from dag_model import GPT, GPTConfig
 
 
 @pytest.fixture(scope="module")
 def simple_model():
-    config = GPTConfig(vocab_size=10, block_size=4, n_layer=1, n_head=1, n_embd=8)
+    config = GPTConfig(
+        vocab_size=10, block_size=4, n_layer=1, n_head=1, n_embd=8, dag_depth=0
+    )
     return GPT(config)
 
 

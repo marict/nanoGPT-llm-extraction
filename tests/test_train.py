@@ -339,11 +339,17 @@ def test_math_eval_config_integration():
 
 def test_evaluate_math():
     """Test the evaluate_math function."""
-    from model import GPT, GPTConfig
+    from dag_model import GPT, GPTConfig
 
     # Create a small test model
     config = GPTConfig(
-        n_layer=2, n_head=2, n_embd=32, vocab_size=50257, block_size=64, bias=False
+        n_layer=2,
+        n_head=2,
+        n_embd=32,
+        vocab_size=50257,
+        block_size=64,
+        bias=False,
+        dag_depth=0,
     )
     model = GPT(config)
 
@@ -361,11 +367,17 @@ def test_evaluate_math():
 
 def test_evaluate_math_default_tasks():
     """Test evaluate_math with default tasks (no tasks specified)."""
-    from model import GPT, GPTConfig
+    from dag_model import GPT, GPTConfig
 
     # Create a small test model
     config = GPTConfig(
-        n_layer=2, n_head=2, n_embd=32, vocab_size=50257, block_size=64, bias=False
+        n_layer=2,
+        n_head=2,
+        n_embd=32,
+        vocab_size=50257,
+        block_size=64,
+        bias=False,
+        dag_depth=0,
     )
     model = GPT(config)
 
@@ -385,11 +397,17 @@ def test_evaluate_math_default_tasks():
 
 def test_evaluate_math_error_handling():
     """Test evaluate_math error handling."""
-    from model import GPT, GPTConfig
+    from dag_model import GPT, GPTConfig
 
     # Create a small test model
     config = GPTConfig(
-        n_layer=2, n_head=2, n_embd=32, vocab_size=50257, block_size=64, bias=False
+        n_layer=2,
+        n_head=2,
+        n_embd=32,
+        vocab_size=50257,
+        block_size=64,
+        bias=False,
+        dag_depth=0,
     )
     model = GPT(config)
 

@@ -28,8 +28,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 import run_math_eval
 import runpod_service
-from dag_model import DAGGPT, DAGGPTConfig
-from model import GPT, GPTConfig
+from dag_logger import DAGLogger
+from dag_model import GPT, GPTConfig
 from python_version_check import check_python_version
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
@@ -386,11 +386,8 @@ def train(cfg: TrainConfig) -> None:
         vocab_size=vocab_size or 50_304,
         dropout=cfg.dropout,
     )
-    if cfg.dag_depth > 0:
-        model_args["dag_depth"] = cfg.dag_depth
-        ModelConfig, ModelClass = DAGGPTConfig, DAGGPT
-    else:
-        ModelConfig, ModelClass = GPTConfig, GPT
+    model_args["dag_depth"] = cfg.dag_depth
+    ModelConfig, ModelClass = GPTConfig, GPT
 
     if cfg.init_from == "scratch":
         if master_process:
@@ -418,11 +415,12 @@ def train(cfg: TrainConfig) -> None:
         base_model = GPT.from_pretrained(cfg.init_from, dict(dropout=cfg.dropout))
         for k in ("n_layer", "n_head", "n_embd", "block_size", "bias", "vocab_size"):
             model_args[k] = getattr(base_model.config, k)
-        if cfg.dag_depth > 0:
-            gptconf = ModelConfig(**model_args)
-            model = ModelClass(gptconf)
-        else:
-            model = base_model
+        # Always create a new model with the desired dag_depth
+        gptconf = ModelConfig(**model_args)
+        model = ModelClass(gptconf)
+        # If dag_depth=0, copy weights from the pretrained model
+        if cfg.dag_depth == 0:
+            model.load_state_dict(base_model.state_dict())
         iter_num, best_val_loss = 0, 1e9
     else:
         raise ValueError(f"Unsupported init_from {cfg.init_from}")
@@ -516,6 +514,12 @@ def train(cfg: TrainConfig) -> None:
         extra_vals = {}
 
         print(f"[{time.time() - setup_start:.2f}s] Entering training loop")
+
+        # Initialize DAG logger for models that support it
+        dag_logger = None
+        if isinstance(raw_model, DAGGPT):
+            dag_logger = DAGLogger()
+
         while True:
             lr = get_lr(iter_num, cfg=cfg) if cfg.decay_lr else cfg.learning_rate
             for pg in optimizer.param_groups:
@@ -524,28 +528,18 @@ def train(cfg: TrainConfig) -> None:
             if iter_num % cfg.eval_interval == 0 and iter_num > 0 and master_process:
                 try:
                     losses = estimate_loss(model, cfg.eval_iters, get_batch, ctx)
+
+                    # Setup gradient tracking if we have a DAG logger
+                    if dag_logger is not None:
+                        dag_logger.setup_gradient_tracking(raw_model)
+
                     eval_extra = model.extra_vals()
 
-                    # Get operation probabilities and logits for logging
-                    op_probs = {}
-                    op_logits_dict = {}
-                    if hasattr(raw_model, "get_op_probabilities"):
-                        op_probs = raw_model.get_op_probabilities()
-                        if op_probs:
-                            print("Operation probabilities:")
-                            for op_name, prob in op_probs.items():
-                                print(
-                                    f"  {op_name.replace('op_probs/', '')}: {prob:.4f}"
-                                )
-
-                    if hasattr(raw_model, "get_op_logits_dict"):
-                        op_logits_dict = raw_model.get_op_logits_dict()
-                        if op_logits_dict:
-                            print("Operation logits:")
-                            for op_name, logit in op_logits_dict.items():
-                                print(
-                                    f"  {op_name.replace('op_logits/', '')}: {logit:.4f}"
-                                )
+                    # Get additional logging info if we have a DAG logger
+                    if dag_logger is not None:
+                        eval_extra.update(dag_logger.get_extra_vals(raw_model))
+                        # Print formatted logging to console
+                        dag_logger.format_console_logging(raw_model)
 
                     # Generate a sample sentence to track generation quality
                     generated_sample = ""
@@ -599,23 +593,30 @@ def train(cfg: TrainConfig) -> None:
                     # Log everything to wandb if available
                     if run is not None:
                         try:
-                            log_dict = {
+                            base_log_dict = {
                                 "iter": iter_num,
                                 "train/loss": losses["train"],
                                 "val/loss": losses["val"],
                                 "lr": lr,
                                 "mfu": running_mfu * 100,
                                 **eval_extra,
-                                **op_probs,  # Add operation probabilities
-                                **op_logits_dict,  # Add operation logits
                             }
+
                             # Add math evaluation scores
                             for task, score in math_scores.items():
-                                log_dict[f"math_eval/{task}"] = score
+                                base_log_dict[f"math_eval/{task}"] = score
 
                             # Log generated sample as text
                             if generated_sample:
-                                log_dict["generated_sample"] = generated_sample
+                                base_log_dict["generated_sample"] = generated_sample
+
+                            # Use DAG logger to get comprehensive logging dict
+                            if dag_logger is not None:
+                                log_dict = dag_logger.get_wandb_logging_dict(
+                                    raw_model, base_log_dict
+                                )
+                            else:
+                                log_dict = base_log_dict
 
                             wandb.log(log_dict, step=iter_num, commit=False)
                         except Exception as e:
@@ -656,7 +657,11 @@ def train(cfg: TrainConfig) -> None:
                     scaler.scale(loss).backward()
                     # We have to grab the extra vals after the backwards pass
                     # because some might be gradients.
+                    if dag_logger is not None:
+                        dag_logger.setup_gradient_tracking(raw_model)
                     extra_vals = model.extra_vals()
+                    if dag_logger is not None:
+                        extra_vals.update(dag_logger.get_extra_vals(raw_model))
 
                 if cfg.grad_clip:
                     scaler.unscale_(optimizer)
@@ -672,20 +677,18 @@ def train(cfg: TrainConfig) -> None:
                     and master_process
                     and run is not None
                 ):
-                    # Get current operation probabilities and logits for regular logging too
-                    current_op_probs = {}
-                    current_op_logits = {}
-                    if hasattr(raw_model, "get_op_probabilities"):
-                        current_op_probs = raw_model.get_op_probabilities()
-                    if hasattr(raw_model, "get_op_logits_dict"):
-                        current_op_logits = raw_model.get_op_logits_dict()
-
-                    log_dict = {
+                    # Use DAG logger for logging if available
+                    base_dict = {
                         "iter": iter_num,
                         **extra_vals,
-                        **current_op_probs,
-                        **current_op_logits,
                     }
+
+                    if dag_logger is not None:
+                        log_dict = dag_logger.get_wandb_logging_dict(
+                            raw_model, base_dict
+                        )
+                    else:
+                        log_dict = base_dict
                     wandb.log(log_dict, step=iter_num, commit=True)
                     lossf = loss.item() * cfg.gradient_accumulation_steps
                     if iter_num >= 5:

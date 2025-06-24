@@ -86,7 +86,7 @@ import pytest
 import torch
 
 import dag_model
-from dag_model import DAGGPT, DAGController, DAGGPTConfig, op_funcs
+from dag_model import GPT, DAGController, GPTConfig, op_funcs
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +137,7 @@ def test_visualize_dag_attention(tmp_path):
     # tiny DAG-GPT model
     # ---------------------------------------------------------------------
     tokens = [2, 3]  # pretend these came from the prompt
-    cfg = DAGGPTConfig(
+    cfg = GPTConfig(
         vocab_size=10,
         block_size=len(tokens),
         n_layer=1,
@@ -145,7 +145,7 @@ def test_visualize_dag_attention(tmp_path):
         n_embd=4,
         dag_depth=1,
     )
-    model = DAGGPT(cfg)
+    model = GPT(cfg)
     model.dag.controller = DummyController(cfg.n_embd, n_ops=len(op_funcs))
 
     # ---------------------------------------------------------------------
