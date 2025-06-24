@@ -156,24 +156,18 @@ def subtract(x, y):
 
 
 def divide(x, y, eps: float = 1e-8):
-    result = x / (y.abs() + eps)
-    # Clamp result to prevent extreme values
-    return torch.clamp(result, -1e6, 1e6)
+    return torch.clamp(x / (y.abs() + eps), -1e6, 1e6)
 
 
 def power(x, y, max_exp: float = 6.0):
-    # Prevent NaN by clamping base and exponent
     x_safe = torch.clamp(x.abs() + 1e-8, min=1e-8, max=1e3)
     y_safe = torch.clamp(y, min=-max_exp, max=max_exp)
-    result = x_safe**y_safe
-    # Preserve sign from original x
-    result = result * torch.sign(x)
+    result = (x_safe**y_safe) * torch.sign(x)
     return torch.clamp(result, -1e6, 1e6)
 
 
 def log(x, _unused=None, eps: float = 1e-8):
-    result = torch.log(torch.clamp(torch.abs(x) + eps, min=eps))
-    return torch.clamp(result, -20.0, 20.0)
+    return torch.clamp(torch.log(torch.clamp(torch.abs(x) + eps, min=eps)), -20.0, 20.0)
 
 
 def max_op(x, y):
@@ -545,61 +539,46 @@ class GPT(nn.Module):
         device = idx.device
         assert T <= self.config.block_size
 
-        # ── GPT backbone ───────────────────────────────────────────
+        # GPT backbone
         pos = torch.arange(T, device=device)
         emb = self.transformer.wte(idx) + self.transformer.wpe(pos)
         x = self.transformer.drop(emb)
         for blk in self.transformer.h:
             x = blk(x)
-        hidden = self.transformer.ln_f(x)  # (B , T , H)
+        hidden = self.transformer.ln_f(x)
 
-        # If no DAG augmentation, behave like standard GPT
+        # Standard GPT mode (no DAG augmentation)
         if self.config.dag_depth == 0:
             if targets is not None:
-                # if we are given some desired targets also calculate the loss
                 logits = self.lm_head(hidden)
                 loss = self._compute_loss(logits, targets)
             else:
-                # inference-time mini-optimization: only forward the lm_head on the very last position
-                logits = self.lm_head(
-                    hidden[:, [-1], :]
-                )  # note: using list [-1] to preserve the time dim
+                logits = self.lm_head(hidden[:, [-1], :])
                 loss = None
 
             if return_dag_info:
                 return logits, loss, {"values": [], "embeds": [], "attn": [], "op": []}
             return logits, loss
 
-        # ── DAG augmentation path ──────────────────────────────────
-        # ── prepare node embeddings & scalar values ───────────────
-        node_embeds = self.node_embed_block(
-            hidden
-        )  # Contains linguistic context specific to mathematics.
-        node_values = self.value_extractor(
-            node_embeds
-        )  # (B, T) # Values derived from the mathematical linguistic context.
+        # DAG augmentation mode
+        node_embeds = self.node_embed_block(hidden)
+        node_values = self.value_extractor(node_embeds)
 
-        embeds_list = [
-            node_embeds[:, i, :] for i in range(T)
-        ]  # length-T list of (B , H)
-        values_list = [node_values[:, i] for i in range(T)]  # length-T list of (B)
+        embeds_list = [node_embeds[:, i, :] for i in range(T)]
+        values_list = [node_values[:, i] for i in range(T)]
 
         # guarantee at least two nodes
         while len(embeds_list) < 2:
             embeds_list.append(torch.zeros_like(embeds_list[0]))
             values_list.append(torch.zeros_like(values_list[0]))
 
-        # Operand & operator chooser context
-        operand_ctx = self.operand_ctx_block(node_embeds).mean(dim=1)  # (B , H)
-        op_ctx = self.op_ctx_block(node_embeds).mean(dim=1)  # (B , H)
+        # Generate operand and operator context
+        operand_ctx = self.operand_ctx_block(node_embeds).mean(dim=1)
+        op_ctx = self.op_ctx_block(node_embeds).mean(dim=1)
 
-        # ── run DAG ───────────────────────────────────────────────
+        # Run DAG
         dag_out = self.dag(
-            embeds_list,
-            values_list,
-            operand_ctx,
-            op_ctx,
-            return_info=return_dag_info,
+            embeds_list, values_list, operand_ctx, op_ctx, return_info=return_dag_info
         )
         if return_dag_info:
             embeds_list, values_list, att_hist, op_hist = dag_out
@@ -607,25 +586,21 @@ class GPT(nn.Module):
             embeds_list, values_list = dag_out
             att_hist = op_hist = None
 
-        # Project values into H-dim space
-        value_tensor = torch.stack(values_list, dim=1).unsqueeze(-1)  # (B, N, 1)
-        value_proj = self.scalar_to_embed(value_tensor)  # (B, N, H)
-
-        # Aggregate (mean pool) the value embeddings into a single embedding
+        # Project values and aggregate
+        value_tensor = torch.stack(values_list, dim=1).unsqueeze(-1)
+        value_proj = self.scalar_to_embed(value_tensor)
         attn_out, _ = self.value_attn(value_proj, value_proj, value_proj)
         pooled_values = attn_out.mean(dim=1)
 
-        # Refine with post-dag block
-        dag_sem = self.post_dag_block(pooled_values.unsqueeze(1)).squeeze(1)  # (B, H)
-
-        # Fuse into hidden state
+        # Refine and fuse with hidden state
+        dag_sem = self.post_dag_block(pooled_values.unsqueeze(1)).squeeze(1)
         gate = torch.sigmoid(
             self.mix_gate(torch.cat([hidden[:, -1, :], dag_sem], dim=-1))
         )
         fused = (1 - gate) * hidden[:, -1, :] + gate * dag_sem
         hidden = torch.cat([hidden[:, :-1, :], fused.unsqueeze(1)], dim=1)
 
-        # ── keep a few salient activations for diagnostics ──────────────
+        # Store activations and values for logging
         self.last_activations = {
             "node_embeds": node_embeds,
             "value_proj": value_proj,
@@ -633,8 +608,6 @@ class GPT(nn.Module):
             "op_ctx": op_ctx,
             "op_logits": self.dag.controller.last_op_logits,
         }
-
-        # Store the values list for logging
         self.last_values_list = values_list
 
         # Note: Gradient tracking is now handled by DAGLogger
@@ -819,20 +792,15 @@ class GPT(nn.Module):
                 logits[logits < v[:, [-1]]] = -float("Inf")
 
             # apply softmax to convert logits to (normalized) probabilities
-            # Clamp logits to prevent extreme values
             logits = torch.clamp(logits, -50.0, 50.0)
             probs = F.softmax(logits, dim=-1)
 
-            # Ensure probabilities are normalized and handle edge cases
-            probs = probs / probs.sum(dim=-1, keepdim=True)
-
-            # Replace any NaN or inf values with uniform distribution
+            # Handle edge cases (NaN/inf values)
             if torch.isnan(probs).any() or torch.isinf(probs).any():
                 probs = torch.ones_like(probs) / probs.size(-1)
-
-            # Ensure probabilities are strictly positive
-            probs = torch.clamp(probs, min=1e-10)
-            probs = probs / probs.sum(dim=-1, keepdim=True)
+            else:
+                probs = torch.clamp(probs, min=1e-10)
+                probs = probs / probs.sum(dim=-1, keepdim=True)
 
             # sample from the distribution
             idx_next = torch.multinomial(probs, num_samples=1)
@@ -840,8 +808,3 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
-
-
-# Backward compatibility aliases
-DAGGPT = GPT
-DAGGPTConfig = GPTConfig

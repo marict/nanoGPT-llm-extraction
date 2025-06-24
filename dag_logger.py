@@ -79,61 +79,34 @@ class DAGLogger:
             hook.remove()
         self.gradient_hooks.clear()
 
-    def get_entropy_metrics(self, model) -> Dict[str, float]:
+    def get_extra_vals(self, model) -> Dict[str, float]:
         """
-        Calculate entropy metrics for DAG activations.
+        Get all extra logging values for a model (entropies + gradients).
 
         Args:
-            model: DAGGPT model instance
+            model: GPT model instance
 
         Returns:
-            Dictionary of entropy metrics
+            Dictionary of all logging metrics
         """
         metrics = {}
 
-        if not hasattr(model, "last_activations"):
-            return metrics
+        # Add entropy metrics
+        if hasattr(model, "last_activations"):
+            for name, act in model.last_activations.items():
+                if act is not None:
+                    with torch.no_grad():
+                        prob = torch.softmax(act, dim=-1)
+                        ent = -(prob * (prob + 1e-8).log()).sum(-1).mean()
+                        metrics[f"dag_entropy/{name}"] = ent.item()
 
-        for name, act in model.last_activations.items():
-            if act is not None:
-                with torch.no_grad():
-                    prob = torch.softmax(act, dim=-1)
-                    ent = -(prob * (prob + 1e-8).log()).sum(-1).mean()
-                    metrics[f"dag_entropy/{name}"] = ent.item()
-
-        return metrics
-
-    def get_gradient_metrics(self) -> Dict[str, float]:
-        """
-        Get all captured gradient metrics.
-
-        Returns:
-            Dictionary of gradient metrics
-        """
-        metrics = {}
-
-        # Add gradient metrics with proper prefixes
+        # Add gradient metrics
         for grad_name, grad_val in self.captured_gradients.items():
             if grad_name.startswith("op_grad/") or grad_name == "op_logits_mean":
                 metrics[grad_name] = grad_val
             else:
                 metrics[f"dag_grad/{grad_name}"] = grad_val
 
-        return metrics
-
-    def get_extra_vals(self, model) -> Dict[str, float]:
-        """
-        Get all extra logging values for a model (entropies + gradients).
-
-        Args:
-            model: DAGGPT model instance
-
-        Returns:
-            Dictionary of all logging metrics
-        """
-        metrics = {}
-        metrics.update(self.get_entropy_metrics(model))
-        metrics.update(self.get_gradient_metrics())
         return metrics
 
     def get_op_probabilities(self, model) -> Dict[str, float]:
@@ -193,18 +166,13 @@ class DAGLogger:
         Get node values from the model as a list.
 
         Args:
-            model: DAGGPT model instance
+            model: GPT model instance
 
         Returns:
             List of node values
         """
-        if not hasattr(model, "last_values_list") or model.last_values_list is None:
-            return []
-
-        with torch.no_grad():
-            # Take the first sample in the batch and convert to list
-            values = [val[0].detach().cpu().item() for val in model.last_values_list]
-            return values
+        # Delegate to the model's own implementation to avoid duplication
+        return model.get_node_values_list()
 
     def format_console_logging(self, model) -> None:
         """

@@ -291,7 +291,8 @@ def test_extra_vals_daggpt():
     _, loss = model(x, y)
 
     # Test entropy extraction after forward pass but before backward pass
-    entropy_vals = logger.get_entropy_metrics(model)
+    extra_vals = logger.get_extra_vals(model)
+    entropy_vals = {k: v for k, v in extra_vals.items() if k.startswith("dag_entropy/")}
     assert isinstance(entropy_vals, dict)
 
     # Should have entropy keys but no gradient keys yet
@@ -507,7 +508,10 @@ def test_hook_behavior_no_grad_context():
         assert len(logger.captured_gradients) == 0
 
         # Logger should work and return entropy values
-        entropy_vals = logger.get_entropy_metrics(model)
+        extra_vals = logger.get_extra_vals(model)
+        entropy_vals = {
+            k: v for k, v in extra_vals.items() if k.startswith("dag_entropy/")
+        }
         entropy_keys = [k for k in entropy_vals if k.startswith("dag_entropy/")]
 
         assert (

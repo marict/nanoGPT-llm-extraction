@@ -194,10 +194,10 @@ def visualize_dag_attention(
     import matplotlib.pyplot as plt
     import torch
 
-    from dag_model import DAGGPT
+    from dag_model import GPT
 
-    if not isinstance(model, DAGGPT):
-        raise TypeError("model must be DAGGPT")
+    if not isinstance(model, GPT):
+        raise TypeError("model must be GPT with DAG capability")
 
     tokens = tokenizer.encode(prompt)
     x = torch.tensor(tokens).unsqueeze(0)

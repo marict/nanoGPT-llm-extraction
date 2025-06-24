@@ -527,16 +527,11 @@ def train(cfg: TrainConfig) -> None:
                 try:
                     losses = estimate_loss(model, cfg.eval_iters, get_batch, ctx)
 
-                    # Setup gradient tracking if we have a DAG logger
+                    # Setup DAG logger and get extra values
+                    eval_extra = model.extra_vals()
                     if dag_logger is not None:
                         dag_logger.setup_gradient_tracking(raw_model)
-
-                    eval_extra = model.extra_vals()
-
-                    # Get additional logging info if we have a DAG logger
-                    if dag_logger is not None:
                         eval_extra.update(dag_logger.get_extra_vals(raw_model))
-                        # Print formatted logging to console
                         dag_logger.format_console_logging(raw_model)
 
                     # Generate a sample sentence to track generation quality
@@ -608,13 +603,14 @@ def train(cfg: TrainConfig) -> None:
                             if generated_sample:
                                 base_log_dict["generated_sample"] = generated_sample
 
-                            # Use DAG logger to get comprehensive logging dict
-                            if dag_logger is not None:
-                                log_dict = dag_logger.get_wandb_logging_dict(
+                            # Get comprehensive logging dict
+                            log_dict = (
+                                dag_logger.get_wandb_logging_dict(
                                     raw_model, base_log_dict
                                 )
-                            else:
-                                log_dict = base_log_dict
+                                if dag_logger
+                                else base_log_dict
+                            )
 
                             wandb.log(log_dict, step=iter_num, commit=False)
                         except Exception as e:
@@ -653,12 +649,10 @@ def train(cfg: TrainConfig) -> None:
                         loss = loss / cfg.gradient_accumulation_steps
                     X, Y = get_batch("train")
                     scaler.scale(loss).backward()
-                    # We have to grab the extra vals after the backwards pass
-                    # because some might be gradients.
-                    if dag_logger is not None:
-                        dag_logger.setup_gradient_tracking(raw_model)
+                    # Get extra values after backward pass (for gradients)
                     extra_vals = model.extra_vals()
                     if dag_logger is not None:
+                        dag_logger.setup_gradient_tracking(raw_model)
                         extra_vals.update(dag_logger.get_extra_vals(raw_model))
 
                 if cfg.grad_clip:
@@ -675,18 +669,13 @@ def train(cfg: TrainConfig) -> None:
                     and master_process
                     and run is not None
                 ):
-                    # Use DAG logger for logging if available
-                    base_dict = {
-                        "iter": iter_num,
-                        **extra_vals,
-                    }
-
-                    if dag_logger is not None:
-                        log_dict = dag_logger.get_wandb_logging_dict(
-                            raw_model, base_dict
-                        )
-                    else:
-                        log_dict = base_dict
+                    # Prepare logging dict
+                    base_dict = {"iter": iter_num, **extra_vals}
+                    log_dict = (
+                        dag_logger.get_wandb_logging_dict(raw_model, base_dict)
+                        if dag_logger
+                        else base_dict
+                    )
                     wandb.log(log_dict, step=iter_num, commit=True)
                     lossf = loss.item() * cfg.gradient_accumulation_steps
                     if iter_num >= 5:
