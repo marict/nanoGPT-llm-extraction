@@ -3,6 +3,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import runpod_service as rp
+import torch
+from dag_model import GPT, DAGController, GPTConfig, op_funcs
+from pathlib import Path
 
 
 # --------------------------------------------------------------------- #
@@ -79,16 +82,6 @@ def test_start_cloud_training(monkeypatch):
     assert docker_args.startswith("bash -c")
     # Check that the config file is included in the docker args
     assert "config.py" in docker_args
-
-
-from pathlib import Path
-
-import pytest
-import torch
-
-import dag_model
-from dag_model import GPT, DAGController, GPTConfig, op_funcs
-
 
 # ---------------------------------------------------------------------------
 # helper: very small tokenizer for the test
