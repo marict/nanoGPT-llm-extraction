@@ -91,7 +91,7 @@ def generate_sample_text(
     encode: Callable,
     decode: Callable,
     device: str,
-    prompt: str = "The answer to the math problem is",
+    prompt: str = "Two plus 5 is equal to: ",
     max_new_tokens: int = 20,
     temperature: float = 0.8,
     top_k: int = 40,

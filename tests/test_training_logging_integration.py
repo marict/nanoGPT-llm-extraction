@@ -43,7 +43,7 @@ def test_training_loop_text_generation_integration():
         )  # Limit length for readability
 
     # Test text generation functionality similar to what's in train.py
-    sample_prompt = "The answer to the math problem is"
+    sample_prompt = "Two plus 5 is equal to: "
     encoded = mock_encode(sample_prompt)
     prompt_ids = torch.tensor(encoded[: cfg.block_size], dtype=torch.long).unsqueeze(0)
 

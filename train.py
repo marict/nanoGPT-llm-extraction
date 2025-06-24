@@ -564,7 +564,7 @@ def train(cfg: TrainConfig) -> None:
                     if encode is not None and decode is not None:
                         try:
                             # Simple prompt for generation
-                            sample_prompt = "The answer to the math problem is"
+                            sample_prompt = "Two plus 5 is equal to: "
                             encoded = encode(sample_prompt)
                             prompt_ids = torch.tensor(
                                 encoded, dtype=torch.long, device=device
