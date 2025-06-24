@@ -13,7 +13,6 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 import tiktoken
 import torch
-import torch.nn as nn
 
 import run_math_eval
 from dag_logger import DAGLogger
@@ -98,9 +97,6 @@ def generate_sample_text(
     top_k: int = 40,
 ) -> str:
     """Generate a sample text from the model for quality assessment."""
-    if encode is None or decode is None:
-        return "No tokenizer available"
-
     try:
         encoded = encode(prompt)
         prompt_ids = torch.tensor(encoded, dtype=torch.long, device=device).unsqueeze(0)
