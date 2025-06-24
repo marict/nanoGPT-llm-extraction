@@ -93,57 +93,61 @@ def test_get_op_probabilities_no_forward_pass(small_dag_model):
 
 
 # --------------------------------------------------------------------- #
-# Test operation logits logging
+# Test operand probabilities logging
 # --------------------------------------------------------------------- #
-def test_get_op_logits_dict(small_dag_model, sample_batch):
-    """Test that operation logits are correctly returned."""
+def test_get_operand_probabilities(small_dag_model, sample_batch):
+    """Test that operand selection probabilities are correctly returned."""
     model, _ = small_dag_model
     input_ids, target_ids = sample_batch
 
     # Forward pass
     logits, loss = model(input_ids, target_ids)
 
-    # Get operation logits using DAGLogger
+    # Get operand probabilities using DAGLogger
     logger = DAGLogger()
-    op_logits = logger.get_op_logits_dict(model)
+    operand_probs = logger.get_operand_probabilities(model)
 
-    # Check that we have logits for all operations
-    expected_keys = [f"op_logits/{op}" for op in op_names]
-    assert all(
-        key in op_logits for key in expected_keys
-    ), f"Missing logit keys. Got: {list(op_logits.keys())}"
+    # Check that we have probabilities for both operands across all nodes
+    # For a model with initial embeddings, we should have at least some nodes
+    assert len(operand_probs) > 0, "No operand probabilities found"
 
-    # Check that logits are real numbers (can be any value)
-    for key, logit in op_logits.items():
-        assert isinstance(logit, float), f"Logit {logit} for {key} is not a float"
-        assert not torch.isnan(torch.tensor(logit)), f"Logit for {key} is NaN"
+    # Check that operand probabilities sum to 1 for each operand
+    operand1_probs = [
+        v for k, v in operand_probs.items() if k.startswith("operand1_probs/")
+    ]
+    operand2_probs = [
+        v for k, v in operand_probs.items() if k.startswith("operand2_probs/")
+    ]
 
-
-def test_op_logits_to_probabilities_consistency(small_dag_model, sample_batch):
-    """Test that probabilities computed from logits match get_op_probabilities output."""
-    model, _ = small_dag_model
-    input_ids, target_ids = sample_batch
-
-    # Forward pass
-    logits, loss = model(input_ids, target_ids)
-
-    # Get both probabilities and logits using DAGLogger
-    logger = DAGLogger()
-    op_probs = logger.get_op_probabilities(model)
-    op_logits = logger.get_op_logits_dict(model)
-
-    # Convert logits to probabilities manually
-    logit_values = [op_logits[f"op_logits/{op}"] for op in op_names]
-    logit_tensor = torch.tensor(logit_values)
-    computed_probs = F.softmax(logit_tensor, dim=0)
-
-    # Compare with get_op_probabilities output
-    for i, op in enumerate(op_names):
-        expected_prob = op_probs[f"op_probs/{op}"]
-        computed_prob = computed_probs[i].item()
+    if operand1_probs:
+        operand1_sum = sum(operand1_probs)
         assert (
-            abs(expected_prob - computed_prob) < 1e-5
-        ), f"Probability mismatch for {op}: expected {expected_prob}, computed {computed_prob}"
+            abs(operand1_sum - 1.0) < 1e-5
+        ), f"Operand1 probabilities don't sum to 1: {operand1_sum}"
+
+    if operand2_probs:
+        operand2_sum = sum(operand2_probs)
+        assert (
+            abs(operand2_sum - 1.0) < 1e-5
+        ), f"Operand2 probabilities don't sum to 1: {operand2_sum}"
+
+    # Check that all probabilities are valid
+    for key, prob in operand_probs.items():
+        assert isinstance(prob, float), f"Probability {prob} for {key} is not a float"
+        assert 0.0 <= prob <= 1.0, f"Probability {prob} for {key} is not in [0,1]"
+        assert not torch.isnan(torch.tensor(prob)), f"Probability for {key} is NaN"
+
+
+def test_get_operand_probabilities_no_forward_pass(small_dag_model):
+    """Test that get_operand_probabilities returns empty dict when no forward pass has been done."""
+    model, _ = small_dag_model
+
+    # Get operand probabilities without forward pass
+    logger = DAGLogger()
+    operand_probs = logger.get_operand_probabilities(model)
+
+    # Should return empty dict
+    assert operand_probs == {}
 
 
 # --------------------------------------------------------------------- #
@@ -290,7 +294,7 @@ def test_logging_with_no_dag_depth(sample_batch):
 
     # These methods shouldn't exist on regular GPT
     assert not hasattr(model, "get_op_probabilities")
-    assert not hasattr(model, "get_op_logits_dict")
+    assert not hasattr(model, "get_operand_probabilities")
 
 
 def test_logging_after_multiple_forward_passes(small_dag_model, sample_batch):
@@ -310,13 +314,13 @@ def test_logging_after_multiple_forward_passes(small_dag_model, sample_batch):
 
         # Check that logging still works using DAGLogger
         op_probs = logger.get_op_probabilities(model)
-        op_logits = logger.get_op_logits_dict(model)
+        operand_probs = logger.get_operand_probabilities(model)
         extra_vals = logger.get_extra_vals(model)
 
         assert len(op_probs) == len(
             op_names
         ), f"Iteration {i}: wrong number of probabilities"
-        assert len(op_logits) == len(op_names), f"Iteration {i}: wrong number of logits"
+        assert len(operand_probs) > 0, f"Iteration {i}: no operand probabilities found"
         assert any(
             key.startswith("op_grad/") for key in extra_vals.keys()
         ), f"Iteration {i}: no operation gradients found"
@@ -331,13 +335,13 @@ def test_gradient_tracking_with_grad_context(small_dag_model, sample_batch):
     with torch.no_grad():
         logits, loss = model(input_ids, target_ids)
 
-    # Should still be able to get probabilities and logits using DAGLogger
+    # Should still be able to get probabilities and operand probs using DAGLogger
     logger = DAGLogger()
     op_probs = logger.get_op_probabilities(model)
-    op_logits = logger.get_op_logits_dict(model)
+    operand_probs = logger.get_operand_probabilities(model)
 
     assert len(op_probs) == len(op_names), "Probabilities not available under no_grad"
-    assert len(op_logits) == len(op_names), "Logits not available under no_grad"
+    assert len(operand_probs) > 0, "Operand probabilities not available under no_grad"
 
     # But gradients should be empty or zero since no backward pass
     extra_vals = logger.get_extra_vals(model)
@@ -362,7 +366,7 @@ def test_logging_integration_training_scenario(small_dag_model):
 
     # Simulate training loop
     all_op_probs = []
-    all_op_logits = []
+    all_operand_probs = []
     all_gradients = []
 
     for step in range(5):
@@ -383,11 +387,11 @@ def test_logging_integration_training_scenario(small_dag_model):
 
         # Collect logging information using DAGLogger
         op_probs = logger.get_op_probabilities(model)
-        op_logits = logger.get_op_logits_dict(model)
+        operand_probs = logger.get_operand_probabilities(model)
         extra_vals = logger.get_extra_vals(model)
 
         all_op_probs.append(op_probs)
-        all_op_logits.append(op_logits)
+        all_operand_probs.append(operand_probs)
         all_gradients.append(
             {k: v for k, v in extra_vals.items() if k.startswith("op_grad/")}
         )
@@ -397,7 +401,7 @@ def test_logging_integration_training_scenario(small_dag_model):
 
     # Verify we collected data for all steps
     assert len(all_op_probs) == 5
-    assert len(all_op_logits) == 5
+    assert len(all_operand_probs) == 5
     assert len(all_gradients) == 5
 
     # Verify each step has complete data
@@ -405,9 +409,9 @@ def test_logging_integration_training_scenario(small_dag_model):
         assert len(all_op_probs[step]) == len(
             op_names
         ), f"Step {step}: incomplete probabilities"
-        assert len(all_op_logits[step]) == len(
-            op_names
-        ), f"Step {step}: incomplete logits"
+        assert (
+            len(all_operand_probs[step]) > 0
+        ), f"Step {step}: no operand probabilities"
         assert len(all_gradients[step]) == len(
             op_names
         ), f"Step {step}: incomplete gradients"

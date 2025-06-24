@@ -134,32 +134,41 @@ class DAGLogger:
             probs = F.softmax(op_logits, dim=-1)[0].detach().cpu().numpy()
             return {f"op_probs/{op}": float(p) for op, p in zip(op_names, probs)}
 
-    def get_op_logits_dict(self, model) -> Dict[str, float]:
+    def get_operand_probabilities(self, model) -> Dict[str, float]:
         """
-        Get operation logits from the model.
+        Get operand selection probabilities from the model.
 
         Args:
             model: DAGGPT model instance
 
         Returns:
-            Dictionary of operation logits
+            Dictionary of operand probabilities
         """
         if (
-            not hasattr(model, "last_activations")
-            or "op_logits" not in model.last_activations
+            not hasattr(model, "dag")
+            or not hasattr(model.dag, "controller")
+            or not hasattr(model.dag.controller, "last_attn")
         ):
             return {}
 
-        op_logits = model.last_activations["op_logits"]
-        if op_logits is None:
+        last_attn = model.dag.controller.last_attn
+        if last_attn is None:
             return {}
 
         with torch.no_grad():
+            # last_attn is (B, 2, N) - batch, 2 operands, N nodes
             # Take the first sample in the batch
-            logits = op_logits[0].detach().cpu().numpy()
-            return {
-                f"op_logits/{op}": float(logit) for op, logit in zip(op_names, logits)
-            }
+            attn_probs = last_attn[0].detach().cpu().numpy()  # (2, N)
+
+            operand_probs = {}
+            for operand_idx in range(attn_probs.shape[0]):  # 2 operands
+                for node_idx in range(attn_probs.shape[1]):  # N nodes
+                    prob = float(attn_probs[operand_idx, node_idx])
+                    operand_probs[f"operand{operand_idx+1}_probs/node_{node_idx}"] = (
+                        prob
+                    )
+
+            return operand_probs
 
     def get_node_values_list(self, model) -> List[float]:
         """
@@ -188,12 +197,12 @@ class DAGLogger:
             for op_name, prob in op_probs.items():
                 print(f"  {op_name.replace('op_probs/', '')}: {prob:.4f}")
 
-        # Operation logits
-        op_logits_dict = self.get_op_logits_dict(model)
-        if op_logits_dict:
-            print("Operation logits:")
-            for op_name, logit in op_logits_dict.items():
-                print(f"  {op_name.replace('op_logits/', '')}: {logit:.4f}")
+        # Operand probabilities
+        operand_probs = self.get_operand_probabilities(model)
+        if operand_probs:
+            print("Operand probabilities:")
+            for operand_name, prob in operand_probs.items():
+                print(f"  {operand_name}: {prob:.4f}")
 
         # Node values
         node_values = self.get_node_values_list(model)
@@ -218,7 +227,7 @@ class DAGLogger:
         log_dict = dict(base_dict)
         log_dict.update(self.get_extra_vals(model))
         log_dict.update(self.get_op_probabilities(model))
-        log_dict.update(self.get_op_logits_dict(model))
+        log_dict.update(self.get_operand_probabilities(model))
 
         # Add node values
         node_values = self.get_node_values_list(model)

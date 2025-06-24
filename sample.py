@@ -11,6 +11,7 @@ from pathlib import Path
 import tiktoken
 import torch
 
+from dag_logger import DAGLogger
 from dag_model import GPT, GPTConfig
 from python_version_check import check_python_version
 
@@ -145,9 +146,16 @@ start_ids = encode(start)
 x = torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...]
 
 # run generation
+dag_logger = DAGLogger()
 with torch.no_grad():
     with ctx:
         for k in range(num_samples):
             y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
             print(decode(y[0].tolist()))
+
+            # Show DAG information after generation (if available)
+            if hasattr(model, "config") and model.config.dag_depth > 0:
+                print("\nDAG Information:")
+                dag_logger.format_console_logging(model)
+
             print("---------------")

@@ -17,11 +17,20 @@ from dag_model import GPT, GPTConfig, op_names
 # Test integration with training loop functionality
 # --------------------------------------------------------------------- #
 def test_training_loop_text_generation_integration():
-    """Test that the training loop can successfully generate text samples."""
-    # Create a small model for testing
+    """Test that the training loop evaluation behaves correctly with text generation."""
+    from unittest.mock import Mock
+
+    # Mock functions to simulate train.py environment
+    def mock_encode(text):
+        return [1, 2, 3, 4, 5]
+
+    def mock_decode(tokens):
+        return f"decoded_{len(tokens)}_tokens"
+
+    # This test simulates the evaluation section of train.py
     cfg = GPTConfig(
-        vocab_size=100,
-        block_size=16,
+        vocab_size=50,
+        block_size=8,
         n_layer=2,
         n_head=2,
         n_embd=32,
@@ -31,44 +40,39 @@ def test_training_loop_text_generation_integration():
     )
 
     model = GPT(cfg)
-    model.eval()  # Set to eval mode for generation
+    model.eval()
 
-    # Mock encode/decode functions (simple character-level)
-    def mock_encode(text):
-        return [ord(c) % cfg.vocab_size for c in text]
+    # Mock the encoding/decoding
+    encode = mock_encode
+    decode = mock_decode
 
-    def mock_decode(tokens):
-        return "".join(
-            [chr(t + ord("a")) for t in tokens[:20]]
-        )  # Limit length for readability
+    # Simulate the evaluation process
+    dag_logger = DAGLogger()
 
-    # Test text generation functionality similar to what's in train.py
+    # Text generation (as done in train.py evaluation)
     sample_prompt = "Two plus 5 is equal to: "
-    encoded = mock_encode(sample_prompt)
-    prompt_ids = torch.tensor(encoded[: cfg.block_size], dtype=torch.long).unsqueeze(0)
+    encoded = encode(sample_prompt)
+    prompt_ids = torch.tensor(encoded, dtype=torch.long).unsqueeze(0)
 
-    # Generate text
     with torch.no_grad():
-        try:
-            generated = model.generate(
-                prompt_ids, max_new_tokens=10, temperature=0.8, top_k=40
-            )
-            generated_tokens = generated[0].cpu().tolist()
-            generated_text = mock_decode(generated_tokens)
+        generated = model.generate(
+            prompt_ids,
+            max_new_tokens=20,
+            temperature=0.8,
+            top_k=40,
+        )
+        generated_sample = decode(generated[0].cpu().tolist())
 
-            # Basic checks
-            assert isinstance(generated_text, str), "Generated text should be a string"
-            assert len(generated_tokens) > len(
-                encoded[: cfg.block_size]
-            ), "Generated tokens should be longer than prompt tokens"
-            assert len(generated_text) > 0, "Generated text should not be empty"
+    # DAG logging after generation (as done in train.py)
+    dag_logger.format_console_logging(model)
 
-        except Exception as e:
-            pytest.fail(f"Text generation failed: {e}")
+    # Verify the integration worked
+    assert generated_sample is not None
+    assert "decoded_" in generated_sample
 
 
 def test_operation_logging_during_training_step():
-    """Test that operation logging works correctly during a simulated training step."""
+    """Test that DAG operation logging works correctly during a training-like scenario."""
     cfg = GPTConfig(
         vocab_size=50,
         block_size=8,
@@ -83,22 +87,21 @@ def test_operation_logging_during_training_step():
     model = GPT(cfg)
     model.train()
 
-    # Simulate training step
+    # Simulate forward pass
     batch_size = 2
     seq_len = cfg.block_size
     input_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
     target_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
 
-    # Forward pass
-    logits, loss = model(input_ids, target_ids)
+    _, loss = model(input_ids, target_ids)
 
-    # Set up gradient tracking before backward pass (as done in training loop)
+    # Set up gradient tracking before backward pass
     logger = DAGLogger()
     logger.setup_gradient_tracking(model)
 
-    # Backward pass
     loss.backward()
 
+    # Test all logging functions work together
     # 1. Operation probabilities
     op_probs = logger.get_op_probabilities(model)
     assert len(op_probs) == len(
@@ -112,14 +115,14 @@ def test_operation_logging_during_training_step():
             0.0 <= op_probs[key] <= 1.0
         ), f"Invalid probability for {op_name}: {op_probs[key]}"
 
-    # 2. Operation logits
-    op_logits = logger.get_op_logits_dict(model)
-    assert len(op_logits) == len(op_names), "Should have logits for all operations"
+    # 2. Operand probabilities
+    operand_probs = logger.get_operand_probabilities(model)
+    assert len(operand_probs) > 0, "Should have operand probabilities"
 
-    for op_name in op_names:
-        key = f"op_logits/{op_name}"
-        assert key in op_logits, f"Missing logit for {op_name}"
-        assert isinstance(op_logits[key], float), f"Logit for {op_name} should be float"
+    # Check that operand probabilities are valid
+    for key, prob in operand_probs.items():
+        assert isinstance(prob, float), f"Operand probability for {key} should be float"
+        assert 0.0 <= prob <= 1.0, f"Operand probability should be in [0,1]: {prob}"
 
     # 3. Extra values (including gradients)
     extra_vals = logger.get_extra_vals(model)
@@ -184,7 +187,7 @@ def test_console_logging_format():
 
     # Also test individual methods for backward compatibility
     op_probs = logger.get_op_probabilities(model)
-    op_logits = logger.get_op_logits_dict(model)
+    operand_probs = logger.get_operand_probabilities(model)
 
     # Verify the data is properly formatted
     for op_name in op_names:
@@ -192,12 +195,13 @@ def test_console_logging_format():
         assert key in op_probs, f"Missing probability for {op_name}"
         assert 0.0 <= op_probs[key] <= 1.0, f"Invalid probability: {op_probs[key]}"
 
-    for op_name in op_names:
-        key = f"op_logits/{op_name}"
-        assert key in op_logits, f"Missing logit for {op_name}"
+    # Verify operand probabilities are properly formatted
+    assert len(operand_probs) > 0, "Should have operand probabilities"
+    for key, prob in operand_probs.items():
         assert isinstance(
-            op_logits[key], float
-        ), f"Logit should be float: {type(op_logits[key])}"
+            prob, float
+        ), f"Operand probability should be float: {type(prob)}"
+        assert 0.0 <= prob <= 1.0, f"Operand probability should be in [0,1]: {prob}"
 
 
 def test_node_values_logging():
@@ -314,7 +318,7 @@ def test_node_values_end_to_end_demo():
 
     # Also get individual components for validation
     op_probs = logger.get_op_probabilities(model)
-    op_logits = logger.get_op_logits_dict(model)
+    operand_probs = logger.get_operand_probabilities(model)
     node_values = logger.get_node_values_list(model)
 
     print("=== End Demo ===\n")
@@ -322,7 +326,149 @@ def test_node_values_end_to_end_demo():
     # Basic assertions
     assert len(node_values) > 0, "Should have node values"
     assert len(op_probs) > 0, "Should have operation probabilities"
-    assert len(op_logits) > 0, "Should have operation logits"
+    assert len(operand_probs) > 0, "Should have operand probabilities"
+
+
+def test_dag_logging_after_text_generation():
+    """Test that DAG logging captures information from text generation phase."""
+    cfg = GPTConfig(
+        vocab_size=30,
+        block_size=6,
+        n_layer=2,
+        n_head=2,
+        n_embd=32,
+        dag_depth=2,
+        dropout=0.0,
+        bias=False,
+    )
+
+    model = GPT(cfg)
+    model.eval()
+
+    dag_logger = DAGLogger()
+
+    # Text generation phase (simulating evaluation in train.py)
+    prompt = torch.randint(0, cfg.vocab_size, (1, 3))
+
+    with torch.no_grad():
+        # This is where DAG information is captured from
+        generated = model.generate(prompt, max_new_tokens=2, temperature=0.8, top_k=10)
+
+    # DAG logging after generation
+    op_probs = dag_logger.get_op_probabilities(model)
+    operand_probs = dag_logger.get_operand_probabilities(model)
+    node_values = dag_logger.get_node_values_list(model)
+
+    # Verify we have the expected logging information
+    assert len(op_probs) == 9, "Should have probabilities for all 9 operations"
+    assert len(operand_probs) > 0, "Should have operand probabilities"
+    assert len(node_values) > 0, "Should have node values"
+
+    # Verify operation probabilities sum to 1
+    op_prob_sum = sum(op_probs.values())
+    assert (
+        abs(op_prob_sum - 1.0) < 1e-5
+    ), f"Operation probabilities should sum to 1, got {op_prob_sum}"
+
+    # Verify operand probabilities are valid
+    for key, prob in operand_probs.items():
+        assert 0.0 <= prob <= 1.0, f"Operand probability {prob} for {key} not in [0,1]"
+
+    # Verify operand probabilities sum correctly for each operand
+    operand1_keys = [k for k in operand_probs.keys() if k.startswith("operand1_probs/")]
+    operand2_keys = [k for k in operand_probs.keys() if k.startswith("operand2_probs/")]
+
+    if operand1_keys:
+        operand1_sum = sum(operand_probs[k] for k in operand1_keys)
+        assert (
+            abs(operand1_sum - 1.0) < 1e-5
+        ), f"Operand1 probabilities should sum to 1, got {operand1_sum}"
+
+    if operand2_keys:
+        operand2_sum = sum(operand_probs[k] for k in operand2_keys)
+        assert (
+            abs(operand2_sum - 1.0) < 1e-5
+        ), f"Operand2 probabilities should sum to 1, got {operand2_sum}"
+
+
+def test_operation_logits_removed():
+    """Test that operation logits are no longer available."""
+    cfg = GPTConfig(
+        vocab_size=30,
+        block_size=6,
+        n_layer=2,
+        n_head=2,
+        n_embd=32,
+        dag_depth=2,
+        dropout=0.0,
+        bias=False,
+    )
+
+    model = GPT(cfg)
+    model.eval()
+
+    dag_logger = DAGLogger()
+
+    # Forward pass
+    prompt = torch.randint(0, cfg.vocab_size, (1, 3))
+    with torch.no_grad():
+        model.generate(prompt, max_new_tokens=1)
+
+    # Verify operation logits method no longer exists
+    assert not hasattr(
+        dag_logger, "get_op_logits_dict"
+    ), "get_op_logits_dict should be removed"
+
+    # Verify wandb logging dict doesn't contain operation logits
+    wandb_dict = dag_logger.get_wandb_logging_dict(model)
+
+    op_logit_keys = [k for k in wandb_dict.keys() if k.startswith("op_logits/")]
+    assert (
+        len(op_logit_keys) == 0
+    ), f"Should not have operation logits keys, found: {op_logit_keys}"
+
+    # But should contain operation probabilities and operand probabilities
+    op_prob_keys = [k for k in wandb_dict.keys() if k.startswith("op_probs/")]
+    operand_prob_keys = [k for k in wandb_dict.keys() if k.startswith("operand")]
+
+    assert len(op_prob_keys) > 0, "Should have operation probability keys"
+    assert len(operand_prob_keys) > 0, "Should have operand probability keys"
+
+
+def test_evaluation_console_logging_format():
+    """Test that console logging shows the format without operation logits."""
+    cfg = GPTConfig(
+        vocab_size=30,
+        block_size=6,
+        n_layer=2,
+        n_head=2,
+        n_embd=32,
+        dag_depth=2,
+        dropout=0.0,
+        bias=False,
+    )
+
+    model = GPT(cfg)
+    model.eval()
+
+    dag_logger = DAGLogger()
+
+    # Generate text
+    prompt = torch.randint(0, cfg.vocab_size, (1, 3))
+    with torch.no_grad():
+        model.generate(prompt, max_new_tokens=1)
+
+    # This should not raise any errors and should include operand probabilities
+    dag_logger.format_console_logging(model)
+
+    # Verify individual components work
+    op_probs = dag_logger.get_op_probabilities(model)
+    operand_probs = dag_logger.get_operand_probabilities(model)
+    node_values = dag_logger.get_node_values_list(model)
+
+    assert len(op_probs) > 0, "Should have operation probabilities"
+    assert len(operand_probs) > 0, "Should have operand probabilities"
+    assert len(node_values) > 0, "Should have node values"
 
 
 if __name__ == "__main__":

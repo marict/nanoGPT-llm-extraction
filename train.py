@@ -552,13 +552,6 @@ def train(cfg: TrainConfig) -> None:
                 try:
                     losses = estimate_loss(model, cfg.eval_iters, get_batch, ctx)
 
-                    # Setup DAG logger and get extra values
-                    eval_extra = model.extra_vals()
-                    if dag_logger is not None:
-                        dag_logger.setup_gradient_tracking(raw_model)
-                        eval_extra.update(dag_logger.get_extra_vals(raw_model))
-                        dag_logger.format_console_logging(raw_model)
-
                     # Generate a sample sentence to track generation quality
                     generated_sample = ""
                     if encode is not None and decode is not None:
@@ -585,6 +578,13 @@ def train(cfg: TrainConfig) -> None:
                     else:
                         print("Skipping text generation (no tokenizer available)")
                         generated_sample = "No tokenizer available"
+
+                    # Setup DAG logger and get extra values AFTER text generation
+                    eval_extra = model.extra_vals()
+                    if dag_logger is not None:
+                        dag_logger.setup_gradient_tracking(raw_model)
+                        eval_extra.update(dag_logger.get_extra_vals(raw_model))
+                        dag_logger.format_console_logging(raw_model)
 
                     # Run math evaluation if enabled
                     math_scores = {}
