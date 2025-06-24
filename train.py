@@ -22,14 +22,18 @@ from pathlib import Path
 from typing import Callable, Dict, List, Tuple
 
 import numpy as np
+import tiktoken
 import torch
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import run_math_eval
 import runpod_service
+import wandb
 from dag_logger import DAGLogger
 from dag_model import GPT, GPTConfig
+from data import prepare_dataset
+from evaluation import estimate_loss, evaluate_math
 from python_version_check import check_python_version
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
@@ -178,48 +182,6 @@ def get_lr(it: int, *, cfg: TrainConfig) -> float:
     return cfg.min_lr + coeff * (cfg.learning_rate - cfg.min_lr)
 
 
-def estimate_loss(
-    model: torch.nn.Module,
-    eval_iters: int,
-    batch_fn: Callable[[str], Tuple[torch.Tensor, torch.Tensor]],
-    ctx: nullcontext | torch.autocast,
-) -> Dict[str, torch.Tensor]:
-    """Return mean loss over <eval_iters> batches for train/val splits."""
-    out: Dict[str, torch.Tensor] = {}
-    model.eval()
-    print("Estimating loss...")
-    for split in ("train", "val"):
-        losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
-            X, Y = batch_fn(split)
-            with ctx:
-                _, loss = model(X, Y)
-            losses[k] = loss.item()
-        out[split] = losses.mean()
-    model.train()
-    return out
-
-
-def evaluate_math(
-    model: torch.nn.Module, device: str, tasks: List[str] = None, max_examples: int = 50
-) -> Dict[str, float]:
-    """Run math evaluation during training."""
-    if tasks is None:
-        tasks = ["gsm8k", "svamp"]  # Default to both GSM8K and SVAMP during training
-
-    try:
-        print(
-            f"Running math evaluation on {tasks} (max {max_examples} examples each)..."
-        )
-        scores = run_math_eval.run_eval(
-            model, device, tasks=tasks, max_examples=max_examples
-        )
-        return scores
-    except Exception as e:
-        print(f"Warning: Math evaluation failed: {e}")
-        return {task: -1.0 for task in tasks}
-
-
 # --------------------------------------------------------------------------- #
 # Core training routine
 # --------------------------------------------------------------------------- #
@@ -292,8 +254,6 @@ def train(cfg: TrainConfig) -> None:
             print(
                 f"[{time.time() - setup_start:.2f}s] Preparing dataset {cfg.dataset}... with subset {cfg.subset}"
             )
-            from data import prepare_dataset  # local import
-
             train_tokens, val_tokens = prepare_dataset(
                 cfg.dataset, data_dir, cfg.subset
             )
@@ -325,22 +285,11 @@ def train(cfg: TrainConfig) -> None:
 
     # Fallback to GPT-2 tokenizer if no meta available
     if encode is None or decode is None:
-        try:
-            import tiktoken
-
-            enc = tiktoken.get_encoding("gpt2")
-            encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
-            decode = lambda l: enc.decode(l)
-            if master_process:
-                print(
-                    f"[{time.time() - setup_start:.2f}s] Using GPT-2 tokenizer fallback"
-                )
-        except ImportError:
-            encode = decode = None
-            if master_process:
-                print(
-                    f"[{time.time() - setup_start:.2f}s] Warning: No tokenizer available for text generation"
-                )
+        enc = tiktoken.get_encoding("gpt2")
+        encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
+        decode = lambda l: enc.decode(l)
+        if master_process:
+            print(f"[{time.time() - setup_start:.2f}s] Using GPT-2 tokenizer fallback")
 
     print(
         f"[{time.time() - setup_start:.2f}s] Data loading completed in {time.time() - data_start:.2f}s"
@@ -477,8 +426,6 @@ def train(cfg: TrainConfig) -> None:
     wandb_start = time.time()
     print(f"[{time.time() - setup_start:.2f}s] Initializing wandb")
     if master_process:
-        import wandb
-
         try:
             run = wandb.init(
                 project=cfg.wandb_project,
@@ -491,9 +438,9 @@ def train(cfg: TrainConfig) -> None:
             print(f"[{time.time() - setup_start:.2f}s] W&B URL: {run.url}")
         except Exception as e:
             print(
-                f"[{time.time() - setup_start:.2f}s] Warning: Failed to initialize wandb: {e}"
+                f"[{time.time() - setup_start:.2f}s] Error: Failed to initialize wandb: {e}"
             )
-            run = None
+            raise  # Re-raise the exception to fail the job
     print(
         f"[{time.time() - setup_start:.2f}s] W&B initialization completed in {time.time() - wandb_start:.2f}s"
     )

@@ -65,6 +65,7 @@ def test_train_script_runs(tmp_path: Path, batch_size: int):
     # network access.
     (tmp_path / "wandb.py").write_text(
         """\nclass _Run:\n    url = 'http://wandb.local'\n\n"""
+        "class Settings:\n    def __init__(self, *args, **kwargs):\n        pass\n\n"
         "def init(*a, **k):\n    return _Run()\n\n"
         "def log(*a, **k):\n    pass\n"
     )
