@@ -1,7 +1,7 @@
 # Training config for ChatGPT-2 equivalent model on OpenWebText.
 # Mirrors the hyperparameters used in the README instructions.
 
-wandb_project = "owt"
+name = "owt"
 
 # total batch size of ~0.5M tokens
 batch_size = 12

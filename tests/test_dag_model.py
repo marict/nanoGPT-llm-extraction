@@ -111,7 +111,7 @@ def test_dag_node_growth_regression(monkeypatch):
     init_val = [torch.ones(1)]
     ctx = torch.zeros(1, H)
 
-    embeds, vals = dag(init_emb, init_val, ctx, ctx)
+    _, vals = dag(init_emb, init_val, ctx, ctx)
     assert len(vals) == 3  # 1 original + 2 new
     assert torch.allclose(vals[-1], torch.full((1,), 4.0))
 

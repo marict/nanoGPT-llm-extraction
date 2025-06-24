@@ -1,7 +1,6 @@
 # tests/test_training_logging_integration.py
 import sys
 from pathlib import Path
-from unittest.mock import Mock, patch
 
 import pytest
 import torch
@@ -172,7 +171,7 @@ def test_console_logging_format():
     input_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
     target_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
 
-    logits, loss = model(input_ids, target_ids)
+    _, loss = model(input_ids, target_ids)
 
     # Set up gradient tracking before backward pass
     logger = DAGLogger()
@@ -223,7 +222,7 @@ def test_node_values_logging():
     input_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
 
     with torch.no_grad():
-        logits, loss = model(input_ids)
+        _, _ = model(input_ids)
 
     # Test that node values can be retrieved using DAGLogger
     logger = DAGLogger()
@@ -265,7 +264,7 @@ def test_node_values_logging():
     # Test that multiple forward passes can be logged
     input_ids2 = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
     with torch.no_grad():
-        logits2, loss2 = model(input_ids2)
+        _, _ = model(input_ids2)
 
     node_values2 = logger.get_node_values_list(model)
     assert isinstance(node_values2, list), "Second call should also return list"
@@ -305,7 +304,7 @@ def test_node_values_end_to_end_demo():
     print(f"Input tokens: {input_ids[0].tolist()}")
 
     with torch.no_grad():
-        logits, _ = model(input_ids)
+        _, _ = model(input_ids)
 
     # Get all logging information using DAGLogger
     logger = DAGLogger()

@@ -2,7 +2,7 @@ import time
 
 eval_interval = 5
 eval_iters = 40
-wandb_project = "shakespeare"
+name = "shakespeare"
 
 dataset = "shakespeare"
 init_from = "gpt2-xl"  # this is the largest GPT-2 model

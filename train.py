@@ -85,7 +85,7 @@ class TrainConfig:
     math_eval_tasks: List[str] = field(default_factory=lambda: ["gsm8k", "svamp"])
     math_eval_max_examples: int = 50  # Max examples per math task during training
 
-    wandb_project: str = "owt"
+    name: str = "owt"  # Project/run name (used for both wandb project and runpod naming)
 
     dataset: str = "openwebtext"
     subset: float = 1.0  # Fraction of dataset to use (0.0 < subset <= 1.0)
@@ -428,7 +428,7 @@ def train(cfg: TrainConfig) -> None:
     if master_process:
         try:
             run = wandb.init(
-                project=cfg.wandb_project,
+                project=cfg.name,
                 name=generate_run_name(cfg),
                 config=cfg.__dict__,
                 settings=wandb.Settings(

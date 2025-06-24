@@ -31,7 +31,6 @@ check_python_version()
 # )
 DEFAULT_GPU_TYPE = "NVIDIA A100-SXM4-80GB"
 REPO_URL = "https://github.com/marict/nanoGPT-llm-extraction.git"
-POD_NAME = "daggpt-train"
 
 
 def _get_wandb_url(cfg_path: str) -> str:
@@ -40,10 +39,9 @@ def _get_wandb_url(cfg_path: str) -> str:
     try:  # pragma: no cover - best effort for user feedback
         with open(cfg_path, "r") as f:
             exec(f.read(), data)
-        project = data.get("wandb_project")
-        run_name = POD_NAME
-        if project and run_name:
-            return f"https://wandb.ai/{project}/{run_name}"
+        project = data.get("name")  # Use 'name' instead of 'wandb_project'
+        if project:
+            return f"https://wandb.ai/{project}"
     except Exception:
         pass
     return "https://wandb.ai"
@@ -132,13 +130,19 @@ def start_cloud_training(
         )
 
     args_list = train_args.split()
-    wandb_url = "https://wandb.ai"
+    pod_name = "daggpt-train"  # default pod name
     if args_list:
         cfg_path = args_list[0]
-        wandb_url = _get_wandb_url(cfg_path)
         if not os.path.isabs(cfg_path):
             args_list[0] = f"{cfg_path}"
-    args_list.append(f"--wandb_project={POD_NAME}")
+        # Extract the name from config for pod naming
+        try:
+            data: dict[str, str] = {}
+            with open(cfg_path, "r") as f:
+                exec(f.read(), data)
+            pod_name = data.get("name", "daggpt-train")
+        except Exception:
+            pass
     train_args = " ".join(args_list)
 
     gpu_type_id = _resolve_gpu_id(gpu_type)
@@ -157,7 +161,7 @@ def start_cloud_training(
         f"[{time.time() - docker_start:.2f}s] Docker args preparation completed in {time.time() - docker_start:.2f}s"
     )
     pod = runpod.create_pod(
-        name=POD_NAME,
+        name=pod_name,
         image_name="runpod/pytorch:2.2.1-py3.10-cuda12.1.1-devel-ubuntu22.04",
         gpu_type_id=gpu_type_id,
         gpu_count=1,
@@ -178,7 +182,7 @@ def start_cloud_training(
     pod_id = pod.get("id")
     if not pod_id:
         raise RunPodError("RunPod API did not return a pod id")
-    print(f"Starting training job '{POD_NAME}' (pod {pod_id}) on {gpu_type}. ")
+    print(f"Starting training job '{pod_name}' (pod {pod_id}) on {gpu_type}. ")
 
     return pod_id
 
