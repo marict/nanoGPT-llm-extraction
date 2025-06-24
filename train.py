@@ -516,9 +516,7 @@ def train(cfg: TrainConfig) -> None:
         print(f"[{time.time() - setup_start:.2f}s] Entering training loop")
 
         # Initialize DAG logger for models that support it
-        dag_logger = None
-        if isinstance(raw_model, DAGGPT):
-            dag_logger = DAGLogger()
+        dag_logger = DAGLogger()
 
         while True:
             lr = get_lr(iter_num, cfg=cfg) if cfg.decay_lr else cfg.learning_rate
