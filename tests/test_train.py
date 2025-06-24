@@ -444,3 +444,102 @@ def test_math_eval_config_integration():
     assert cfg.eval_math == False
     assert cfg.math_eval_tasks == ["gsm8k", "svamp"]
     assert cfg.math_eval_max_examples == 100
+
+
+def test_checkpoint_filename_generation():
+    """Test the new checkpoint filename generation with config name."""
+    from train import TrainConfig, get_checkpoint_filename
+
+    # Test basic filename generation
+    cfg = TrainConfig()
+    cfg.name = "test-project"
+    filename = get_checkpoint_filename(cfg, 1000)
+    assert filename == "ckpt_test-project_1000.pt"
+
+    # Test with special characters (should be sanitized)
+    cfg.name = "test@project#123!"
+    filename = get_checkpoint_filename(cfg, 500)
+    assert filename == "ckpt_testproject123_500.pt"
+
+    # Test with underscores and hyphens (should be preserved)
+    cfg.name = "test_project-v2"
+    filename = get_checkpoint_filename(cfg, 250)
+    assert filename == "ckpt_test_project-v2_250.pt"
+
+
+def test_clean_previous_checkpoints(tmp_path):
+    """Test the checkpoint cleaning functionality."""
+    from pathlib import Path
+
+    import train
+    from train import TrainConfig, clean_previous_checkpoints
+
+    # Mock the CHECKPOINT_DIR to use temporary directory
+    original_dir = train.CHECKPOINT_DIR
+    train.CHECKPOINT_DIR = str(tmp_path)
+
+    try:
+        # Create some fake checkpoint files
+        (tmp_path / "ckpt_testproject_100.pt").touch()
+        (tmp_path / "ckpt_testproject_200.pt").touch()
+        (tmp_path / "ckpt_otherproject_100.pt").touch()
+        (tmp_path / "some_other_file.txt").touch()
+
+        # Test cleaning with clean_previous_runs=False (should do nothing)
+        cfg = TrainConfig()
+        cfg.name = "testproject"
+        cfg.clean_previous_runs = False
+        clean_previous_checkpoints(cfg)
+
+        # All files should still exist
+        assert (tmp_path / "ckpt_testproject_100.pt").exists()
+        assert (tmp_path / "ckpt_testproject_200.pt").exists()
+        assert (tmp_path / "ckpt_otherproject_100.pt").exists()
+        assert (tmp_path / "some_other_file.txt").exists()
+
+        # Test cleaning with clean_previous_runs=True
+        cfg.clean_previous_runs = True
+        clean_previous_checkpoints(cfg)
+
+        # Only testproject checkpoints should be removed
+        assert not (tmp_path / "ckpt_testproject_100.pt").exists()
+        assert not (tmp_path / "ckpt_testproject_200.pt").exists()
+        assert (tmp_path / "ckpt_otherproject_100.pt").exists()  # Different project
+        assert (tmp_path / "some_other_file.txt").exists()  # Not a checkpoint
+
+    finally:
+        # Restore original directory
+        train.CHECKPOINT_DIR = original_dir
+
+
+def test_find_latest_checkpoint(tmp_path):
+    """Test finding the latest checkpoint file."""
+    import train
+    from train import TrainConfig, find_latest_checkpoint
+
+    # Mock the CHECKPOINT_DIR to use temporary directory
+    original_dir = train.CHECKPOINT_DIR
+    train.CHECKPOINT_DIR = str(tmp_path)
+
+    try:
+        cfg = TrainConfig()
+        cfg.name = "testproject"
+
+        # Test with no checkpoints
+        result = find_latest_checkpoint(cfg)
+        assert result is None
+
+        # Create some checkpoint files with different iteration numbers
+        (tmp_path / "ckpt_testproject_100.pt").touch()
+        (tmp_path / "ckpt_testproject_500.pt").touch()
+        (tmp_path / "ckpt_testproject_300.pt").touch()
+        (tmp_path / "ckpt_otherproject_400.pt").touch()  # Different project
+
+        # Should find the latest checkpoint (500)
+        result = find_latest_checkpoint(cfg)
+        assert result is not None
+        assert result.name == "ckpt_testproject_500.pt"
+
+    finally:
+        # Restore original directory
+        train.CHECKPOINT_DIR = original_dir

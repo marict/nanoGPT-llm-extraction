@@ -78,6 +78,7 @@ class TrainConfig:
     eval_iters: int = 200
     eval_only: bool = False
     always_save_checkpoint: bool = True
+    clean_previous_runs: bool = False  # Remove previous checkpoints on startup
     init_from: str = "scratch"
 
     # Math evaluation settings
@@ -184,6 +185,71 @@ def get_lr(it: int, *, cfg: TrainConfig) -> float:
     return cfg.min_lr + coeff * (cfg.learning_rate - cfg.min_lr)
 
 
+def get_checkpoint_filename(cfg: TrainConfig, iter_num: int) -> str:
+    """Generate checkpoint filename with config name and iteration number."""
+    # Sanitize the name for filesystem compatibility
+    safe_name = "".join(c for c in cfg.name if c.isalnum() or c in ("-", "_"))
+    return f"ckpt_{safe_name}_{iter_num}.pt"
+
+
+def clean_previous_checkpoints(cfg: TrainConfig) -> None:
+    """Remove all previous checkpoint files for this config name."""
+    if not cfg.clean_previous_runs:
+        return
+
+    checkpoint_dir = Path(CHECKPOINT_DIR)
+    if not checkpoint_dir.exists():
+        return
+
+    # Sanitize the name for filesystem compatibility
+    safe_name = "".join(c for c in cfg.name if c.isalnum() or c in ("-", "_"))
+    pattern = f"ckpt_{safe_name}_*.pt"
+
+    removed_count = 0
+    for ckpt_file in checkpoint_dir.glob(pattern):
+        try:
+            ckpt_file.unlink()
+            removed_count += 1
+        except Exception as e:
+            print(f"Warning: Failed to remove checkpoint {ckpt_file}: {e}")
+
+    if removed_count > 0:
+        print(f"Cleaned {removed_count} previous checkpoint(s) for '{cfg.name}'")
+
+
+def find_latest_checkpoint(cfg: TrainConfig) -> Path | None:
+    """Find the latest checkpoint file for this config name."""
+    checkpoint_dir = Path(CHECKPOINT_DIR)
+    if not checkpoint_dir.exists():
+        return None
+
+    # Sanitize the name for filesystem compatibility
+    safe_name = "".join(c for c in cfg.name if c.isalnum() or c in ("-", "_"))
+    pattern = f"ckpt_{safe_name}_*.pt"
+
+    checkpoint_files = list(checkpoint_dir.glob(pattern))
+    if not checkpoint_files:
+        return None
+
+    # Extract iteration numbers and find the latest
+    latest_file = None
+    latest_iter = -1
+
+    for ckpt_file in checkpoint_files:
+        try:
+            # Extract iteration number from filename: ckpt_{name}_{iter}.pt
+            parts = ckpt_file.stem.split("_")
+            if len(parts) >= 3:
+                iter_num = int(parts[-1])
+                if iter_num > latest_iter:
+                    latest_iter = iter_num
+                    latest_file = ckpt_file
+        except (ValueError, IndexError):
+            continue
+
+    return latest_file
+
+
 # --------------------------------------------------------------------------- #
 # Core training routine
 # --------------------------------------------------------------------------- #
@@ -195,6 +261,9 @@ def train(cfg: TrainConfig) -> None:
     setup_start = time.time()
     print(f"[{time.time() - setup_start:.2f}s] Starting training")
     print(f"[{time.time() - setup_start:.2f}s] PyTorch version: {torch.__version__}")
+
+    # Clean previous checkpoints if requested
+    clean_previous_checkpoints(cfg)
 
     ddp_start = time.time()
     ddp = int(os.environ.get("RANK", -1)) != -1
@@ -346,7 +415,14 @@ def train(cfg: TrainConfig) -> None:
         gptconf = ModelConfig(**model_args)
         model = ModelClass(gptconf)
     elif cfg.init_from == "resume":
-        ckpt_path = Path(CHECKPOINT_DIR) / f"ckpt_{cfg.iter_num}.pt"
+        # Find the latest checkpoint for this config name
+        ckpt_path = find_latest_checkpoint(cfg)
+        if ckpt_path is None:
+            raise FileNotFoundError(
+                f"No checkpoint found for config name '{cfg.name}' in {CHECKPOINT_DIR}"
+            )
+
+        print(f"Resuming from checkpoint: {ckpt_path}")
         checkpoint = torch.load(ckpt_path, map_location=device)
         for k in ("n_layer", "n_head", "n_embd", "block_size", "bias", "vocab_size"):
             model_args[k] = checkpoint["model_args"][k]
@@ -576,11 +652,11 @@ def train(cfg: TrainConfig) -> None:
                                 "best_val_loss": best_val_loss,
                                 "config": cfg.__dict__,
                             }
+                            checkpoint_filename = get_checkpoint_filename(cfg, iter_num)
+                            checkpoint_path = Path(CHECKPOINT_DIR) / checkpoint_filename
                             if master_process:
-                                print(f"Saving checkpoint to {CHECKPOINT_DIR}")
-                            torch.save(
-                                ckpt, Path(CHECKPOINT_DIR) / f"ckpt_{iter_num}.pt"
-                            )
+                                print(f"Saving checkpoint: {checkpoint_path}")
+                            torch.save(ckpt, checkpoint_path)
                 except Exception as e:
                     print(f"Warning: Error during evaluation: {e}")
 
