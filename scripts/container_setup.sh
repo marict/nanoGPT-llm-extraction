@@ -45,5 +45,4 @@ log_file="/runpod-volume/train_$(date +%Y%m%d_%H%M%S).log"
 log "starting training – output -> $log_file"
 python -u train.py "$@" 2>&1 | tee "$log_file"
 
-log "done in $(( $(date +%s)-start_time ))s – keeping container alive"
-tail -f /dev/null
+log "done in $(( $(date +%s)-start_time ))s"
