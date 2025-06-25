@@ -294,9 +294,6 @@ def train(cfg: TrainConfig) -> None:
                 project=cfg.name,
                 name=generate_run_name(cfg),
                 config=cfg.__dict__,
-                settings=wandb.Settings(
-                    start_method="thread"
-                ),  # Use thread-based initialization
             )
             print(f"[{time.time() - setup_start:.2f}s] W&B URL: {run.url}")
         except Exception as e:

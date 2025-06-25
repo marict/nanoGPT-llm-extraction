@@ -191,11 +191,11 @@ def test_init_local_wandb_and_open_browser_success(monkeypatch):
         url = "https://wandb.ai/test/project/runs/test_run_123"
 
     class MockWandb:
-        def init(self, project, name, tags, notes, settings):
+        def init(self, project, name, tags, notes):
             return MockRun()
 
         class Settings:
-            def __init__(self, start_method):
+            def __init__(self):
                 pass
 
     mock_wandb = MockWandb()
@@ -240,7 +240,7 @@ def test_init_local_wandb_and_open_browser_wandb_fails(monkeypatch):
         init = mock_wandb_init
 
         class Settings:
-            def __init__(self, start_method):
+            def __init__(self):
                 pass
 
     monkeypatch.setattr(rp, "wandb", MockWandb())
@@ -259,11 +259,11 @@ def test_init_local_wandb_and_open_browser_chrome_fails(monkeypatch):
         url = "https://wandb.ai/test/project/runs/test_run_123"
 
     class MockWandb:
-        def init(self, project, name, tags, notes, settings):
+        def init(self, project, name, tags, notes):
             return MockRun()
 
         class Settings:
-            def __init__(self, start_method):
+            def __init__(self):
                 pass
 
     monkeypatch.setattr(rp, "wandb", MockWandb())

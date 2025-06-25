@@ -206,7 +206,6 @@ def init_local_wandb_and_open_browser(project_name: str, run_id: str) -> str | N
             name=run_id,
             tags=["runpod", "remote-training"],
             notes=f"Remote training on RunPod instance {run_id}",
-            settings=wandb.Settings(start_method="thread"),
         )
 
         wandb_url = run.url
