@@ -262,9 +262,6 @@ def train(cfg: TrainConfig) -> None:
     print(f"[{time.time() - setup_start:.2f}s] Starting training")
     print(f"[{time.time() - setup_start:.2f}s] PyTorch version: {torch.__version__}")
 
-    # Clean previous checkpoints if requested
-    clean_previous_checkpoints(cfg)
-
     ddp_start = time.time()
     ddp = int(os.environ.get("RANK", -1)) != -1
     if ddp:
@@ -310,6 +307,9 @@ def train(cfg: TrainConfig) -> None:
     print(
         f"[{time.time() - setup_start:.2f}s] W&B initialization completed in {time.time() - wandb_start:.2f}s"
     )
+
+    # Clean previous checkpoints if requested
+    clean_previous_checkpoints(cfg)
 
     tokens_per_iter = (
         cfg.gradient_accumulation_steps
