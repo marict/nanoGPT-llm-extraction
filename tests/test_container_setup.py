@@ -74,9 +74,9 @@ def test_content_tokens() -> None:
             "token": 'python -u train.py "$@"',
             "purpose": "Argument forwarding - allows passing training arguments to the script",
         },
-        "tail keep-alive": {
-            "token": "tail -f /dev/null",
-            "purpose": "Keep container alive after training - prevents container from exiting",
+        "training completion": {
+            "token": "python -u train.py",
+            "purpose": "Training script execution - container stops automatically via stop_runpod",
         },
         "log function": {
             "token": "log()",
@@ -144,9 +144,9 @@ def test_structure_hints() -> None:
             "Python package installation required",
         ),
         (
-            "has tail keep-alive",
-            any("tail -f /dev/null" in l for l in lines),
-            "Keep container alive after training",
+            "has training execution",
+            any("python -u train.py" in l for l in lines),
+            "Training script execution - container stops automatically",
         ),
         (
             "has log function",
