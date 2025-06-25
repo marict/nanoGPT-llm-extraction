@@ -195,10 +195,12 @@ def get_checkpoint_filename(cfg: TrainConfig, iter_num: int) -> str:
 def clean_previous_checkpoints(cfg: TrainConfig) -> None:
     """Remove all previous checkpoint files for this config name."""
     if not cfg.clean_previous_runs:
+        print("Skipping checkpoint cleanup")
         return
 
     checkpoint_dir = Path(CHECKPOINT_DIR)
     if not checkpoint_dir.exists():
+        print(f"Checkpoint directory {checkpoint_dir} does not exist")
         return
 
     # Sanitize the name for filesystem compatibility
