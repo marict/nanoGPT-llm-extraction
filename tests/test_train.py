@@ -163,87 +163,29 @@ def test_estimate_loss_with_cuda():
 
 
 def test_generate_run_name_edge_cases(monkeypatch):
-    # Patch datetime to return a fixed value for reproducibility
-    class FixedDatetime:
-        @classmethod
-        def now(cls):
-            return cls()
+    # Test without RUNPOD_POD_ID (local mode)
+    monkeypatch.delenv("RUNPOD_POD_ID", raising=False)
 
-        def strftime(self, fmt):
-            return "2024-01-01_00-00-00"
-
-    monkeypatch.setattr("train.datetime", FixedDatetime)
-
-    # Edge case: zero values
-    cfg = SimpleNamespace(
-        batch_size=0,
-        n_layer=0,
-        n_head=0,
-        n_embd=0,
-        dag_depth=0,
-        dataset="testset",
-        learning_rate=0.0,
-    )
+    cfg = SimpleNamespace()  # Config not used in new implementation
     name = generate_run_name(cfg)
-    assert name.startswith("2024-01-01_00-00-00_b0_l0_h0_d0_dag0_testset_lr0e0"), name
-
-    # Edge case: negative values
-    cfg = SimpleNamespace(
-        batch_size=-1,
-        n_layer=-2,
-        n_head=-3,
-        n_embd=-4,
-        dag_depth=-5,
-        dataset="negset",
-        learning_rate=-1e-5,
-    )
-    name = generate_run_name(cfg)
+    assert name.startswith("local_"), f"Expected local run name, got: {name}"
     assert (
-        "b-1_l-2_h-3_d-4" in name
-        and "_dag-5" in name
-        and "negset" in name
-        and "lr-1e-5" in name
-    ), name
+        len(name) == 18
+    ), f"Expected 18 characters (local_ + 12 chars), got: {len(name)}"
 
-    # Edge case: large values
-    cfg = SimpleNamespace(
-        batch_size=10**6,
-        n_layer=512,
-        n_head=256,
-        n_embd=4096,
-        dag_depth=128,
-        dataset="largeset",
-        learning_rate=1e2,
-    )
-    name = generate_run_name(cfg)
-    assert "b1000000_l512_h256_d4096_dag128_largeset_lr1e2" in name, name
+    # Test with RUNPOD_POD_ID (RunPod mode)
+    test_pod_id = "49j146ruxv4k5b"
+    monkeypatch.setenv("RUNPOD_POD_ID", test_pod_id)
 
-    # Edge case: dataset with special characters
-    cfg = SimpleNamespace(
-        batch_size=1,
-        n_layer=1,
-        n_head=1,
-        n_embd=1,
-        dag_depth=1,
-        dataset="weird set!@#",
-        learning_rate=1e-4,
-    )
     name = generate_run_name(cfg)
-    assert "weird set!@#" in name, name
+    assert name == test_pod_id, f"Expected RunPod ID {test_pod_id}, got: {name}"
 
-    # Edge case: learning rate with many decimals
-    cfg = SimpleNamespace(
-        batch_size=2,
-        n_layer=2,
-        n_head=2,
-        n_embd=2,
-        dag_depth=2,
-        dataset="decimals",
-        learning_rate=0.000123456789,
-    )
+    # Test with empty RUNPOD_POD_ID (should fallback to local)
+    monkeypatch.setenv("RUNPOD_POD_ID", "")
     name = generate_run_name(cfg)
-    # Should be in scientific notation
-    assert re.search(r"lr[\d\.-]+e-\d+", name), name
+    assert name.startswith(
+        "local_"
+    ), f"Expected local run name for empty RUNPOD_POD_ID, got: {name}"
 
 
 def test_subset_config_edge_cases():
@@ -276,25 +218,17 @@ def test_subset_config_edge_cases():
         config_dict["subset"] == 0.5
     ), "subset value should be preserved in config dict"
 
-    # Test that subset is included in run name generation
+    # Test that run name generation works (now uses RunPod ID or local format)
     from train import generate_run_name
 
     cfg = TrainConfig()
     cfg.subset = 0.25
-    cfg.batch_size = 16
-    cfg.n_layer = 2
-    cfg.n_head = 4
-    cfg.n_embd = 128
-    cfg.dag_depth = 0
-    cfg.dataset = "testset"
-    cfg.learning_rate = 1e-4
 
     run_name = generate_run_name(cfg)
-    # The run name should contain the hyperparameters but not necessarily subset
-    # since subset is not currently included in the run name generation
+    # The run name should either be a RunPod ID or start with "local_"
     assert (
-        "b16_l2_h4_d128_dag0_testset" in run_name
-    ), f"Run name should contain hyperparameters: {run_name}"
+        run_name.startswith("local_") or len(run_name) > 5
+    ), f"Run name should be valid format: {run_name}"
 
     # Test that subset can be overridden via CLI
     cfg = TrainConfig()

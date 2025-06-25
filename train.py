@@ -12,7 +12,9 @@ import argparse
 import math
 import os
 import pickle
+import random
 import runpy
+import string
 import time
 from ast import literal_eval
 from contextlib import nullcontext
@@ -50,23 +52,19 @@ CHECKPOINT_DIR = (
 
 
 def generate_run_name(cfg) -> str:
-    """Generate a nicely formatted run name based on datetime and hyperparameters."""
-    # Format datetime as YYYY-MM-DD_HH-MM-SS
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    """Generate a run name using RunPod identifier or local random string."""
+    # Check if we're running on RunPod
+    runpod_id = os.environ.get("RUNPOD_POD_ID")
 
-    # Create a string representation of key hyperparameters
-    param_str = f"b{cfg.batch_size}_l{cfg.n_layer}_h{cfg.n_head}_d{cfg.n_embd}"
-
-    param_str += f"_dag{cfg.dag_depth}"
-
-    # Add dataset info
-    param_str += f"_{cfg.dataset}"
-
-    # Add learning rate info (formatted to avoid scientific notation)
-    lr_str = f"{cfg.learning_rate:.0e}".replace("e-0", "e-").replace("e+0", "e")
-    param_str += f"_lr{lr_str}"
-
-    return f"{timestamp}_{param_str}"
+    if runpod_id and runpod_id.strip():
+        # Use RunPod identifier
+        return runpod_id
+    else:
+        # Generate local identifier with random string
+        random_str = "".join(
+            random.choices(string.ascii_lowercase + string.digits, k=12)
+        )
+        return f"local_{random_str}"
 
 
 @dataclass
@@ -584,9 +582,32 @@ def train(cfg: TrainConfig) -> None:
                     # Setup DAG logger and get extra values AFTER text generation
                     eval_extra = model.extra_vals()
                     if dag_logger is not None:
-                        dag_logger.setup_gradient_tracking(raw_model)
-                        eval_extra.update(dag_logger.get_extra_vals(raw_model))
-                        dag_logger.format_console_logging(raw_model)
+                        # For evaluation, we need to do a separate forward/backward pass to get gradients
+                        # since estimate_loss() doesn't compute gradients
+                        try:
+                            model.train()  # Temporarily switch to train mode
+                            dag_logger.setup_gradient_tracking(raw_model)
+
+                            # Do a single forward/backward pass to capture gradients
+                            eval_X, eval_Y = get_batch("train")
+                            with ctx:
+                                _, eval_loss = model(eval_X, eval_Y)
+                            eval_loss.backward()
+
+                            # Now get the gradient information
+                            eval_extra.update(dag_logger.get_extra_vals(raw_model))
+                            dag_logger.format_console_logging(raw_model)
+
+                            # Clear gradients and switch back to eval mode
+                            model.zero_grad()
+                            model.eval()
+                        except Exception as e:
+                            print(
+                                f"Warning: Failed to capture gradients during evaluation: {e}"
+                            )
+                            # Fallback to just getting non-gradient extra values
+                            eval_extra.update(dag_logger.get_extra_vals(raw_model))
+                            dag_logger.format_console_logging(raw_model)
 
                     # Run math evaluation if enabled
                     math_scores = {}
@@ -639,9 +660,28 @@ def train(cfg: TrainConfig) -> None:
                                 else base_log_dict
                             )
 
+                            # Check if gradients are being logged
+                            grad_keys = [
+                                k for k in log_dict.keys() if k.startswith("op_grad/")
+                            ]
+                            if dag_logger and len(grad_keys) == 0:
+                                print(
+                                    f"Warning: No gradient keys found in wandb log_dict for evaluation at iter {iter_num}"
+                                )
+                                print(f"Available keys: {list(log_dict.keys())}")
+                            elif dag_logger and len(grad_keys) > 0:
+                                print(
+                                    f"Logging {len(grad_keys)} gradient values to wandb (evaluation)"
+                                )
+
                             wandb.log(log_dict, step=iter_num, commit=False)
                         except Exception as e:
-                            print(f"Warning: Failed to log to wandb: {e}")
+                            print(
+                                f"ERROR: Failed to log evaluation data to wandb at iter {iter_num}: {e}"
+                            )
+                            import traceback
+
+                            traceback.print_exc()
 
                     if losses["val"] < best_val_loss or cfg.always_save_checkpoint:
                         best_val_loss = losses["val"]
@@ -674,13 +714,18 @@ def train(cfg: TrainConfig) -> None:
                     with ctx:
                         _, loss = model(X, Y)
                         loss = loss / cfg.gradient_accumulation_steps
+
+                    # Set up gradient tracking AFTER forward pass but BEFORE backward pass
+                    if dag_logger is not None and micro_step == 0:  # Only set up once
+                        dag_logger.setup_gradient_tracking(raw_model)
+
                     X, Y = get_batch("train")
                     scaler.scale(loss).backward()
-                    # Get extra values after backward pass (for gradients)
-                    extra_vals = model.extra_vals()
-                    if dag_logger is not None:
-                        dag_logger.setup_gradient_tracking(raw_model)
-                        extra_vals.update(dag_logger.get_extra_vals(raw_model))
+
+                # Get extra values after backward pass (for gradients)
+                extra_vals = model.extra_vals()
+                if dag_logger is not None:
+                    extra_vals.update(dag_logger.get_extra_vals(raw_model))
 
                 if cfg.grad_clip:
                     scaler.unscale_(optimizer)
@@ -696,14 +741,37 @@ def train(cfg: TrainConfig) -> None:
                     and master_process
                     and run is not None
                 ):
-                    # Prepare logging dict
-                    base_dict = {"iter": iter_num, **extra_vals}
-                    log_dict = (
-                        dag_logger.get_wandb_logging_dict(raw_model, base_dict)
-                        if dag_logger
-                        else base_dict
-                    )
-                    wandb.log(log_dict, step=iter_num, commit=True)
+                    try:
+                        # Prepare logging dict
+                        base_dict = {"iter": iter_num, **extra_vals}
+                        log_dict = (
+                            dag_logger.get_wandb_logging_dict(raw_model, base_dict)
+                            if dag_logger
+                            else base_dict
+                        )
+
+                        # Check if gradients are being logged
+                        grad_keys = [
+                            k for k in log_dict.keys() if k.startswith("op_grad/")
+                        ]
+                        if dag_logger and len(grad_keys) == 0:
+                            print(
+                                f"Warning: No gradient keys found in wandb log_dict for training at iter {iter_num}"
+                            )
+                            print(f"Available keys: {list(log_dict.keys())}")
+                        elif dag_logger and len(grad_keys) > 0:
+                            print(
+                                f"Logging {len(grad_keys)} gradient values to wandb (training)"
+                            )
+
+                        wandb.log(log_dict, step=iter_num, commit=True)
+                    except Exception as e:
+                        print(
+                            f"ERROR: Failed to log training data to wandb at iter {iter_num}: {e}"
+                        )
+                        import traceback
+
+                        traceback.print_exc()
                     lossf = loss.item() * cfg.gradient_accumulation_steps
                     if iter_num >= 5:
                         mfu = raw_model.estimate_mfu(

@@ -414,5 +414,81 @@ def test_operation_logits_removed():
     assert len(operand_prob_keys) > 0, "Should have operand probability keys"
 
 
+def test_gradient_capture_after_text_generation():
+    """Test that gradients can be captured after text generation (sampling)."""
+    cfg = GPTConfig(
+        vocab_size=50,
+        block_size=8,
+        n_layer=1,
+        n_head=1,
+        n_embd=32,
+        dag_depth=2,
+        dropout=0.0,
+        bias=False,
+    )
+
+    model = GPT(cfg)
+    model.train()
+
+    # Set up DAG logger
+    dag_logger = DAGLogger()
+
+    # 1. Do text generation first (like in training loop)
+    prompt = torch.randint(0, cfg.vocab_size, (1, 3))
+    with torch.no_grad():
+        generated = model.generate(prompt, max_new_tokens=2, temperature=0.8, top_k=40)
+
+    # Verify generation worked
+    assert generated.shape[1] == 5  # 3 original + 2 new tokens
+
+    # 2. Now do a training step with gradient capture
+    batch_size = 2
+    seq_len = cfg.block_size
+    input_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
+    target_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
+
+    # Forward pass first to create last_activations
+    _, loss = model(input_ids, target_ids)
+
+    # Set up gradient tracking AFTER forward pass but BEFORE backward pass
+    dag_logger.setup_gradient_tracking(model)
+
+    # Backward pass
+    loss.backward()
+
+    # 3. Verify gradients were captured
+    extra_vals = dag_logger.get_extra_vals(model)
+    grad_keys = [key for key in extra_vals.keys() if key.startswith("op_grad/")]
+
+    # Should have gradients for all operations
+    from dag_model import op_names
+
+    expected_grad_keys = [f"op_grad/{op}" for op in op_names]
+
+    assert len(grad_keys) == len(
+        expected_grad_keys
+    ), f"Expected {len(expected_grad_keys)} gradient keys, got {len(grad_keys)}"
+
+    for expected_key in expected_grad_keys:
+        assert expected_key in extra_vals, f"Missing gradient key: {expected_key}"
+        grad_val = extra_vals[expected_key]
+        assert isinstance(
+            grad_val, float
+        ), f"Gradient {expected_key} is not a float: {type(grad_val)}"
+        assert abs(grad_val) < 1.0, f"Gradient {expected_key} is too large: {grad_val}"
+
+    # 4. Verify wandb logging dict includes gradients
+    wandb_dict = dag_logger.get_wandb_logging_dict(model)
+    wandb_grad_keys = [key for key in wandb_dict.keys() if key.startswith("op_grad/")]
+    assert len(wandb_grad_keys) == len(
+        expected_grad_keys
+    ), f"Wandb dict missing gradient keys"
+
+    # 5. Verify console logging works
+    dag_logger.format_console_logging(model)
+
+    print(f"✓ Successfully captured {len(grad_keys)} gradients after text generation")
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
