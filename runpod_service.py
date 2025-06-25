@@ -1,8 +1,8 @@
+import argparse
 import os
 import time
 from typing import Sequence
 
-import requests
 import runpod
 
 from python_version_check import check_python_version
@@ -179,8 +179,6 @@ def visualize_dag_attention(
 
 
 if __name__ == "__main__":
-    import argparse
-
     parser = argparse.ArgumentParser(description="RunPod helper")
     sub = parser.add_subparsers(dest="cmd", required=True)
 

@@ -282,7 +282,6 @@ def test_logging_with_no_dag_depth(sample_batch):
         bias=False,
     )
 
-    # This should create a regular GPT model
     from dag_model import GPT
 
     model = GPT(cfg)
@@ -312,7 +311,7 @@ def test_logging_after_multiple_forward_passes(small_dag_model, sample_batch):
         loss.backward()
         model.zero_grad()
 
-        # Check that logging still works using DAGLogger
+        # Check logging still works
         op_probs = logger.get_op_probabilities(model)
         operand_probs = logger.get_operand_probabilities(model)
         extra_vals = logger.get_extra_vals(model)
@@ -335,7 +334,7 @@ def test_gradient_tracking_with_grad_context(small_dag_model, sample_batch):
     with torch.no_grad():
         logits, loss = model(input_ids, target_ids)
 
-    # Should still be able to get probabilities and operand probs using DAGLogger
+    # Should still be able to get probabilities and operand probs
     logger = DAGLogger()
     op_probs = logger.get_op_probabilities(model)
     operand_probs = logger.get_operand_probabilities(model)
@@ -385,7 +384,7 @@ def test_logging_integration_training_scenario(small_dag_model):
         # Backward pass
         loss.backward()
 
-        # Collect logging information using DAGLogger
+        # Collect logging information
         op_probs = logger.get_op_probabilities(model)
         operand_probs = logger.get_operand_probabilities(model)
         extra_vals = logger.get_extra_vals(model)

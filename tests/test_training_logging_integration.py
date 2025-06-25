@@ -27,7 +27,6 @@ def test_training_loop_text_generation_integration():
     def mock_decode(tokens):
         return f"decoded_{len(tokens)}_tokens"
 
-    # This test simulates the evaluation section of train.py
     cfg = GPTConfig(
         vocab_size=50,
         block_size=8,
@@ -248,22 +247,14 @@ def test_node_values_logging():
             torch.tensor(val)
         ), f"Node value at index {i} should be finite"
 
-    # Test console logging format (simulating train.py)
-    logger.format_console_logging(model)  # This includes node values
+    # Test console logging format
+    logger.format_console_logging(model)
 
-    # Also test manual formatting for verification
+    # Test formatting works
     if node_values:
         formatted_values = [f"{val:.4f}" for val in node_values]
-        print(f"Node values: {formatted_values}")
-
-        # Verify the formatting works
-        assert len(formatted_values) == len(node_values), "Should format all values"
-        for formatted_val in formatted_values:
-            assert isinstance(formatted_val, str), "Formatted values should be strings"
-            # Check that the string contains a decimal point (formatted as float)
-            assert (
-                "." in formatted_val
-            ), f"Formatted value should contain decimal: {formatted_val}"
+        assert len(formatted_values) == len(node_values)
+        assert all(isinstance(val, str) and "." in val for val in formatted_values)
 
     # Test that multiple forward passes can be logged
     input_ids2 = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
@@ -282,13 +273,11 @@ def test_node_values_logging():
     assert empty_values == [], "Model without forward pass should return empty list"
 
 
-def test_node_values_end_to_end_demo():
-    """Demo test showing node values logging functionality working end-to-end."""
-    print("\n=== Node Values Logging Demo ===")
-
+def test_logging_api_integration():
+    """Test that DAG logging API works correctly end-to-end."""
     cfg = GPTConfig(
         vocab_size=30,
-        block_size=4,  # Very small for clear output
+        block_size=4,
         n_layer=1,
         n_head=1,
         n_embd=16,
@@ -300,30 +289,20 @@ def test_node_values_end_to_end_demo():
     model = GPT(cfg)
     model.eval()
 
-    # Set manual seed for reproducible output
-    torch.manual_seed(42)
-
     # Forward pass
     input_ids = torch.randint(0, cfg.vocab_size, (1, cfg.block_size))
-    print(f"Input tokens: {input_ids[0].tolist()}")
-
     with torch.no_grad():
         _, _ = model(input_ids)
 
-    # Get all logging information using DAGLogger
+    # Test logging API
     logger = DAGLogger()
-
-    # Demonstrate the clean API
     logger.format_console_logging(model)
 
-    # Also get individual components for validation
+    # Verify all components work
     op_probs = logger.get_op_probabilities(model)
     operand_probs = logger.get_operand_probabilities(model)
     node_values = logger.get_node_values_list(model)
 
-    print("=== End Demo ===\n")
-
-    # Basic assertions
     assert len(node_values) > 0, "Should have node values"
     assert len(op_probs) > 0, "Should have operation probabilities"
     assert len(operand_probs) > 0, "Should have operand probabilities"
@@ -347,11 +326,11 @@ def test_dag_logging_after_text_generation():
 
     dag_logger = DAGLogger()
 
-    # Text generation phase (simulating evaluation in train.py)
+    # Text generation phase
     prompt = torch.randint(0, cfg.vocab_size, (1, 3))
 
     with torch.no_grad():
-        # This is where DAG information is captured from
+
         generated = model.generate(prompt, max_new_tokens=2, temperature=0.8, top_k=10)
 
     # DAG logging after generation
@@ -433,42 +412,6 @@ def test_operation_logits_removed():
 
     assert len(op_prob_keys) > 0, "Should have operation probability keys"
     assert len(operand_prob_keys) > 0, "Should have operand probability keys"
-
-
-def test_evaluation_console_logging_format():
-    """Test that console logging shows the format without operation logits."""
-    cfg = GPTConfig(
-        vocab_size=30,
-        block_size=6,
-        n_layer=2,
-        n_head=2,
-        n_embd=32,
-        dag_depth=2,
-        dropout=0.0,
-        bias=False,
-    )
-
-    model = GPT(cfg)
-    model.eval()
-
-    dag_logger = DAGLogger()
-
-    # Generate text
-    prompt = torch.randint(0, cfg.vocab_size, (1, 3))
-    with torch.no_grad():
-        model.generate(prompt, max_new_tokens=1)
-
-    # This should not raise any errors and should include operand probabilities
-    dag_logger.format_console_logging(model)
-
-    # Verify individual components work
-    op_probs = dag_logger.get_op_probabilities(model)
-    operand_probs = dag_logger.get_operand_probabilities(model)
-    node_values = dag_logger.get_node_values_list(model)
-
-    assert len(op_probs) > 0, "Should have operation probabilities"
-    assert len(operand_probs) > 0, "Should have operand probabilities"
-    assert len(node_values) > 0, "Should have node values"
 
 
 if __name__ == "__main__":

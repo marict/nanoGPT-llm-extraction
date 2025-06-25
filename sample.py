@@ -88,13 +88,10 @@ if init_from == "resume":
     # Determine model type based on checkpoint contents
     model_args = checkpoint["model_args"]
     if "dag_depth" in model_args:
-        # This is a DAGGPT model
-        from dag_model import GPT, GPTConfig
-
         gptconf = GPTConfig(**model_args)
         model = GPT(gptconf)
     else:
-        # This is a regular GPT model (dag_depth=0 by default)
+        # Regular GPT model (dag_depth=0 by default)
         model_args.setdefault("dag_depth", 0)
         gptconf = GPTConfig(**model_args)
         model = GPT(gptconf)

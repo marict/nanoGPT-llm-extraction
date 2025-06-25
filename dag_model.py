@@ -610,8 +610,6 @@ class GPT(nn.Module):
         }
         self.last_values_list = values_list
 
-        # Note: Gradient tracking is now handled by DAGLogger
-
         logits = self.lm_head(hidden)
         loss = None
         if targets is not None:

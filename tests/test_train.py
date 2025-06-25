@@ -1,9 +1,11 @@
 import os
 import pickle
+import re
 import subprocess
 import sys
 from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -11,7 +13,8 @@ import pytest
 import torch
 
 import train
-from train import estimate_loss, generate_run_name
+from train import (TrainConfig, clean_previous_checkpoints, estimate_loss,
+                   find_latest_checkpoint, generate_run_name)
 
 REPO_ROOT = Path(__file__).parent.parent
 
@@ -160,9 +163,6 @@ def test_estimate_loss_with_cuda():
 
 
 def test_generate_run_name_edge_cases(monkeypatch):
-    import re
-    from types import SimpleNamespace
-
     # Patch datetime to return a fixed value for reproducibility
     class FixedDatetime:
         @classmethod
@@ -469,10 +469,6 @@ def test_checkpoint_filename_generation():
 
 def test_clean_previous_checkpoints(tmp_path):
     """Test the checkpoint cleaning functionality."""
-    from pathlib import Path
-
-    import train
-    from train import TrainConfig, clean_previous_checkpoints
 
     # Mock the CHECKPOINT_DIR to use temporary directory
     original_dir = train.CHECKPOINT_DIR
@@ -514,8 +510,6 @@ def test_clean_previous_checkpoints(tmp_path):
 
 def test_find_latest_checkpoint(tmp_path):
     """Test finding the latest checkpoint file."""
-    import train
-    from train import TrainConfig, find_latest_checkpoint
 
     # Mock the CHECKPOINT_DIR to use temporary directory
     original_dir = train.CHECKPOINT_DIR
