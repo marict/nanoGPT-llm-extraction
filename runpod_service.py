@@ -1,11 +1,13 @@
 import argparse
 import os
+import subprocess
 import time
 from typing import Sequence
 
 import requests
 import runpod
 
+import wandb
 from python_version_check import check_python_version
 
 check_python_version()
@@ -118,16 +120,18 @@ def start_cloud_training(
 
     args_list = train_args.split()
     pod_name = "daggpt-train"  # default pod name
+    project_name = "daggpt-train"  # default wandb project name
     if args_list:
         cfg_path = args_list[0]
         if not os.path.isabs(cfg_path):
             args_list[0] = f"{cfg_path}"
-        # Extract the name from config for pod naming
+        # Extract the name from config for pod naming and wandb project
         try:
             data: dict[str, str] = {}
             with open(cfg_path, "r") as f:
                 exec(f.read(), data)
             pod_name = data.get("name", "daggpt-train")
+            project_name = data.get("name", "daggpt-train")
         except Exception:
             pass
     train_args = " ".join(args_list)
@@ -171,7 +175,86 @@ def start_cloud_training(
         raise RunPodError("RunPod API did not return a pod id")
     print(f"Starting training job '{pod_name}' (pod {pod_id}) on {gpu_type}. ")
 
+    # Initialize wandb locally and open in browser
+    wandb_url = init_local_wandb_and_open_browser(project_name, pod_id)
+    if wandb_url:
+        print(f"Wandb project initialized locally. URL: {wandb_url}")
+
     return pod_id
+
+
+def init_local_wandb_and_open_browser(project_name: str, run_id: str) -> str | None:
+    """
+    Initialize wandb project locally and open the run URL in Chrome.
+
+    Args:
+        project_name: Name of the wandb project
+        run_id: Run identifier (typically the pod ID)
+
+    Returns:
+        The wandb run URL if successful, None otherwise
+    """
+    try:
+        # Check if WANDB_API_KEY is available
+        if not os.getenv("WANDB_API_KEY"):
+            print("Warning: WANDB_API_KEY not set, skipping local wandb initialization")
+            return None
+
+        # Initialize wandb run
+        run = wandb.init(
+            project=project_name,
+            name=run_id,
+            tags=["runpod", "remote-training"],
+            notes=f"Remote training on RunPod instance {run_id}",
+            settings=wandb.Settings(start_method="thread"),
+        )
+
+        wandb_url = run.url
+        print(f"Wandb run created: {wandb_url}")
+
+        # Try to open in Chrome
+        try:
+            # Try different Chrome executable names based on platform
+            chrome_commands = [
+                "google-chrome",  # Linux
+                "google-chrome-stable",  # Linux alternative
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",  # macOS
+                "chrome",  # Windows/generic
+                "chromium",  # Linux alternative
+                "chromium-browser",  # Linux alternative
+            ]
+
+            opened = False
+            for chrome_cmd in chrome_commands:
+                try:
+                    subprocess.run(
+                        [chrome_cmd, wandb_url],
+                        check=True,
+                        capture_output=True,
+                        timeout=5,
+                    )
+                    print(f"Opened wandb URL in Chrome: {wandb_url}")
+                    opened = True
+                    break
+                except (
+                    subprocess.CalledProcessError,
+                    FileNotFoundError,
+                    subprocess.TimeoutExpired,
+                ):
+                    continue
+
+            if not opened:
+                print(f"Could not open Chrome. Please manually visit: {wandb_url}")
+
+        except Exception as e:
+            print(f"Failed to open browser: {e}")
+            print(f"Please manually visit: {wandb_url}")
+
+        return wandb_url
+
+    except Exception as e:
+        print(f"Failed to initialize wandb locally: {e}")
+        return None
 
 
 def visualize_dag_attention(

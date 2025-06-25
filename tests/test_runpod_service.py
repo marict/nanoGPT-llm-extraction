@@ -178,3 +178,175 @@ def test_visualize_dag_attention(tmp_path):
     assert (
         torch.argmax(model.dag.controller.last_op_weights).item() == 2
     ), "Last op weights mismatch"
+
+
+# --------------------------------------------------------------------- #
+# Test init_local_wandb_and_open_browser
+# --------------------------------------------------------------------- #
+def test_init_local_wandb_and_open_browser_success(monkeypatch):
+    """Test successful wandb initialization and browser opening."""
+
+    # Mock wandb
+    class MockRun:
+        url = "https://wandb.ai/test/project/runs/test_run_123"
+
+    class MockWandb:
+        def init(self, project, name, tags, notes, settings):
+            return MockRun()
+
+        class Settings:
+            def __init__(self, start_method):
+                pass
+
+    mock_wandb = MockWandb()
+    monkeypatch.setattr(rp, "wandb", mock_wandb)
+
+    # Mock environment
+    monkeypatch.setenv("WANDB_API_KEY", "test_key_123")
+
+    # Mock subprocess to simulate successful Chrome opening
+    def mock_subprocess_run(cmd, check=False, capture_output=False, timeout=None):
+        if "chrome" in cmd[0].lower() or "google" in cmd[0].lower():
+            return  # Success (no exception)
+        raise FileNotFoundError("Command not found")
+
+    monkeypatch.setattr(rp.subprocess, "run", mock_subprocess_run)
+
+    # Test the function
+    result = rp.init_local_wandb_and_open_browser("test-project", "test_run_123")
+
+    assert result == "https://wandb.ai/test/project/runs/test_run_123"
+
+
+def test_init_local_wandb_and_open_browser_no_api_key(monkeypatch):
+    """Test when WANDB_API_KEY is not set."""
+
+    # Remove WANDB_API_KEY
+    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+
+    result = rp.init_local_wandb_and_open_browser("test-project", "test_run_123")
+
+    assert result is None
+
+
+def test_init_local_wandb_and_open_browser_wandb_fails(monkeypatch):
+    """Test when wandb initialization fails."""
+
+    # Mock wandb to raise an exception
+    def mock_wandb_init(*args, **kwargs):
+        raise Exception("Wandb initialization failed")
+
+    class MockWandb:
+        init = mock_wandb_init
+
+        class Settings:
+            def __init__(self, start_method):
+                pass
+
+    monkeypatch.setattr(rp, "wandb", MockWandb())
+    monkeypatch.setenv("WANDB_API_KEY", "test_key_123")
+
+    result = rp.init_local_wandb_and_open_browser("test-project", "test_run_123")
+
+    assert result is None
+
+
+def test_init_local_wandb_and_open_browser_chrome_fails(monkeypatch):
+    """Test when Chrome opening fails but wandb succeeds."""
+
+    # Mock wandb
+    class MockRun:
+        url = "https://wandb.ai/test/project/runs/test_run_123"
+
+    class MockWandb:
+        def init(self, project, name, tags, notes, settings):
+            return MockRun()
+
+        class Settings:
+            def __init__(self, start_method):
+                pass
+
+    monkeypatch.setattr(rp, "wandb", MockWandb())
+    monkeypatch.setenv("WANDB_API_KEY", "test_key_123")
+
+    # Mock subprocess to always fail
+    def mock_subprocess_run(cmd, check=False, capture_output=False, timeout=None):
+        raise FileNotFoundError("Chrome not found")
+
+    monkeypatch.setattr(rp.subprocess, "run", mock_subprocess_run)
+
+    # Test the function
+    result = rp.init_local_wandb_and_open_browser("test-project", "test_run_123")
+
+    # Should still return URL even if Chrome opening fails
+    assert result == "https://wandb.ai/test/project/runs/test_run_123"
+
+
+def test_start_cloud_training_with_wandb_integration(monkeypatch):
+    """Test that start_cloud_training calls wandb initialization."""
+
+    # Mock RunPod API
+    def fake_create_pod(**kwargs):
+        return {"id": "pod123"}
+
+    monkeypatch.setenv("RUNPOD_API_KEY", "test_key")
+    monkeypatch.setattr(rp.runpod, "create_pod", fake_create_pod)
+    monkeypatch.setattr(
+        rp.runpod,
+        "get_gpus",
+        lambda: [{"id": "gpu123", "displayName": rp.DEFAULT_GPU_TYPE}],
+    )
+
+    # Track wandb initialization calls
+    wandb_calls = []
+
+    def mock_init_wandb(project_name, run_id):
+        wandb_calls.append({"project": project_name, "run_id": run_id})
+        return "https://wandb.ai/test/project/runs/abc123"
+
+    monkeypatch.setattr(rp, "init_local_wandb_and_open_browser", mock_init_wandb)
+
+    # Test
+    pod_id = rp.start_cloud_training("config/test.py")
+
+    # Verify wandb was called
+    assert len(wandb_calls) == 1
+    assert wandb_calls[0]["project"] == "daggpt-train"  # default project name
+    assert wandb_calls[0]["run_id"] == pod_id
+
+
+def test_start_cloud_training_extracts_project_name_from_config(monkeypatch, tmp_path):
+    """Test that project name is extracted from config file."""
+
+    # Create a test config file
+    config_file = tmp_path / "test_config.py"
+    config_file.write_text('name = "custom-project-name"\n')
+
+    # Mock RunPod API
+    def fake_create_pod(**kwargs):
+        return {"id": "pod456"}
+
+    monkeypatch.setenv("RUNPOD_API_KEY", "test_key")
+    monkeypatch.setattr(rp.runpod, "create_pod", fake_create_pod)
+    monkeypatch.setattr(
+        rp.runpod,
+        "get_gpus",
+        lambda: [{"id": "gpu123", "displayName": rp.DEFAULT_GPU_TYPE}],
+    )
+
+    # Track wandb initialization calls
+    wandb_calls = []
+
+    def mock_init_wandb(project_name, run_id):
+        wandb_calls.append({"project": project_name, "run_id": run_id})
+        return "https://wandb.ai/test/project/runs/abc123"
+
+    monkeypatch.setattr(rp, "init_local_wandb_and_open_browser", mock_init_wandb)
+
+    # Test
+    pod_id = rp.start_cloud_training(str(config_file))
+
+    # Verify wandb was called with custom project name
+    assert len(wandb_calls) == 1
+    assert wandb_calls[0]["project"] == "custom-project-name"
+    assert wandb_calls[0]["run_id"] == pod_id
