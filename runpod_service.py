@@ -107,6 +107,7 @@ def start_cloud_training(
     gpu_type: str = DEFAULT_GPU_TYPE,
     *,
     api_key: str | None = None,
+    keep_alive: bool = False,
 ) -> str:
     """Launch a RunPod GPU instance and run training automatically."""
 
@@ -141,11 +142,16 @@ def start_cloud_training(
     docker_start = time.time()
 
     # Create an inline script that clones the repo first, then runs the setup script
+    # Add keep-alive flag to training args if requested
+    final_train_args = train_args
+    if keep_alive:
+        final_train_args += " --keep-alive"
+
     inline_script = (
         f"apt-get update && apt-get install -y git && "
         f"cd /workspace && "
         f"( [ -d repo/.git ] && git -C repo pull || git clone https://github.com/marict/nanoGPT-llm-extraction.git repo ) && "
-        f"bash /workspace/repo/scripts/container_setup.sh {train_args}"
+        f"bash /workspace/repo/scripts/container_setup.sh {final_train_args}"
     )
     docker_args = f"bash -c '{inline_script}'"
     print(
@@ -304,6 +310,11 @@ if __name__ == "__main__":
     t.add_argument("config", help="Training config file")
     t.add_argument("--gpu-type", default=DEFAULT_GPU_TYPE, help="GPU type name")
     t.add_argument("--api-key", help="RunPod API key")
+    t.add_argument(
+        "--keep-alive",
+        action="store_true",
+        help="Keep pod alive after training completes (disables auto-stop)",
+    )
 
     args = parser.parse_args()
     if args.cmd == "train":
@@ -311,4 +322,5 @@ if __name__ == "__main__":
             args.config,
             gpu_type=args.gpu_type,
             api_key=args.api_key,
+            keep_alive=args.keep_alive,
         )

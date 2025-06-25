@@ -121,6 +121,7 @@ class TrainConfig:
         else "float16"
     )
     compile: bool = True
+    keep_alive: bool = False  # Keep pod alive after training (disables auto-stop)
 
 
 def load_config_file(path: str) -> Dict[str, object]:
@@ -137,21 +138,35 @@ def update_config(cfg: TrainConfig, data: Dict[str, object]) -> None:
 
 
 def apply_overrides(cfg: TrainConfig, overrides: List[str]) -> None:
-    """Apply --key=value CLI overrides."""
+    """Apply --key=value CLI overrides and boolean flags."""
     for arg in overrides:
-        if not arg.startswith("--") or "=" not in arg:
+        if not arg.startswith("--"):
             raise ValueError(f"Invalid override: {arg}")
-        key, val = arg[2:].split("=", 1)
-        if not hasattr(cfg, key):
-            raise ValueError(f"Unknown config key: {key}")
-        cur = getattr(cfg, key)
-        try:
-            lit = literal_eval(val)
-        except Exception:
-            lit = val
-        if not isinstance(lit, type(cur)):
-            raise ValueError(f"Invalid type for {key}")
-        setattr(cfg, key, lit)
+
+        # Handle boolean flags like --keep-alive
+        if "=" not in arg:
+            key = arg[2:].replace("-", "_")  # Convert --keep-alive to keep_alive
+            if not hasattr(cfg, key):
+                raise ValueError(f"Unknown config key: {key}")
+            cur = getattr(cfg, key)
+            if not isinstance(cur, bool):
+                raise ValueError(
+                    f"Flag {arg} can only be used with boolean config keys"
+                )
+            setattr(cfg, key, True)
+        else:
+            # Handle --key=value format
+            key, val = arg[2:].split("=", 1)
+            if not hasattr(cfg, key):
+                raise ValueError(f"Unknown config key: {key}")
+            cur = getattr(cfg, key)
+            try:
+                lit = literal_eval(val)
+            except Exception:
+                lit = val
+            if not isinstance(lit, type(cur)):
+                raise ValueError(f"Invalid type for {key}")
+            setattr(cfg, key, lit)
 
 
 # --------------------------------------------------------------------------- #
@@ -166,6 +181,11 @@ def parse_args() -> argparse.ArgumentParser:
     parser.add_argument("--gpu-type")
     parser.add_argument("--wandb-api-key")
     parser.add_argument("--subset", type=float)
+    parser.add_argument(
+        "--keep-alive",
+        action="store_true",
+        help="Keep pod alive after training (disables auto-stop)",
+    )
     return parser
 
 
@@ -804,8 +824,8 @@ def train(cfg: TrainConfig) -> None:
             except Exception as e:
                 print(f"Warning: Failed to finish wandb run: {e}")
 
-        # Stop RunPod instance if we're running on RunPod
-        if os.getenv("RUNPOD_POD_ID"):
+        # Stop RunPod instance if we're running on RunPod and keep-alive is not enabled
+        if os.getenv("RUNPOD_POD_ID") and not getattr(cfg, "keep_alive", False):
             runpod_service.stop_runpod()
 
 
@@ -837,6 +857,8 @@ def main() -> None:
         cfg.subset = args.subset
     if args.dag_depth is not None:
         cfg.dag_depth = args.dag_depth
+    if args.keep_alive:
+        cfg.keep_alive = args.keep_alive
     print(
         f"[{time.time() - main_start:.2f}s] Configuration setup completed in {time.time() - config_start:.2f}s"
     )

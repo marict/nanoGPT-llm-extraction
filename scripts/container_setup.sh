@@ -46,3 +46,9 @@ log "starting training – output -> $log_file"
 python -u train.py "$@" 2>&1 | tee "$log_file"
 
 log "done in $(( $(date +%s)-start_time ))s"
+
+# Check if keep-alive flag was passed
+if [[ "$*" == *"--keep-alive"* ]]; then
+    log "keep-alive mode enabled – keeping container alive"
+    tail -f /dev/null
+fi

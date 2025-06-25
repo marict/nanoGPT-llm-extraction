@@ -243,6 +243,40 @@ def test_subset_config_edge_cases():
     except ValueError:
         pass  # Expected
 
+
+def test_keep_alive_config():
+    """Test keep_alive configuration and argument parsing."""
+    from train import TrainConfig, apply_overrides
+
+    # Test default value
+    cfg = TrainConfig()
+    assert (
+        cfg.keep_alive is False
+    ), f"Expected default keep_alive to be False, got {cfg.keep_alive}"
+
+    # Test setting keep_alive via config
+    cfg = TrainConfig()
+    cfg.keep_alive = True
+    assert (
+        cfg.keep_alive is True
+    ), f"Expected keep_alive to be True after setting, got {cfg.keep_alive}"
+
+    # Test that keep_alive can be overridden via CLI
+    cfg = TrainConfig()
+    apply_overrides(cfg, ["--keep-alive"])
+    assert (
+        cfg.keep_alive is True
+    ), f"Expected keep_alive True after CLI override, got {cfg.keep_alive}"
+
+    # Test that keep_alive is included in config dict for wandb logging
+    cfg = TrainConfig()
+    cfg.keep_alive = True
+    config_dict = cfg.__dict__
+    assert "keep_alive" in config_dict, "keep_alive should be in config dict"
+    assert (
+        config_dict["keep_alive"] is True
+    ), "keep_alive value should be preserved in config dict"
+
     try:
         apply_overrides(cfg, ["--subset=true"])
         assert False, "Should have raised ValueError for boolean subset"
