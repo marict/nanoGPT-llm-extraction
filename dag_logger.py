@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn.functional as F
 
+import wandb
 from dag_model import op_names
 
 
@@ -244,10 +245,5 @@ class DAGLogger:
         log_dict.update(self.get_extra_vals(model))
         log_dict.update(self.get_op_probabilities(model))
         log_dict.update(self.get_operand_probabilities(model))
-
-        # Add node values
-        node_values = self.get_node_values_list(model)
-        if node_values:
-            log_dict["node_values"] = node_values
 
         return log_dict

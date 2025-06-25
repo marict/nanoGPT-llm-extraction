@@ -647,10 +647,6 @@ def train(cfg: TrainConfig) -> None:
                             for task, score in math_scores.items():
                                 base_log_dict[f"math_eval/{task}"] = score
 
-                            # Log generated sample as text
-                            if generated_sample:
-                                base_log_dict["generated_sample"] = generated_sample
-
                             # Get comprehensive logging dict
                             log_dict = (
                                 dag_logger.get_wandb_logging_dict(
