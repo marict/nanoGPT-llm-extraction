@@ -19,7 +19,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import tiktoken
@@ -286,6 +286,31 @@ def train(cfg: TrainConfig) -> None:
         f"[{time.time() - setup_start:.2f}s] DDP setup completed in {time.time() - ddp_start:.2f}s"
     )
 
+    # --------------------------------------------------------------------- #
+    # W&B
+    # --------------------------------------------------------------------- #
+    wandb_start = time.time()
+    print(f"[{time.time() - setup_start:.2f}s] Initializing wandb")
+    if master_process:
+        try:
+            run = wandb.init(
+                project=cfg.name,
+                name=generate_run_name(cfg),
+                config=cfg.__dict__,
+                settings=wandb.Settings(
+                    start_method="thread"
+                ),  # Use thread-based initialization
+            )
+            print(f"[{time.time() - setup_start:.2f}s] W&B URL: {run.url}")
+        except Exception as e:
+            print(
+                f"[{time.time() - setup_start:.2f}s] Error: Failed to initialize wandb: {e}"
+            )
+            raise  # Re-raise the exception to fail the job
+    print(
+        f"[{time.time() - setup_start:.2f}s] W&B initialization completed in {time.time() - wandb_start:.2f}s"
+    )
+
     tokens_per_iter = (
         cfg.gradient_accumulation_steps
         * ddp_world_size
@@ -497,31 +522,6 @@ def train(cfg: TrainConfig) -> None:
 
     if ddp:
         model = DDP(model, device_ids=[int(device.split(":")[-1])])
-
-    # --------------------------------------------------------------------- #
-    # W&B
-    # --------------------------------------------------------------------- #
-    wandb_start = time.time()
-    print(f"[{time.time() - setup_start:.2f}s] Initializing wandb")
-    if master_process:
-        try:
-            run = wandb.init(
-                project=cfg.name,
-                name=generate_run_name(cfg),
-                config=cfg.__dict__,
-                settings=wandb.Settings(
-                    start_method="thread"
-                ),  # Use thread-based initialization
-            )
-            print(f"[{time.time() - setup_start:.2f}s] W&B URL: {run.url}")
-        except Exception as e:
-            print(
-                f"[{time.time() - setup_start:.2f}s] Error: Failed to initialize wandb: {e}"
-            )
-            raise  # Re-raise the exception to fail the job
-    print(
-        f"[{time.time() - setup_start:.2f}s] W&B initialization completed in {time.time() - wandb_start:.2f}s"
-    )
 
     # --------------------------------------------------------------------- #
     # Training loop
