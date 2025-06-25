@@ -130,12 +130,6 @@ class DAGLogger:
         if op_logits is None:
             return {}
 
-        try:
-            import wandb
-        except ImportError:
-            # Return empty dict if wandb not available
-            return {}
-
         with torch.no_grad():
             # Take the first sample in the batch and convert to probabilities
             probs = F.softmax(op_logits, dim=-1)[0].detach().cpu().numpy()

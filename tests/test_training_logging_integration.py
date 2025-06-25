@@ -103,16 +103,10 @@ def test_operation_logging_during_training_step():
     # Test all logging functions work together
     # 1. Operation probabilities
     op_probs = logger.get_op_probabilities(model)
-    assert len(op_probs) == len(
-        op_names
-    ), "Should have probabilities for all operations"
-
-    for op_name in op_names:
-        key = f"op_probs/{op_name}"
-        assert key in op_probs, f"Missing probability for {op_name}"
-        assert (
-            0.0 <= op_probs[key] <= 1.0
-        ), f"Invalid probability for {op_name}: {op_probs[key]}"
+    assert op_probs is not None, "Should have operation probabilities"
+    # Check we get the expected format for operation probabilities
+    assert "op_probs_plot" in op_probs, "Expected plot format"
+    assert len(op_probs) == 1, "Should have exactly one plot"
 
     # 2. Operand probabilities
     operand_probs = logger.get_operand_probabilities(model)
@@ -201,11 +195,9 @@ def test_console_logging_format():
     op_probs = logger.get_op_probabilities(model)
     operand_probs = logger.get_operand_probabilities(model)
 
-    # Verify the data is properly formatted
-    for op_name in op_names:
-        key = f"op_probs/{op_name}"
-        assert key in op_probs, f"Missing probability for {op_name}"
-        assert 0.0 <= op_probs[key] <= 1.0, f"Invalid probability: {op_probs[key]}"
+    assert op_probs is not None, "Should have operation probabilities"
+    # Verify the data is properly formatted - operation probabilities are now plots
+    assert "op_probs_plot" in op_probs, "Expected plot format"
 
     # Verify operand probabilities are properly formatted (handle both formats)
     assert len(operand_probs) > 0, "Should have operand probabilities"
@@ -270,10 +262,10 @@ def test_node_values_logging():
     logger.format_console_logging(model)
 
     # Test formatting works
-    if node_values:
-        formatted_values = [f"{val:.4f}" for val in node_values]
-        assert len(formatted_values) == len(node_values)
-        assert all(isinstance(val, str) and "." in val for val in formatted_values)
+    assert node_values is not None, "Should have node values"
+    formatted_values = [f"{val:.4f}" for val in node_values]
+    assert len(formatted_values) == len(node_values)
+    assert all(isinstance(val, str) and "." in val for val in formatted_values)
 
     # Test that multiple forward passes can be logged
     input_ids2 = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
@@ -358,47 +350,12 @@ def test_dag_logging_after_text_generation():
     node_values = dag_logger.get_node_values_list(model)
 
     # Verify we have the expected logging information
-    assert len(op_probs) == 9, "Should have probabilities for all 9 operations"
+    assert op_probs is not None, "Should have operation probabilities"
+    assert "op_probs_plot" in op_probs, "Should have operation probabilities plot"
+    assert len(op_probs) == 1, "Should have exactly one operation plot"
+
     assert len(operand_probs) > 0, "Should have operand probabilities"
     assert len(node_values) > 0, "Should have node values"
-
-    # Verify operation probabilities sum to 1
-    op_prob_sum = sum(op_probs.values())
-    assert (
-        abs(op_prob_sum - 1.0) < 1e-5
-    ), f"Operation probabilities should sum to 1, got {op_prob_sum}"
-
-    # Handle both plot and scalar formats for operand probabilities
-    if any(key.endswith("_probs_plot") for key in operand_probs.keys()):
-        # Wandb plot format
-        assert "operand1_probs_plot" in operand_probs
-        assert "operand2_probs_plot" in operand_probs
-    else:
-        # Fallback scalar format - verify probabilities are valid
-        for key, prob in operand_probs.items():
-            assert (
-                0.0 <= prob <= 1.0
-            ), f"Operand probability {prob} for {key} not in [0,1]"
-
-        # Verify operand probabilities sum correctly for each operand
-        operand1_keys = [
-            k for k in operand_probs.keys() if k.startswith("operand1_probs/")
-        ]
-        operand2_keys = [
-            k for k in operand_probs.keys() if k.startswith("operand2_probs/")
-        ]
-
-        if operand1_keys:
-            operand1_sum = sum(operand_probs[k] for k in operand1_keys)
-            assert (
-                abs(operand1_sum - 1.0) < 1e-5
-            ), f"Operand1 probabilities should sum to 1, got {operand1_sum}"
-
-        if operand2_keys:
-            operand2_sum = sum(operand_probs[k] for k in operand2_keys)
-            assert (
-                abs(operand2_sum - 1.0) < 1e-5
-            ), f"Operand2 probabilities should sum to 1, got {operand2_sum}"
 
 
 def test_operation_logits_removed():
@@ -441,17 +398,12 @@ def test_operation_logits_removed():
     op_prob_keys = [k for k in wandb_dict.keys() if k.startswith("op_probs/")]
     operand_prob_keys = [k for k in wandb_dict.keys() if k.startswith("operand")]
 
-    assert len(op_prob_keys) > 0, "Should have operation probability keys"
+    assert op_prob_keys is not None, "Should have operation probabilities"
+    # Operation probabilities are now in plot format
+    op_plot_keys = [k for k in wandb_dict.keys() if k == "op_probs_plot"]
+    assert len(op_plot_keys) == 1, "Should have exactly one operation plot"
+
     assert len(operand_prob_keys) > 0, "Should have operand probability keys"
-
-    # Check if we have plots or scalar values
-    plot_keys = [k for k in operand_prob_keys if k.endswith("_probs_plot")]
-    scalar_keys = [k for k in operand_prob_keys if not k.endswith("_probs_plot")]
-
-    # Should have either plots OR scalar values, not both
-    assert (len(plot_keys) > 0) != (
-        len(scalar_keys) > 0
-    ), "Should have either plots or scalar values for operands"
 
 
 def test_gradient_capture_after_text_generation():

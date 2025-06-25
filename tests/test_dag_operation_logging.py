@@ -6,12 +6,12 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-# --------------------------------------------------------------------- #
-# import library code
-# --------------------------------------------------------------------- #
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import wandb
 from dag_logger import DAGLogger
 from dag_model import GPT, GPTConfig, op_names
+
+# Add the parent directory to sys.path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 # --------------------------------------------------------------------- #
@@ -63,21 +63,20 @@ def test_get_op_probabilities(small_dag_model, sample_batch):
     logger = DAGLogger()
     op_probs = logger.get_op_probabilities(model)
 
-    # Check that we have probabilities for all operations
-    expected_keys = [f"op_probs/{op}" for op in op_names]
-    assert all(
-        key in op_probs for key in expected_keys
-    ), f"Missing probability keys. Got: {list(op_probs.keys())}"
+    # Check that we have the wandb plot format
+    if op_probs:
+        # Should have a single plot key
+        assert (
+            "op_probs_plot" in op_probs
+        ), f"Expected op_probs_plot key, got: {list(op_probs.keys())}"
 
-    # Check that all probabilities are valid (between 0 and 1)
-    for key, prob in op_probs.items():
-        assert 0.0 <= prob <= 1.0, f"Invalid probability {prob} for {key}"
-
-    # Check that probabilities sum to approximately 1
-    prob_sum = sum(
-        prob for key, prob in op_probs.items() if key.startswith("op_probs/")
-    )
-    assert abs(prob_sum - 1.0) < 1e-5, f"Probabilities don't sum to 1: {prob_sum}"
+        # The plot should be a wandb plot object
+        # Just check that the plot object exists - actual validation of
+        # plot content would require complex wandb internals testing
+        assert op_probs["op_probs_plot"] is not None, "Plot should not be None"
+    else:
+        # Should not be empty since wandb is always available
+        assert False, "Should have operation plot when wandb is available"
 
 
 def test_get_op_probabilities_no_forward_pass(small_dag_model):
@@ -119,16 +118,10 @@ def test_get_operand_probabilities(small_dag_model, sample_batch):
         assert "operand2_probs_plot" in operand_probs
 
         # The plots should be wandb plot objects
-        try:
-            import wandb
-
-            for key in plot_keys:
-                # Just check that the plot object exists - actual validation of
-                # plot content would require complex wandb internals testing
-                assert operand_probs[key] is not None, f"Plot {key} is None"
-        except ImportError:
-            # If wandb not available, should have fallen back to scalar values
-            assert False, "Got plot format but wandb not available"
+        for key in plot_keys:
+            # Just check that the plot object exists - actual validation of
+            # plot content would require complex wandb internals testing
+            assert operand_probs[key] is not None, f"Plot {key} is None"
 
     else:
         # Fallback scalar format - test the original behavior
@@ -338,9 +331,11 @@ def test_logging_after_multiple_forward_passes(small_dag_model, sample_batch):
         operand_probs = logger.get_operand_probabilities(model)
         extra_vals = logger.get_extra_vals(model)
 
-        assert len(op_probs) == len(
-            op_names
-        ), f"Iteration {i}: wrong number of probabilities"
+        assert op_probs is not None, "Should have operation probabilities"
+        # Check we get the expected format for operation probabilities
+        assert "op_probs_plot" in op_probs, f"Iteration {i}: expected plot format"
+        assert len(op_probs) == 1, f"Iteration {i}: should have exactly one plot"
+
         assert len(operand_probs) > 0, f"Iteration {i}: no operand probabilities found"
         assert any(
             key.startswith("op_grad/") for key in extra_vals.keys()
@@ -361,7 +356,11 @@ def test_gradient_tracking_with_grad_context(small_dag_model, sample_batch):
     op_probs = logger.get_op_probabilities(model)
     operand_probs = logger.get_operand_probabilities(model)
 
-    assert len(op_probs) == len(op_names), "Probabilities not available under no_grad"
+    # Check we get the expected format for operation probabilities
+    assert op_probs is not None, "Should have operation probabilities"
+    assert "op_probs_plot" in op_probs, "Expected plot format under no_grad"
+    assert len(op_probs) == 1, "Should have exactly one plot under no_grad"
+
     assert len(operand_probs) > 0, "Operand probabilities not available under no_grad"
 
     # But gradients should be empty or zero since no backward pass
@@ -427,19 +426,30 @@ def test_logging_integration_training_scenario(small_dag_model):
 
     # Verify each step has complete data
     for step in range(5):
-        assert len(all_op_probs[step]) == len(
-            op_names
-        ), f"Step {step}: incomplete probabilities"
+        assert all_op_probs[step] is not None, "Should have operation probabilities"
+        # Check we get the expected format for operation probabilities
+        assert (
+            "op_probs_plot" in all_op_probs[step]
+        ), f"Step {step}: expected plot format"
+        assert (
+            len(all_op_probs[step]) == 1
+        ), f"Step {step}: should have exactly one plot"
+
         assert (
             len(all_operand_probs[step]) > 0
-        ), f"Step {step}: no operand probabilities"
+        ), f"Step {step}: no operand probabilities found"
         assert len(all_gradients[step]) == len(
             op_names
         ), f"Step {step}: incomplete gradients"
 
-        # Check probability validity
-        prob_sum = sum(all_op_probs[step].values())
-        assert abs(prob_sum - 1.0) < 1e-5, f"Step {step}: probabilities don't sum to 1"
+        # Gradients should be reasonable values
+        for grad_key, grad_val in all_gradients[step].items():
+            assert isinstance(
+                grad_val, float
+            ), f"Step {step}: gradient {grad_key} is not float"
+            assert (
+                abs(grad_val) < 1.0
+            ), f"Step {step}: gradient {grad_key} too large: {grad_val}"
 
 
 if __name__ == "__main__":
