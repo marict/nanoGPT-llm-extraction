@@ -104,25 +104,20 @@ def test_operation_logging_during_training_step():
     op_probs = logger.get_op_probabilities(model)
     assert op_probs is not None, "Should have operation probabilities"
     # Check we get the expected format for operation probabilities
-    assert "op_probs_plot" in op_probs, "Expected plot format"
+    assert "op_probs_timeseries" in op_probs, "Expected timeseries format"
     assert len(op_probs) == 1, "Should have exactly one plot"
 
     # 2. Operand probabilities
     operand_probs = logger.get_operand_probabilities(model)
     assert len(operand_probs) > 0, "Should have operand probabilities"
 
-    # Check that operand probabilities are valid (handle both plot and scalar formats)
-    if any(key.endswith("_probs_plot") for key in operand_probs.keys()):
-        # Wandb plot format - just check we have the expected plots
-        assert "operand1_probs_plot" in operand_probs
-        assert "operand2_probs_plot" in operand_probs
-    else:
-        # Fallback scalar format
-        for key, prob in operand_probs.items():
-            assert isinstance(
-                prob, float
-            ), f"Operand probability for {key} should be float"
-            assert 0.0 <= prob <= 1.0, f"Operand probability should be in [0,1]: {prob}"
+    # Check that operand probabilities are in timeseries format
+    assert (
+        "operand1_probs_timeseries" in operand_probs
+    ), "Should have operand1 timeseries"
+    assert (
+        "operand2_probs_timeseries" in operand_probs
+    ), "Should have operand2 timeseries"
 
     # 3. Extra values (including gradients)
     extra_vals = logger.get_extra_vals(model)
@@ -138,9 +133,9 @@ def test_operation_logging_during_training_step():
     # 4. Verify the data would be suitable for wandb logging
     wandb_log_dict = logger.get_wandb_logging_dict(model)
 
-    # All values should be JSON serializable (floats, ints, strings, lists, or wandb objects)
+    # All values should be JSON serializable (floats, ints, strings, lists) or wandb objects
     for key, value in wandb_log_dict.items():
-        if key.endswith("_probs_plot"):
+        if key.endswith("_timeseries") or key.endswith("_plot"):
             # Wandb plot objects are acceptable for wandb logging
             assert value is not None, f"Plot {key} should not be None"
         else:
@@ -196,21 +191,16 @@ def test_console_logging_format():
 
     assert op_probs is not None, "Should have operation probabilities"
     # Verify the data is properly formatted - operation probabilities are now plots
-    assert "op_probs_plot" in op_probs, "Expected plot format"
+    assert "op_probs_timeseries" in op_probs, "Expected timeseries format"
 
-    # Verify operand probabilities are properly formatted (handle both formats)
+    # Verify operand probabilities are properly formatted as timeseries
     assert len(operand_probs) > 0, "Should have operand probabilities"
-    if any(key.endswith("_probs_plot") for key in operand_probs.keys()):
-        # Wandb plot format - just verify we have the expected plots
-        assert "operand1_probs_plot" in operand_probs
-        assert "operand2_probs_plot" in operand_probs
-    else:
-        # Fallback scalar format
-        for key, prob in operand_probs.items():
-            assert isinstance(
-                prob, float
-            ), f"Operand probability should be float: {type(prob)}"
-            assert 0.0 <= prob <= 1.0, f"Operand probability should be in [0,1]: {prob}"
+    assert (
+        "operand1_probs_timeseries" in operand_probs
+    ), "Should have operand1 timeseries"
+    assert (
+        "operand2_probs_timeseries" in operand_probs
+    ), "Should have operand2 timeseries"
 
 
 def test_node_values_logging():
@@ -340,8 +330,7 @@ def test_dag_logging_after_text_generation():
     prompt = torch.randint(0, cfg.vocab_size, (1, 3))
 
     with torch.no_grad():
-
-        generated = model.generate(prompt, max_new_tokens=2, temperature=0.8, top_k=10)
+        _ = model.generate(prompt, max_new_tokens=2, temperature=0.8, top_k=10)
 
     # DAG logging after generation
     op_probs = dag_logger.get_op_probabilities(model)
@@ -350,7 +339,9 @@ def test_dag_logging_after_text_generation():
 
     # Verify we have the expected logging information
     assert op_probs is not None, "Should have operation probabilities"
-    assert "op_probs_plot" in op_probs, "Should have operation probabilities plot"
+    assert (
+        "op_probs_timeseries" in op_probs
+    ), "Should have operation probabilities timeseries"
     assert len(op_probs) == 1, "Should have exactly one operation plot"
 
     assert len(operand_probs) > 0, "Should have operand probabilities"
@@ -398,9 +389,9 @@ def test_operation_logits_removed():
     operand_prob_keys = [k for k in wandb_dict.keys() if k.startswith("operand")]
 
     assert op_prob_keys is not None, "Should have operation probabilities"
-    # Operation probabilities are now in plot format
-    op_plot_keys = [k for k in wandb_dict.keys() if k == "op_probs_plot"]
-    assert len(op_plot_keys) == 1, "Should have exactly one operation plot"
+    # Operation probabilities are now in timeseries format
+    op_timeseries_keys = [k for k in wandb_dict.keys() if k == "op_probs_timeseries"]
+    assert len(op_timeseries_keys) == 1, "Should have exactly one operation timeseries"
 
     assert len(operand_prob_keys) > 0, "Should have operand probability keys"
 

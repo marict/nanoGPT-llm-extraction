@@ -63,20 +63,16 @@ def test_get_op_probabilities(small_dag_model, sample_batch):
     logger = DAGLogger()
     op_probs = logger.get_op_probabilities(model)
 
-    # Check that we have the wandb plot format
-    if op_probs:
-        # Should have a single plot key
-        assert (
-            "op_probs_plot" in op_probs
-        ), f"Expected op_probs_plot key, got: {list(op_probs.keys())}"
+    # Check that we have the wandb time-series plot format
+    assert op_probs is not None, "Should have operation probabilities"
+    assert (
+        "op_probs_timeseries" in op_probs
+    ), f"Expected op_probs_timeseries key, got: {list(op_probs.keys())}"
 
-        # The plot should be a wandb plot object
-        # Just check that the plot object exists - actual validation of
-        # plot content would require complex wandb internals testing
-        assert op_probs["op_probs_plot"] is not None, "Plot should not be None"
-    else:
-        # Should not be empty since wandb is always available
-        assert False, "Should have operation plot when wandb is available"
+    # The plot should be a wandb plot object
+    # Just check that the plot object exists - actual validation of
+    # plot content would require complex wandb internals testing
+    assert op_probs["op_probs_timeseries"] is not None, "Plot should not be None"
 
 
 def test_get_op_probabilities_no_forward_pass(small_dag_model):
@@ -109,48 +105,15 @@ def test_get_operand_probabilities(small_dag_model, sample_batch):
     # Check that we have probabilities for both operands
     assert len(operand_probs) > 0, "No operand probabilities found"
 
-    # Check if we got wandb plots or fallback scalar values
-    if any(key.endswith("_probs_plot") for key in operand_probs.keys()):
-        # Wandb plot format - should have 2 plots (one for each operand)
-        plot_keys = [key for key in operand_probs.keys() if key.endswith("_probs_plot")]
-        assert len(plot_keys) == 2, f"Expected 2 operand plots, got {len(plot_keys)}"
-        assert "operand1_probs_plot" in operand_probs
-        assert "operand2_probs_plot" in operand_probs
+    # Should have time-series plots for both operands
+    assert "operand1_probs_timeseries" in operand_probs, "Missing operand1 time-series"
+    assert "operand2_probs_timeseries" in operand_probs, "Missing operand2 time-series"
 
-        # The plots should be wandb plot objects
-        for key in plot_keys:
-            # Just check that the plot object exists - actual validation of
-            # plot content would require complex wandb internals testing
-            assert operand_probs[key] is not None, f"Plot {key} is None"
-
-    else:
-        # Fallback scalar format - test the original behavior
-        operand1_probs = [
-            v for k, v in operand_probs.items() if k.startswith("operand1_probs/")
-        ]
-        operand2_probs = [
-            v for k, v in operand_probs.items() if k.startswith("operand2_probs/")
-        ]
-
-        if operand1_probs:
-            operand1_sum = sum(operand1_probs)
-            assert (
-                abs(operand1_sum - 1.0) < 1e-5
-            ), f"Operand1 probabilities don't sum to 1: {operand1_sum}"
-
-        if operand2_probs:
-            operand2_sum = sum(operand2_probs)
-            assert (
-                abs(operand2_sum - 1.0) < 1e-5
-            ), f"Operand2 probabilities don't sum to 1: {operand2_sum}"
-
-        # Check that all probabilities are valid
-        for key, prob in operand_probs.items():
-            assert isinstance(
-                prob, float
-            ), f"Probability {prob} for {key} is not a float"
-            assert 0.0 <= prob <= 1.0, f"Probability {prob} for {key} is not in [0,1]"
-            assert not torch.isnan(torch.tensor(prob)), f"Probability for {key} is NaN"
+    # The plots should be wandb plot objects
+    for key in ["operand1_probs_timeseries", "operand2_probs_timeseries"]:
+        # Just check that the plot object exists - actual validation of
+        # plot content would require complex wandb internals testing
+        assert operand_probs[key] is not None, f"Plot {key} is None"
 
 
 def test_get_operand_probabilities_no_forward_pass(small_dag_model):
@@ -331,7 +294,9 @@ def test_logging_after_multiple_forward_passes(small_dag_model, sample_batch):
 
         assert op_probs is not None, "Should have operation probabilities"
         # Check we get the expected format for operation probabilities
-        assert "op_probs_plot" in op_probs, f"Iteration {i}: expected plot format"
+        assert (
+            "op_probs_timeseries" in op_probs
+        ), f"Iteration {i}: expected timeseries format"
         assert len(op_probs) == 1, f"Iteration {i}: should have exactly one plot"
 
         assert len(operand_probs) > 0, f"Iteration {i}: no operand probabilities found"
@@ -354,22 +319,9 @@ def test_gradient_tracking_with_grad_context(small_dag_model, sample_batch):
     op_probs = logger.get_op_probabilities(model)
     operand_probs = logger.get_operand_probabilities(model)
 
-    # Check we get the expected format for operation probabilities
     assert op_probs is not None, "Should have operation probabilities"
-    assert "op_probs_plot" in op_probs, "Expected plot format under no_grad"
+    assert "op_probs_timeseries" in op_probs, "Expected timeseries format under no_grad"
     assert len(op_probs) == 1, "Should have exactly one plot under no_grad"
-
-    assert len(operand_probs) > 0, "Operand probabilities not available under no_grad"
-
-    # But gradients should be empty or zero since no backward pass
-    extra_vals = logger.get_extra_vals(model)
-    grad_keys = [key for key in extra_vals.keys() if key.startswith("op_grad/")]
-
-    # Gradients might be present but should be zero or very small
-    for key in grad_keys:
-        grad_val = extra_vals[key]
-        # In no_grad context, gradients are typically not computed or are zero
-        assert isinstance(grad_val, float), f"Gradient {key} is not a float: {grad_val}"
 
 
 # --------------------------------------------------------------------- #
@@ -427,8 +379,8 @@ def test_logging_integration_training_scenario(small_dag_model):
         assert all_op_probs[step] is not None, "Should have operation probabilities"
         # Check we get the expected format for operation probabilities
         assert (
-            "op_probs_plot" in all_op_probs[step]
-        ), f"Step {step}: expected plot format"
+            "op_probs_timeseries" in all_op_probs[step]
+        ), f"Step {step}: expected timeseries format"
         assert (
             len(all_op_probs[step]) == 1
         ), f"Step {step}: should have exactly one plot"

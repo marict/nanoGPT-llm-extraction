@@ -26,6 +26,12 @@ class DAGLogger:
         self.gradient_hooks = []
         self.captured_gradients = {}
 
+        # Time-series data for tracking probabilities over training
+        self.step_counter = 0
+        self.operation_prob_history = {op: [] for op in op_names}
+        self.operand_prob_history = {}  # Will be initialized based on number of nodes
+        self.step_history = []
+
     def setup_gradient_tracking(self, model) -> None:
         """
         Set up gradient tracking hooks for a DAG model.
@@ -110,98 +116,149 @@ class DAGLogger:
 
         return metrics
 
+    def update_probability_history(self, model) -> None:
+        """
+        Update the time-series history with current model probabilities.
+        Call this during training to accumulate data for time-series plots.
+
+        Args:
+            model: DAGGPT model instance
+        """
+        # Update operation probabilities
+        if (
+            hasattr(model, "last_activations")
+            and "op_logits" in model.last_activations
+            and model.last_activations["op_logits"] is not None
+        ):
+            with torch.no_grad():
+                op_logits = model.last_activations["op_logits"]
+                probs = F.softmax(op_logits, dim=-1)[0].detach().cpu().numpy()
+
+                for i, op_name in enumerate(op_names):
+                    self.operation_prob_history[op_name].append(float(probs[i]))
+
+        # Update operand probabilities
+        if (
+            hasattr(model, "dag")
+            and hasattr(model.dag, "controller")
+            and hasattr(model.dag.controller, "last_attn")
+            and model.dag.controller.last_attn is not None
+        ):
+            with torch.no_grad():
+                last_attn = model.dag.controller.last_attn
+                attn_probs = last_attn[0].detach().cpu().numpy()  # (2, N)
+
+                # Initialize operand history if not done yet
+                if not self.operand_prob_history:
+                    num_nodes = attn_probs.shape[1]
+                    for operand_idx in range(2):  # 2 operands
+                        for node_idx in range(num_nodes):
+                            key = f"operand{operand_idx+1}_node{node_idx}"
+                            self.operand_prob_history[key] = []
+
+                # Update operand probabilities
+                for operand_idx in range(attn_probs.shape[0]):  # 2 operands
+                    for node_idx in range(attn_probs.shape[1]):  # N nodes
+                        key = f"operand{operand_idx+1}_node{node_idx}"
+                        prob = float(attn_probs[operand_idx, node_idx])
+                        self.operand_prob_history[key].append(prob)
+
+        # Update step counter and history
+        self.step_history.append(self.step_counter)
+        self.step_counter += 1
+
     def get_op_probabilities(self, model) -> Dict[str, object]:
         """
-        Get operation probabilities from the model as a wandb plot.
+        Get operation probabilities as a time-series wandb plot showing evolution over training.
 
         Args:
             model: DAGGPT model instance
 
         Returns:
-            Dictionary containing wandb line plot for operation probabilities
+            Dictionary containing wandb time-series plot for operation probabilities
         """
-        if (
-            not hasattr(model, "last_activations")
-            or "op_logits" not in model.last_activations
-        ):
+        # Update the current step data first
+        self.update_probability_history(model)
+
+        # Create plot with whatever data we have (even single point)
+        if len(self.step_history) == 0:
             return {}
 
-        op_logits = model.last_activations["op_logits"]
-        if op_logits is None:
+        # Create time-series data for wandb
+        # Organize data by operation for line_series format
+        xs = self.step_history  # Single x array for all operations
+        ys = []  # List of y arrays, one per operation
+        keys = []  # Operation names
+
+        for op_name in op_names:
+            if op_name in self.operation_prob_history:
+                history = self.operation_prob_history[op_name]
+                # Only include data points we have
+                if len(history) >= len(self.step_history):
+                    ys.append(history[: len(self.step_history)])
+                    keys.append(op_name)
+
+        if not ys:
             return {}
 
-        with torch.no_grad():
-            # Take the first sample in the batch and convert to probabilities
-            probs = F.softmax(op_logits, dim=-1)[0].detach().cpu().numpy()
+        # Create a multi-line time series plot
+        line_plot = wandb.plot.line_series(
+            xs=xs,  # Single x array (training steps)
+            ys=ys,  # List of y arrays (probabilities for each operation)
+            keys=keys,  # Operation names for legend
+            title="Operation Probabilities Over Training",
+            xname="Training Step",
+        )
 
-            # Create wandb line plot
-            probabilities = probs.tolist()
-
-            plot_data = [
-                [i, prob, op_name]
-                for i, (prob, op_name) in enumerate(zip(probabilities, op_names))
-            ]
-            table = wandb.Table(
-                data=plot_data,
-                columns=["operation_index", "probability", "operation_name"],
-            )
-            line_plot = wandb.plot.line(
-                table,
-                "operation_index",
-                "probability",
-                title="Operation Selection Probabilities",
-            )
-
-            return {"op_probs_plot": line_plot}
+        return {"op_probs_timeseries": line_plot}
 
     def get_operand_probabilities(self, model) -> Dict[str, object]:
         """
-        Get operand selection probabilities from the model as wandb plots.
+        Get operand selection probabilities as time-series wandb plots showing evolution over training.
 
         Args:
             model: DAGGPT model instance
 
         Returns:
-            Dictionary containing wandb line plots for operand probabilities
+            Dictionary containing wandb time-series plots for operand probabilities
         """
-        if (
-            not hasattr(model, "dag")
-            or not hasattr(model.dag, "controller")
-            or not hasattr(model.dag.controller, "last_attn")
-        ):
+        # Update history if we don't have enough data points yet
+        if len(self.step_history) == 0:
+            self.update_probability_history(model)
+
+        # Create plot with whatever data we have
+        if len(self.step_history) == 0 or not self.operand_prob_history:
             return {}
 
-        last_attn = model.dag.controller.last_attn
-        if last_attn is None:
-            return {}
+        operand_plots = {}
 
-        with torch.no_grad():
-            # last_attn is (B, 2, N) - batch, 2 operands, N nodes
-            # Take the first sample in the batch
-            attn_probs = last_attn[0].detach().cpu().numpy()  # (2, N)
+        # Create separate time-series plots for each operand
+        for operand_idx in range(2):  # 2 operands
+            xs = self.step_history  # Single x array for all nodes
+            ys = []  # List of y arrays, one per node
+            keys = []  # Node names
 
-            operand_plots = {}
+            # Collect data for all nodes of this operand
+            for key, history in self.operand_prob_history.items():
+                if key.startswith(f"operand{operand_idx+1}_"):
+                    node_name = key.replace(f"operand{operand_idx+1}_", "")
+                    # Only include data points we have
+                    if len(history) >= len(self.step_history):
+                        ys.append(history[: len(self.step_history)])
+                        keys.append(node_name)
 
-            # Create a line plot for each operand showing all node probabilities
-            for operand_idx in range(attn_probs.shape[0]):  # 2 operands
-                node_indices = list(range(attn_probs.shape[1]))  # N nodes
-                probabilities = attn_probs[operand_idx].tolist()  # Node probabilities
-
-                # Create wandb line plot
-                plot_data = [[x, y] for x, y in zip(node_indices, probabilities)]
-                table = wandb.Table(
-                    data=plot_data, columns=["node_index", "probability"]
-                )
-                line_plot = wandb.plot.line(
-                    table,
-                    "node_index",
-                    "probability",
-                    title=f"Operand {operand_idx + 1} Node Selection Probabilities",
+            if ys:
+                line_plot = wandb.plot.line_series(
+                    xs=xs,  # Single x array (training steps)
+                    ys=ys,  # List of y arrays (probabilities for each node)
+                    keys=keys,  # Node names for legend
+                    title=f"Operand {operand_idx + 1} Node Probabilities Over Training",
+                    xname="Training Step",
                 )
 
-                operand_plots[f"operand{operand_idx+1}_probs_plot"] = line_plot
+                operand_plots[f"operand{operand_idx+1}_probs_timeseries"] = line_plot
 
-            return operand_plots
+        return operand_plots
 
     def get_node_values_list(self, model) -> List[float]:
         """
@@ -265,6 +322,17 @@ class DAGLogger:
         node_values = self.get_node_values_list(model)
         if node_values:
             print(f"Node values: {[f'{val:.4f}' for val in node_values]}")
+
+    def log_training_step(self, model) -> None:
+        """
+        Log probabilities for a single training step.
+        Call this method after each forward pass during training to accumulate
+        time-series data for plotting.
+
+        Args:
+            model: DAGGPT model instance
+        """
+        self.update_probability_history(model)
 
     def get_wandb_logging_dict(self, model, base_dict: Optional[Dict] = None) -> Dict:
         """
