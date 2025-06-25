@@ -1,4 +1,4 @@
-name = "dag-gpt-train-daggpt"
+name = "daggpt"
 
 batch_size = 16
 block_size = 1024

@@ -11,7 +11,7 @@ init_from = "scratch"
 # Math evaluation settings for quick testing
 math_eval_examples = 1
 
-name = "dag-gpt-train-default"
+name = "daggpt-default"
 
 # tiny dataset and network for quick local testing
 dataset = "proofpile"
