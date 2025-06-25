@@ -19,7 +19,6 @@ import time
 from ast import literal_eval
 from contextlib import nullcontext
 from dataclasses import dataclass, field, fields
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -29,7 +28,6 @@ import torch
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-import run_math_eval
 import runpod_service
 import wandb
 from dag_logger import DAGLogger
