@@ -43,7 +43,7 @@ def test_compare_models_comprehensive_basic():
         # Mock model with basic attributes
         mock_model = MagicMock()
         mock_model.config.dag_depth = 0
-        mock_model.get_num_params.return_value = 1000000
+        mock_model.get_num_params.return_value = 1000  # Much smaller
 
         # Mock checkpoint loading
         mock_ckpt = {"model_args": {"dag_depth": 0}}

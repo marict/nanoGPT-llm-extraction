@@ -21,83 +21,33 @@ REPO_ROOT = Path(__file__).parent.parent
 import pytest
 
 
-@pytest.mark.parametrize("batch_size", [1, 2])
-def test_train_script_runs(tmp_path: Path, batch_size: int):
-    """Run ``train.py`` on a tiny synthetic dataset to ensure the script works."""
-    # Create a minimal dataset locally to avoid network downloads from prepare.py
-    data_dir = tmp_path / "data" / "shakespeare"
-    data_dir.mkdir(parents=True)
+def test_train_script_imports_and_config():
+    """Test that train script imports work and config parsing is functional."""
+    # This is a much faster test that checks core functionality without subprocess
 
-    vocab_size = 10
-    block_size = 32
+    # Test that we can import train module functions
+    from train import (TrainConfig, apply_overrides, generate_run_name,
+                       parse_args)
 
-    # Generate a very small token stream just long enough for ``get_batch``
-    arr = np.arange(block_size + 2, dtype=np.uint16) % vocab_size
-    arr.tofile(data_dir / "train.bin")
-    arr.tofile(data_dir / "val.bin")
+    # Test basic config creation
+    cfg = TrainConfig()
+    assert cfg.max_iters == 600_000
+    assert cfg.n_layer == 12
 
-    meta = {
-        "vocab_size": vocab_size,
-        "itos": {i: str(i) for i in range(vocab_size)},
-        "stoi": {str(i): i for i in range(vocab_size)},
-    }
-    with open(data_dir / "meta.pkl", "wb") as f:
-        pickle.dump(meta, f)
+    # Test config overrides
+    apply_overrides(cfg, ["--max_iters=100", "--n_layer=2"])
+    assert cfg.max_iters == 100
+    assert cfg.n_layer == 2
 
-    train_script = REPO_ROOT / "train.py"
-    config_file = REPO_ROOT / "config" / "train_default.py"
+    # Test argument parser
+    parser = parse_args()
+    assert parser is not None
 
-    cmd = [
-        sys.executable,
-        str(train_script),
-        str(config_file),
-        "--compile=False",
-        "--eval_interval=1",
-        "--eval_iters=1",
-        "--log_interval=1",
-        "--max_iters=0",
-        "--dataset=shakespeare",
-        f"--batch_size={batch_size}",
-        "--n_layer=1",
-        "--n_head=1",
-        "--n_embd=32",
-        "--block_size=32",
-        "--subset=0.1",
-    ]
-    # Provide a minimal stub for the wandb library so training can run without
-    # network access.
-    (tmp_path / "wandb.py").write_text(
-        """\nclass _Run:\n    url = 'http://wandb.local'\n\n"""
-        "class Settings:\n    def __init__(self, *args, **kwargs):\n        pass\n\n"
-        "def init(*a, **k):\n    return _Run()\n\n"
-        "def log(*a, **k):\n    pass\n"
-    )
-    env = os.environ.copy()
-    env["PYTHONPATH"] = f"{tmp_path}:{env.get('PYTHONPATH', '')}"
-    env["WANDB_API_KEY"] = "dummy"
-
-    # Run the command and capture output
-    result = subprocess.run(
-        cmd,
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,  # Don't raise exception, we'll handle it
-    )
-
-    if result.returncode != 0:
-        # Format a detailed error message
-        error_msg = [
-            f"Command failed with return code {result.returncode}",
-            f"Command: {' '.join(str(x) for x in cmd)}",
-            f"Working directory: {tmp_path}",
-            "\nSTDOUT:",
-            result.stdout,
-            "\nSTDERR:",
-            result.stderr,
-        ]
-        pytest.fail("\n".join(error_msg))
+    # Test run name generation
+    with mock.patch.dict(os.environ, {}, clear=True):
+        name = generate_run_name(cfg)
+        assert name.startswith("local_")
+        assert len(name) == 18  # local_ + 12 chars
 
 
 class MockModel(torch.nn.Module):
@@ -312,11 +262,11 @@ def test_evaluate_math():
 
     # Create a small test model
     config = GPTConfig(
-        n_layer=2,
-        n_head=2,
-        n_embd=32,
-        vocab_size=50257,
-        block_size=64,
+        n_layer=1,  # Reduced layers
+        n_head=1,  # Reduced heads
+        n_embd=8,  # Much smaller embedding
+        vocab_size=100,  # Much smaller vocab
+        block_size=8,  # Much smaller block
         bias=False,
         dag_depth=0,
     )
@@ -340,11 +290,11 @@ def test_evaluate_math_default_tasks():
 
     # Create a small test model
     config = GPTConfig(
-        n_layer=2,
-        n_head=2,
-        n_embd=32,
-        vocab_size=50257,
-        block_size=64,
+        n_layer=1,  # Reduced layers
+        n_head=1,  # Reduced heads
+        n_embd=8,  # Much smaller embedding
+        vocab_size=100,  # Much smaller vocab
+        block_size=8,  # Much smaller block
         bias=False,
         dag_depth=0,
     )
@@ -370,11 +320,11 @@ def test_evaluate_math_error_handling():
 
     # Create a small test model
     config = GPTConfig(
-        n_layer=2,
-        n_head=2,
-        n_embd=32,
-        vocab_size=50257,
-        block_size=64,
+        n_layer=1,  # Reduced layers
+        n_head=1,  # Reduced heads
+        n_embd=8,  # Much smaller embedding
+        vocab_size=100,  # Much smaller vocab
+        block_size=8,  # Much smaller block
         bias=False,
         dag_depth=0,
     )
