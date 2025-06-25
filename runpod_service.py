@@ -166,7 +166,7 @@ def start_cloud_training(
         min_memory_in_gb=64,
         volume_in_gb=1000,  # persists across stops
         container_disk_in_gb=1000,  # wiped on stop
-        network_volume_id="xfv5wps96a",
+        network_volume_id="tvi2olc54y",
         env={
             "WANDB_API_KEY": os.getenv("WANDB_API_KEY", ""),
             "HF_HOME": "/workspace/.cache/huggingface",

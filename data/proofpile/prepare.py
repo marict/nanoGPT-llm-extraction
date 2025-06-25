@@ -22,8 +22,13 @@ import numpy as np
 from datasets import load_dataset
 from tiktoken import get_encoding
 
-# Disable tqdm progress bars to prevent broken newlines in containers/remote terminals
+# Disable progress bars to prevent broken newlines in containers/remote terminals
 os.environ.setdefault("TQDM_DISABLE", "1")
+
+# Also disable datasets library progress bars
+import datasets
+
+datasets.disable_progress_bars()
 
 
 # --------------------------------------------------------------------------- #

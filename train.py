@@ -367,22 +367,12 @@ def train(cfg: TrainConfig) -> None:
             print(
                 f"[{time.time() - setup_start:.2f}s] Preparing dataset {cfg.dataset}... with subset {cfg.subset}"
             )
-            # Disable tqdm progress bars to avoid broken newlines in containers
-            original_tqdm_disable = os.environ.get("TQDM_DISABLE")
-            os.environ["TQDM_DISABLE"] = "1"
-            try:
-                train_tokens, val_tokens = prepare_dataset(
-                    cfg.dataset, data_dir, cfg.subset
-                )
-                print(
-                    f"[{time.time() - setup_start:.2f}s] Dataset prepared. Train: {train_tokens:,}, Val: {val_tokens:,}"
-                )
-            finally:
-                # Restore original TQDM_DISABLE setting
-                if original_tqdm_disable is None:
-                    os.environ.pop("TQDM_DISABLE", None)
-                else:
-                    os.environ["TQDM_DISABLE"] = original_tqdm_disable
+            train_tokens, val_tokens = prepare_dataset(
+                cfg.dataset, data_dir, cfg.subset
+            )
+            print(
+                f"[{time.time() - setup_start:.2f}s] Dataset prepared. Train: {train_tokens:,}, Val: {val_tokens:,}"
+            )
 
     print(f"[{time.time() - setup_start:.2f}s] Loading meta")
     meta_path = data_dir / "meta.pkl"

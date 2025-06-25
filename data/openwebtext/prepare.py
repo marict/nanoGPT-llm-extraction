@@ -9,8 +9,13 @@ import numpy as np
 from datasets import Dataset, load_dataset
 from tiktoken import get_encoding
 
-# Disable tqdm progress bars to prevent broken newlines in containers/remote terminals
+# Disable progress bars to prevent broken newlines in containers/remote terminals
 os.environ.setdefault("TQDM_DISABLE", "1")
+
+# Also disable datasets library progress bars
+import datasets
+
+datasets.disable_progress_bars()
 
 
 def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> tuple[int, int]:
@@ -26,6 +31,9 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> tuple[int
     Returns:
         Tuple of (train_tokens, val_tokens)
     """
+    # Create output directory
+    data_dir.mkdir(parents=True, exist_ok=True)
+
     # number of workers in .map() call
     # good number to use is ~order number of cpu cores // 2
     num_proc = num_proc

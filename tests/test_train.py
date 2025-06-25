@@ -273,7 +273,7 @@ def test_evaluate_math():
     model = GPT(config)
 
     # Mock the run_math_eval.run_eval function
-    with mock.patch("train.run_math_eval.run_eval") as mock_run_eval:
+    with mock.patch("run_math_eval.run_eval") as mock_run_eval:
         mock_run_eval.return_value = {"gsm8k": 0.25}
 
         scores = train.evaluate_math(model, "cpu", tasks=["gsm8k"], max_examples=5)
@@ -301,7 +301,7 @@ def test_evaluate_math_default_tasks():
     model = GPT(config)
 
     # Mock the run_math_eval.run_eval function
-    with mock.patch("train.run_math_eval.run_eval") as mock_run_eval:
+    with mock.patch("run_math_eval.run_eval") as mock_run_eval:
         mock_run_eval.return_value = {"gsm8k": 0.25, "svamp": 0.35}
 
         # Call with no tasks specified - should use defaults
@@ -331,7 +331,7 @@ def test_evaluate_math_error_handling():
     model = GPT(config)
 
     # Mock the run_math_eval.run_eval function to raise an exception
-    with mock.patch("train.run_math_eval.run_eval") as mock_run_eval:
+    with mock.patch("run_math_eval.run_eval") as mock_run_eval:
         mock_run_eval.side_effect = Exception("Test error")
 
         scores = train.evaluate_math(
