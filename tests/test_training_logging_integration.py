@@ -18,7 +18,6 @@ from dag_model import GPT, GPTConfig, op_names
 # --------------------------------------------------------------------- #
 def test_training_loop_text_generation_integration():
     """Test that the training loop evaluation behaves correctly with text generation."""
-    from unittest.mock import Mock
 
     # Mock functions to simulate train.py environment
     def mock_encode(text):
@@ -453,8 +452,6 @@ def test_gradient_capture_after_text_generation():
     grad_keys = [key for key in extra_vals.keys() if key.startswith("op_grad/")]
 
     # Should have gradients for all operations
-    from dag_model import op_names
-
     expected_grad_keys = [f"op_grad/{op}" for op in op_names]
 
     assert len(grad_keys) == len(

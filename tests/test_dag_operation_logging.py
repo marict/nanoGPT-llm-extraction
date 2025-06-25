@@ -297,8 +297,6 @@ def test_logging_with_no_dag_depth(sample_batch):
         bias=False,
     )
 
-    from dag_model import GPT
-
     model = GPT(cfg)
 
     input_ids, target_ids = sample_batch
@@ -349,7 +347,7 @@ def test_gradient_tracking_with_grad_context(small_dag_model, sample_batch):
 
     # Forward pass without gradients
     with torch.no_grad():
-        logits, loss = model(input_ids, target_ids)
+        _, _ = model(input_ids, target_ids)
 
     # Should still be able to get probabilities and operand probs
     logger = DAGLogger()
