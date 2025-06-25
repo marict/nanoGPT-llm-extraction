@@ -197,12 +197,28 @@ class DAGLogger:
             for op_name, prob in op_probs.items():
                 print(f"  {op_name.replace('op_probs/', '')}: {prob:.4f}")
 
-        # Operand probabilities
-        operand_probs = self.get_operand_probabilities(model)
-        if operand_probs:
-            print("Operand probabilities:")
-            for operand_name, prob in operand_probs.items():
-                print(f"  {operand_name}: {prob:.4f}")
+        # Operand choices (instead of all probabilities)
+        if (
+            hasattr(model, "dag")
+            and hasattr(model.dag, "controller")
+            and hasattr(model.dag.controller, "last_attn")
+            and model.dag.controller.last_attn is not None
+        ):
+            with torch.no_grad():
+                # last_attn is (B, 2, N) - batch, 2 operands, N nodes
+                # Take the first sample in the batch
+                attn_probs = (
+                    model.dag.controller.last_attn[0].detach().cpu().numpy()
+                )  # (2, N)
+
+                # Find the chosen operands (highest probability for each)
+                operand1_choice = int(attn_probs[0].argmax())
+                operand2_choice = int(attn_probs[1].argmax())
+                max_nodes = attn_probs.shape[1]
+
+                print(
+                    f"Operands chosen: {operand1_choice}, {operand2_choice} (out of {max_nodes})"
+                )
 
         # Node values
         node_values = self.get_node_values_list(model)
