@@ -178,6 +178,7 @@ def parse_args() -> argparse.ArgumentParser:
     parser.add_argument("--dag-depth", type=int)
     parser.add_argument("--gpu-type")
     parser.add_argument("--wandb-api-key")
+    parser.add_argument("--wandb-run-id", help="Resume existing wandb run with this ID")
     parser.add_argument("--subset", type=float)
     parser.add_argument(
         "--keep-alive",
@@ -271,7 +272,7 @@ def find_latest_checkpoint(cfg: TrainConfig) -> Path | None:
 # --------------------------------------------------------------------------- #
 # Core training routine
 # --------------------------------------------------------------------------- #
-def train(cfg: TrainConfig) -> None:
+def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     """Run the training loop using hyperparameters in <cfg>."""
     # --------------------------------------------------------------------- #
     # DDP / environment setup
@@ -313,11 +314,24 @@ def train(cfg: TrainConfig) -> None:
     print(f"[{time.time() - setup_start:.2f}s] Initializing wandb")
     if master_process:
         try:
-            run = wandb.init(
-                project=cfg.name,
-                name=generate_run_name(cfg),
-                config=cfg.__dict__,
-            )
+            if wandb_run_id:
+                # Resume existing wandb run
+                print(
+                    f"[{time.time() - setup_start:.2f}s] Resuming wandb run: {wandb_run_id}"
+                )
+                run = wandb.init(
+                    project=cfg.name,
+                    id=wandb_run_id,
+                    resume="must",
+                    config=cfg.__dict__,
+                )
+            else:
+                # Create new wandb run
+                run = wandb.init(
+                    project=cfg.name,
+                    name=generate_run_name(cfg),
+                    config=cfg.__dict__,
+                )
             print(f"[{time.time() - setup_start:.2f}s] W&B URL: {run.url}")
         except Exception as e:
             print(
@@ -880,7 +894,7 @@ def main() -> None:
         return
 
     Path(CHECKPOINT_DIR).mkdir(parents=True, exist_ok=True)
-    train(cfg)
+    train(cfg, wandb_run_id=args.wandb_run_id)
 
 
 if __name__ == "__main__":

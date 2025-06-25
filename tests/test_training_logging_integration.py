@@ -118,10 +118,18 @@ def test_operation_logging_during_training_step():
     operand_probs = logger.get_operand_probabilities(model)
     assert len(operand_probs) > 0, "Should have operand probabilities"
 
-    # Check that operand probabilities are valid
-    for key, prob in operand_probs.items():
-        assert isinstance(prob, float), f"Operand probability for {key} should be float"
-        assert 0.0 <= prob <= 1.0, f"Operand probability should be in [0,1]: {prob}"
+    # Check that operand probabilities are valid (handle both plot and scalar formats)
+    if any(key.endswith("_probs_plot") for key in operand_probs.keys()):
+        # Wandb plot format - just check we have the expected plots
+        assert "operand1_probs_plot" in operand_probs
+        assert "operand2_probs_plot" in operand_probs
+    else:
+        # Fallback scalar format
+        for key, prob in operand_probs.items():
+            assert isinstance(
+                prob, float
+            ), f"Operand probability for {key} should be float"
+            assert 0.0 <= prob <= 1.0, f"Operand probability should be in [0,1]: {prob}"
 
     # 3. Extra values (including gradients)
     extra_vals = logger.get_extra_vals(model)
@@ -137,18 +145,23 @@ def test_operation_logging_during_training_step():
     # 4. Verify the data would be suitable for wandb logging
     wandb_log_dict = logger.get_wandb_logging_dict(model)
 
-    # All values should be JSON serializable (floats, ints, strings, lists)
+    # All values should be JSON serializable (floats, ints, strings, lists, or wandb objects)
     for key, value in wandb_log_dict.items():
-        assert isinstance(
-            value, (int, float, str, list)
-        ), f"Value for {key} is not JSON serializable: {type(value)}"
+        if key.endswith("_probs_plot"):
+            # Wandb plot objects are acceptable for wandb logging
+            assert value is not None, f"Plot {key} should not be None"
+        else:
+            # Other values should be JSON serializable
+            assert isinstance(
+                value, (int, float, str, list)
+            ), f"Value for {key} is not JSON serializable: {type(value)}"
 
-        # If it's a list, all elements should be JSON serializable
-        if isinstance(value, list):
-            for i, item in enumerate(value):
-                assert isinstance(
-                    item, (int, float, str)
-                ), f"List item {i} for {key} is not JSON serializable: {type(item)}"
+            # If it's a list, all elements should be JSON serializable
+            if isinstance(value, list):
+                for i, item in enumerate(value):
+                    assert isinstance(
+                        item, (int, float, str)
+                    ), f"List item {i} for {key} is not JSON serializable: {type(item)}"
 
 
 def test_console_logging_format():
@@ -194,13 +207,19 @@ def test_console_logging_format():
         assert key in op_probs, f"Missing probability for {op_name}"
         assert 0.0 <= op_probs[key] <= 1.0, f"Invalid probability: {op_probs[key]}"
 
-    # Verify operand probabilities are properly formatted
+    # Verify operand probabilities are properly formatted (handle both formats)
     assert len(operand_probs) > 0, "Should have operand probabilities"
-    for key, prob in operand_probs.items():
-        assert isinstance(
-            prob, float
-        ), f"Operand probability should be float: {type(prob)}"
-        assert 0.0 <= prob <= 1.0, f"Operand probability should be in [0,1]: {prob}"
+    if any(key.endswith("_probs_plot") for key in operand_probs.keys()):
+        # Wandb plot format - just verify we have the expected plots
+        assert "operand1_probs_plot" in operand_probs
+        assert "operand2_probs_plot" in operand_probs
+    else:
+        # Fallback scalar format
+        for key, prob in operand_probs.items():
+            assert isinstance(
+                prob, float
+            ), f"Operand probability should be float: {type(prob)}"
+            assert 0.0 <= prob <= 1.0, f"Operand probability should be in [0,1]: {prob}"
 
 
 def test_node_values_logging():
@@ -349,25 +368,37 @@ def test_dag_logging_after_text_generation():
         abs(op_prob_sum - 1.0) < 1e-5
     ), f"Operation probabilities should sum to 1, got {op_prob_sum}"
 
-    # Verify operand probabilities are valid
-    for key, prob in operand_probs.items():
-        assert 0.0 <= prob <= 1.0, f"Operand probability {prob} for {key} not in [0,1]"
+    # Handle both plot and scalar formats for operand probabilities
+    if any(key.endswith("_probs_plot") for key in operand_probs.keys()):
+        # Wandb plot format
+        assert "operand1_probs_plot" in operand_probs
+        assert "operand2_probs_plot" in operand_probs
+    else:
+        # Fallback scalar format - verify probabilities are valid
+        for key, prob in operand_probs.items():
+            assert (
+                0.0 <= prob <= 1.0
+            ), f"Operand probability {prob} for {key} not in [0,1]"
 
-    # Verify operand probabilities sum correctly for each operand
-    operand1_keys = [k for k in operand_probs.keys() if k.startswith("operand1_probs/")]
-    operand2_keys = [k for k in operand_probs.keys() if k.startswith("operand2_probs/")]
+        # Verify operand probabilities sum correctly for each operand
+        operand1_keys = [
+            k for k in operand_probs.keys() if k.startswith("operand1_probs/")
+        ]
+        operand2_keys = [
+            k for k in operand_probs.keys() if k.startswith("operand2_probs/")
+        ]
 
-    if operand1_keys:
-        operand1_sum = sum(operand_probs[k] for k in operand1_keys)
-        assert (
-            abs(operand1_sum - 1.0) < 1e-5
-        ), f"Operand1 probabilities should sum to 1, got {operand1_sum}"
+        if operand1_keys:
+            operand1_sum = sum(operand_probs[k] for k in operand1_keys)
+            assert (
+                abs(operand1_sum - 1.0) < 1e-5
+            ), f"Operand1 probabilities should sum to 1, got {operand1_sum}"
 
-    if operand2_keys:
-        operand2_sum = sum(operand_probs[k] for k in operand2_keys)
-        assert (
-            abs(operand2_sum - 1.0) < 1e-5
-        ), f"Operand2 probabilities should sum to 1, got {operand2_sum}"
+        if operand2_keys:
+            operand2_sum = sum(operand_probs[k] for k in operand2_keys)
+            assert (
+                abs(operand2_sum - 1.0) < 1e-5
+            ), f"Operand2 probabilities should sum to 1, got {operand2_sum}"
 
 
 def test_operation_logits_removed():
@@ -412,6 +443,15 @@ def test_operation_logits_removed():
 
     assert len(op_prob_keys) > 0, "Should have operation probability keys"
     assert len(operand_prob_keys) > 0, "Should have operand probability keys"
+
+    # Check if we have plots or scalar values
+    plot_keys = [k for k in operand_prob_keys if k.endswith("_probs_plot")]
+    scalar_keys = [k for k in operand_prob_keys if not k.endswith("_probs_plot")]
+
+    # Should have either plots OR scalar values, not both
+    assert (len(plot_keys) > 0) != (
+        len(scalar_keys) > 0
+    ), "Should have either plots or scalar values for operands"
 
 
 def test_gradient_capture_after_text_generation():

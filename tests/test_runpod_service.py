@@ -178,6 +178,7 @@ def test_init_local_wandb_and_open_browser_success(monkeypatch):
     # Mock wandb
     class MockRun:
         url = "https://wandb.ai/test/project/runs/test_run_123"
+        id = "test_run_123"
 
     class MockWandb:
         def init(self, project, name, tags, notes):
@@ -198,7 +199,7 @@ def test_init_local_wandb_and_open_browser_success(monkeypatch):
     # Test the function
     result = rp.init_local_wandb_and_open_browser("test-project", "test_run_123")
 
-    assert result == "https://wandb.ai/test/project/runs/test_run_123"
+    assert result == ("https://wandb.ai/test/project/runs/test_run_123", "test_run_123")
 
 
 def test_init_local_wandb_and_open_browser_no_api_key(monkeypatch):
@@ -240,6 +241,7 @@ def test_init_local_wandb_and_open_browser_chrome_fails(monkeypatch):
     # Mock wandb
     class MockRun:
         url = "https://wandb.ai/test/project/runs/test_run_123"
+        id = "test_run_123"
 
     class MockWandb:
         def init(self, project, name, tags, notes):
@@ -257,8 +259,8 @@ def test_init_local_wandb_and_open_browser_chrome_fails(monkeypatch):
     # Test the function
     result = rp.init_local_wandb_and_open_browser("test-project", "test_run_123")
 
-    # Should still return URL even if Chrome opening fails
-    assert result == "https://wandb.ai/test/project/runs/test_run_123"
+    # Should still return tuple even if Chrome opening fails
+    assert result == ("https://wandb.ai/test/project/runs/test_run_123", "test_run_123")
 
 
 def test_start_cloud_training_with_wandb_integration(monkeypatch):
@@ -281,7 +283,7 @@ def test_start_cloud_training_with_wandb_integration(monkeypatch):
 
     def mock_init_wandb(project_name, run_id):
         wandb_calls.append({"project": project_name, "run_id": run_id})
-        return "https://wandb.ai/test/project/runs/abc123"
+        return ("https://wandb.ai/test/project/runs/abc123", "abc123")
 
     monkeypatch.setattr(rp, "init_local_wandb_and_open_browser", mock_init_wandb)
 
@@ -291,7 +293,9 @@ def test_start_cloud_training_with_wandb_integration(monkeypatch):
     # Verify wandb was called
     assert len(wandb_calls) == 1
     assert wandb_calls[0]["project"] == "daggpt-train"  # default project name
-    assert wandb_calls[0]["run_id"] == pod_id
+    assert (
+        wandb_calls[0]["run_id"] == "daggpt-train"
+    )  # run_id is pod_name now, not pod_id
 
 
 def test_start_cloud_training_extracts_project_name_from_config(monkeypatch, tmp_path):
@@ -318,7 +322,7 @@ def test_start_cloud_training_extracts_project_name_from_config(monkeypatch, tmp
 
     def mock_init_wandb(project_name, run_id):
         wandb_calls.append({"project": project_name, "run_id": run_id})
-        return "https://wandb.ai/test/project/runs/abc123"
+        return ("https://wandb.ai/test/project/runs/abc123", "abc123")
 
     monkeypatch.setattr(rp, "init_local_wandb_and_open_browser", mock_init_wandb)
 
@@ -328,7 +332,9 @@ def test_start_cloud_training_extracts_project_name_from_config(monkeypatch, tmp
     # Verify wandb was called with custom project name
     assert len(wandb_calls) == 1
     assert wandb_calls[0]["project"] == "custom-project-name"
-    assert wandb_calls[0]["run_id"] == pod_id
+    assert (
+        wandb_calls[0]["run_id"] == "custom-project-name"
+    )  # run_id is pod_name now, not pod_id
 
 
 def test_start_cloud_training_with_keep_alive(monkeypatch):
@@ -351,7 +357,7 @@ def test_start_cloud_training_with_keep_alive(monkeypatch):
 
     # Mock wandb initialization
     def mock_init_wandb(project_name, run_id):
-        return "https://wandb.ai/test/project/runs/abc123"
+        return ("https://wandb.ai/test/project/runs/abc123", "abc123")
 
     monkeypatch.setattr(rp, "init_local_wandb_and_open_browser", mock_init_wandb)
 
@@ -385,7 +391,7 @@ def test_start_cloud_training_without_keep_alive(monkeypatch):
 
     # Mock wandb initialization
     def mock_init_wandb(project_name, run_id):
-        return "https://wandb.ai/test/project/runs/abc123"
+        return ("https://wandb.ai/test/project/runs/abc123", "abc123")
 
     monkeypatch.setattr(rp, "init_local_wandb_and_open_browser", mock_init_wandb)
 

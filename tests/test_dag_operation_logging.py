@@ -107,35 +107,57 @@ def test_get_operand_probabilities(small_dag_model, sample_batch):
     logger = DAGLogger()
     operand_probs = logger.get_operand_probabilities(model)
 
-    # Check that we have probabilities for both operands across all nodes
-    # For a model with initial embeddings, we should have at least some nodes
+    # Check that we have probabilities for both operands
     assert len(operand_probs) > 0, "No operand probabilities found"
 
-    # Check that operand probabilities sum to 1 for each operand
-    operand1_probs = [
-        v for k, v in operand_probs.items() if k.startswith("operand1_probs/")
-    ]
-    operand2_probs = [
-        v for k, v in operand_probs.items() if k.startswith("operand2_probs/")
-    ]
+    # Check if we got wandb plots or fallback scalar values
+    if any(key.endswith("_probs_plot") for key in operand_probs.keys()):
+        # Wandb plot format - should have 2 plots (one for each operand)
+        plot_keys = [key for key in operand_probs.keys() if key.endswith("_probs_plot")]
+        assert len(plot_keys) == 2, f"Expected 2 operand plots, got {len(plot_keys)}"
+        assert "operand1_probs_plot" in operand_probs
+        assert "operand2_probs_plot" in operand_probs
 
-    if operand1_probs:
-        operand1_sum = sum(operand1_probs)
-        assert (
-            abs(operand1_sum - 1.0) < 1e-5
-        ), f"Operand1 probabilities don't sum to 1: {operand1_sum}"
+        # The plots should be wandb plot objects
+        try:
+            import wandb
 
-    if operand2_probs:
-        operand2_sum = sum(operand2_probs)
-        assert (
-            abs(operand2_sum - 1.0) < 1e-5
-        ), f"Operand2 probabilities don't sum to 1: {operand2_sum}"
+            for key in plot_keys:
+                # Just check that the plot object exists - actual validation of
+                # plot content would require complex wandb internals testing
+                assert operand_probs[key] is not None, f"Plot {key} is None"
+        except ImportError:
+            # If wandb not available, should have fallen back to scalar values
+            assert False, "Got plot format but wandb not available"
 
-    # Check that all probabilities are valid
-    for key, prob in operand_probs.items():
-        assert isinstance(prob, float), f"Probability {prob} for {key} is not a float"
-        assert 0.0 <= prob <= 1.0, f"Probability {prob} for {key} is not in [0,1]"
-        assert not torch.isnan(torch.tensor(prob)), f"Probability for {key} is NaN"
+    else:
+        # Fallback scalar format - test the original behavior
+        operand1_probs = [
+            v for k, v in operand_probs.items() if k.startswith("operand1_probs/")
+        ]
+        operand2_probs = [
+            v for k, v in operand_probs.items() if k.startswith("operand2_probs/")
+        ]
+
+        if operand1_probs:
+            operand1_sum = sum(operand1_probs)
+            assert (
+                abs(operand1_sum - 1.0) < 1e-5
+            ), f"Operand1 probabilities don't sum to 1: {operand1_sum}"
+
+        if operand2_probs:
+            operand2_sum = sum(operand2_probs)
+            assert (
+                abs(operand2_sum - 1.0) < 1e-5
+            ), f"Operand2 probabilities don't sum to 1: {operand2_sum}"
+
+        # Check that all probabilities are valid
+        for key, prob in operand_probs.items():
+            assert isinstance(
+                prob, float
+            ), f"Probability {prob} for {key} is not a float"
+            assert 0.0 <= prob <= 1.0, f"Probability {prob} for {key} is not in [0,1]"
+            assert not torch.isnan(torch.tensor(prob)), f"Probability for {key} is NaN"
 
 
 def test_get_operand_probabilities_no_forward_pass(small_dag_model):

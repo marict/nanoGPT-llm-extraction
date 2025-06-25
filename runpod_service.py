@@ -138,6 +138,10 @@ def start_cloud_training(
     train_args = " ".join(args_list)
 
     gpu_type_id = _resolve_gpu_id(gpu_type)
+
+    # Initialize wandb locally first to get the run ID
+    wandb_result = init_local_wandb_and_open_browser(project_name, pod_name)
+
     # Docker args preparation
     docker_start = time.time()
 
@@ -146,6 +150,13 @@ def start_cloud_training(
     final_train_args = train_args
     if keep_alive:
         final_train_args += " --keep-alive"
+
+    # Add wandb run ID if available
+    if wandb_result:
+        wandb_url, wandb_run_id = wandb_result
+        print(f"Wandb project initialized locally. URL: {wandb_url}")
+        # Pass the wandb run ID to the training script so it can resume the same run
+        final_train_args += f" --wandb-run-id={wandb_run_id}"
 
     inline_script = (
         f"apt-get update && apt-get install -y git && "
@@ -181,24 +192,21 @@ def start_cloud_training(
         raise RunPodError("RunPod API did not return a pod id")
     print(f"Starting training job '{pod_name}' (pod {pod_id}) on {gpu_type}. ")
 
-    # Initialize wandb locally and open in browser
-    wandb_url = init_local_wandb_and_open_browser(project_name, pod_id)
-    if wandb_url:
-        print(f"Wandb project initialized locally. URL: {wandb_url}")
-
     return pod_id
 
 
-def init_local_wandb_and_open_browser(project_name: str, run_id: str) -> str | None:
+def init_local_wandb_and_open_browser(
+    project_name: str, run_name: str
+) -> tuple[str, str] | None:
     """
     Initialize wandb project locally and open the run URL in Chrome.
 
     Args:
         project_name: Name of the wandb project
-        run_id: Run identifier (typically the pod ID)
+        run_name: Run name (typically the pod name)
 
     Returns:
-        The wandb run URL if successful, None otherwise
+        Tuple of (wandb_url, run_id) if successful, None otherwise
     """
     try:
         # Check if WANDB_API_KEY is available
@@ -209,12 +217,13 @@ def init_local_wandb_and_open_browser(project_name: str, run_id: str) -> str | N
         # Initialize wandb run
         run = wandb.init(
             project=project_name,
-            name=run_id,
+            name=run_name,
             tags=["runpod", "remote-training"],
-            notes=f"Remote training on RunPod instance {run_id}",
+            notes=f"Remote training on RunPod instance {run_name}",
         )
 
         wandb_url = run.url
+        wandb_run_id = run.id
         print(f"Wandb run created: {wandb_url}")
 
         # Try to open in Chrome
@@ -255,7 +264,7 @@ def init_local_wandb_and_open_browser(project_name: str, run_id: str) -> str | N
             print(f"Failed to open browser: {e}")
             print(f"Please manually visit: {wandb_url}")
 
-        return wandb_url
+        return (wandb_url, wandb_run_id)
 
     except Exception as e:
         print(f"Failed to initialize wandb locally: {e}")

@@ -110,15 +110,15 @@ class DAGLogger:
 
         return metrics
 
-    def get_op_probabilities(self, model) -> Dict[str, float]:
+    def get_op_probabilities(self, model) -> Dict[str, object]:
         """
-        Get operation probabilities from the model.
+        Get operation probabilities from the model as a wandb plot.
 
         Args:
             model: DAGGPT model instance
 
         Returns:
-            Dictionary of operation probabilities
+            Dictionary containing wandb line plot for operation probabilities
         """
         if (
             not hasattr(model, "last_activations")
@@ -130,20 +130,45 @@ class DAGLogger:
         if op_logits is None:
             return {}
 
+        try:
+            import wandb
+        except ImportError:
+            # Return empty dict if wandb not available
+            return {}
+
         with torch.no_grad():
             # Take the first sample in the batch and convert to probabilities
             probs = F.softmax(op_logits, dim=-1)[0].detach().cpu().numpy()
-            return {f"op_probs/{op}": float(p) for op, p in zip(op_names, probs)}
 
-    def get_operand_probabilities(self, model) -> Dict[str, float]:
+            # Create wandb line plot
+            probabilities = probs.tolist()
+
+            plot_data = [
+                [i, prob, op_name]
+                for i, (prob, op_name) in enumerate(zip(probabilities, op_names))
+            ]
+            table = wandb.Table(
+                data=plot_data,
+                columns=["operation_index", "probability", "operation_name"],
+            )
+            line_plot = wandb.plot.line(
+                table,
+                "operation_index",
+                "probability",
+                title="Operation Selection Probabilities",
+            )
+
+            return {"op_probs_plot": line_plot}
+
+    def get_operand_probabilities(self, model) -> Dict[str, object]:
         """
-        Get operand selection probabilities from the model.
+        Get operand selection probabilities from the model as wandb plots.
 
         Args:
             model: DAGGPT model instance
 
         Returns:
-            Dictionary of operand probabilities
+            Dictionary containing wandb line plots for operand probabilities
         """
         if (
             not hasattr(model, "dag")
@@ -161,15 +186,28 @@ class DAGLogger:
             # Take the first sample in the batch
             attn_probs = last_attn[0].detach().cpu().numpy()  # (2, N)
 
-            operand_probs = {}
-            for operand_idx in range(attn_probs.shape[0]):  # 2 operands
-                for node_idx in range(attn_probs.shape[1]):  # N nodes
-                    prob = float(attn_probs[operand_idx, node_idx])
-                    operand_probs[f"operand{operand_idx+1}_probs/node_{node_idx}"] = (
-                        prob
-                    )
+            operand_plots = {}
 
-            return operand_probs
+            # Create a line plot for each operand showing all node probabilities
+            for operand_idx in range(attn_probs.shape[0]):  # 2 operands
+                node_indices = list(range(attn_probs.shape[1]))  # N nodes
+                probabilities = attn_probs[operand_idx].tolist()  # Node probabilities
+
+                # Create wandb line plot
+                plot_data = [[x, y] for x, y in zip(node_indices, probabilities)]
+                table = wandb.Table(
+                    data=plot_data, columns=["node_index", "probability"]
+                )
+                line_plot = wandb.plot.line(
+                    table,
+                    "node_index",
+                    "probability",
+                    title=f"Operand {operand_idx + 1} Node Selection Probabilities",
+                )
+
+                operand_plots[f"operand{operand_idx+1}_probs_plot"] = line_plot
+
+            return operand_plots
 
     def get_node_values_list(self, model) -> List[float]:
         """
@@ -191,12 +229,20 @@ class DAGLogger:
         Args:
             model: DAGGPT model instance
         """
-        # Operation probabilities
-        op_probs = self.get_op_probabilities(model)
-        if op_probs:
-            print("Operation probabilities:")
-            for op_name, prob in op_probs.items():
-                print(f"  {op_name.replace('op_probs/', '')}: {prob:.4f}")
+        # Operation probabilities - calculate directly for console output
+        if (
+            hasattr(model, "last_activations")
+            and "op_logits" in model.last_activations
+            and model.last_activations["op_logits"] is not None
+        ):
+            with torch.no_grad():
+                op_logits = model.last_activations["op_logits"]
+                # Take the first sample in the batch and convert to probabilities
+                probs = F.softmax(op_logits, dim=-1)[0].detach().cpu().numpy()
+
+                print("Operation probabilities:")
+                for op_name, prob in zip(op_names, probs):
+                    print(f"  {op_name}: {prob:.4f}")
 
         # Operand choices (instead of all probabilities)
         if (
