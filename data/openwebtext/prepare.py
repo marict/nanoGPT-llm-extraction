@@ -9,6 +9,9 @@ import numpy as np
 from datasets import Dataset, load_dataset
 from tiktoken import get_encoding
 
+# Disable tqdm progress bars to prevent broken newlines in containers/remote terminals
+os.environ.setdefault("TQDM_DISABLE", "1")
+
 
 def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> tuple[int, int]:
     """Prepare the OpenWebText dataset for training.

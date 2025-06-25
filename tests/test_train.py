@@ -399,10 +399,10 @@ def test_clean_previous_checkpoints(tmp_path):
         (tmp_path / "ckpt_otherproject_100.pt").touch()
         (tmp_path / "some_other_file.txt").touch()
 
-        # Test cleaning with clean_previous_runs=False (should do nothing)
+        # Test cleaning with clear_previous_checkpoints=False (should do nothing)
         cfg = TrainConfig()
         cfg.name = "testproject"
-        cfg.clean_previous_runs = False
+        cfg.clear_previous_checkpoints = False
         clean_previous_checkpoints(cfg)
 
         # All files should still exist
@@ -411,8 +411,8 @@ def test_clean_previous_checkpoints(tmp_path):
         assert (tmp_path / "ckpt_otherproject_100.pt").exists()
         assert (tmp_path / "some_other_file.txt").exists()
 
-        # Test cleaning with clean_previous_runs=True
-        cfg.clean_previous_runs = True
+        # Test cleaning with clear_previous_checkpoints=True
+        cfg.clear_previous_checkpoints = True
         clean_previous_checkpoints(cfg)
 
         # Only testproject checkpoints should be removed
@@ -455,3 +455,48 @@ def test_find_latest_checkpoint(tmp_path):
     finally:
         # Restore original directory
         train.CHECKPOINT_DIR = original_dir
+
+
+def test_config_file_checkpoint_cleanup_integration():
+    """Test that config files can properly enable checkpoint cleanup."""
+    from train import TrainConfig, load_config_file, update_config
+
+    # Test loading the default config file
+    cfg = TrainConfig()
+    assert cfg.clear_previous_checkpoints is False  # Default value
+
+    # Load config file and update
+    config_data = load_config_file("config/train_default.py")
+    update_config(cfg, config_data)
+
+    # Should now be True based on the config file
+    assert (
+        cfg.clear_previous_checkpoints is True
+    ), "Config file should enable checkpoint cleanup"
+
+    # Test that the function respects the setting
+    import contextlib
+    import io
+
+    from train import clean_previous_checkpoints
+
+    # Test with cleanup enabled
+    f = io.StringIO()
+    with contextlib.redirect_stdout(f):
+        clean_previous_checkpoints(cfg)
+    output = f.getvalue()
+
+    # Should NOT contain "Skipping checkpoint cleanup"
+    assert (
+        "Skipping checkpoint cleanup" not in output
+    ), "Should not skip cleanup when enabled"
+
+    # Test with cleanup disabled
+    cfg.clear_previous_checkpoints = False
+    f = io.StringIO()
+    with contextlib.redirect_stdout(f):
+        clean_previous_checkpoints(cfg)
+    output = f.getvalue()
+
+    # Should contain "Skipping checkpoint cleanup"
+    assert "Skipping checkpoint cleanup" in output, "Should skip cleanup when disabled"

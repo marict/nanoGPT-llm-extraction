@@ -76,7 +76,7 @@ class TrainConfig:
     eval_iters: int = 200
     eval_only: bool = False
     always_save_checkpoint: bool = True
-    clean_previous_runs: bool = False  # Remove previous checkpoints on startup
+    clear_previous_checkpoints: bool = False  # Remove previous checkpoints on startup
     init_from: str = "scratch"
 
     # Math evaluation settings
@@ -212,7 +212,7 @@ def get_checkpoint_filename(cfg: TrainConfig, iter_num: int) -> str:
 
 def clean_previous_checkpoints(cfg: TrainConfig) -> None:
     """Remove all previous checkpoint files for this config name."""
-    if not cfg.clean_previous_runs:
+    if not cfg.clear_previous_checkpoints:
         print("Skipping checkpoint cleanup")
         return
 
@@ -304,6 +304,11 @@ def train(cfg: TrainConfig) -> None:
     )
 
     # --------------------------------------------------------------------- #
+    # Clean previous checkpoints if requested (before W&B initialization)
+    # --------------------------------------------------------------------- #
+    clean_previous_checkpoints(cfg)
+
+    # --------------------------------------------------------------------- #
     # W&B
     # --------------------------------------------------------------------- #
     wandb_start = time.time()
@@ -324,9 +329,6 @@ def train(cfg: TrainConfig) -> None:
     print(
         f"[{time.time() - setup_start:.2f}s] W&B initialization completed in {time.time() - wandb_start:.2f}s"
     )
-
-    # Clean previous checkpoints if requested
-    clean_previous_checkpoints(cfg)
 
     tokens_per_iter = (
         cfg.gradient_accumulation_steps
@@ -367,12 +369,22 @@ def train(cfg: TrainConfig) -> None:
             print(
                 f"[{time.time() - setup_start:.2f}s] Preparing dataset {cfg.dataset}... with subset {cfg.subset}"
             )
-            train_tokens, val_tokens = prepare_dataset(
-                cfg.dataset, data_dir, cfg.subset
-            )
-            print(
-                f"[{time.time() - setup_start:.2f}s] Dataset prepared. Train: {train_tokens:,}, Val: {val_tokens:,}"
-            )
+            # Disable tqdm progress bars to avoid broken newlines in containers
+            original_tqdm_disable = os.environ.get("TQDM_DISABLE")
+            os.environ["TQDM_DISABLE"] = "1"
+            try:
+                train_tokens, val_tokens = prepare_dataset(
+                    cfg.dataset, data_dir, cfg.subset
+                )
+                print(
+                    f"[{time.time() - setup_start:.2f}s] Dataset prepared. Train: {train_tokens:,}, Val: {val_tokens:,}"
+                )
+            finally:
+                # Restore original TQDM_DISABLE setting
+                if original_tqdm_disable is None:
+                    os.environ.pop("TQDM_DISABLE", None)
+                else:
+                    os.environ["TQDM_DISABLE"] = original_tqdm_disable
 
     print(f"[{time.time() - setup_start:.2f}s] Loading meta")
     meta_path = data_dir / "meta.pkl"

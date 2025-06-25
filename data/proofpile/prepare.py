@@ -13,6 +13,7 @@ python prepare_proofpile.py --data-dir /path/to/out --num-proc 8 --subset 0.0000
 from __future__ import annotations
 
 import argparse
+import os
 import pickle
 from pathlib import Path
 from typing import Dict, Tuple
@@ -20,6 +21,9 @@ from typing import Dict, Tuple
 import numpy as np
 from datasets import load_dataset
 from tiktoken import get_encoding
+
+# Disable tqdm progress bars to prevent broken newlines in containers/remote terminals
+os.environ.setdefault("TQDM_DISABLE", "1")
 
 
 # --------------------------------------------------------------------------- #
