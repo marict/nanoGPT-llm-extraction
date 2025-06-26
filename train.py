@@ -668,35 +668,12 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                         print("Skipping text generation (no tokenizer available)")
                         generated_sample = "No tokenizer available"
 
-                    # Setup DAG logger and get extra values AFTER text generation
+                    # Get non-gradient extra values for evaluation logging
                     eval_extra = model.extra_vals()
                     if dag_logger is not None:
-                        # For evaluation, we need to do a separate forward/backward pass to get gradients
-                        # since estimate_loss() doesn't compute gradients
-                        try:
-                            model.train()  # Temporarily switch to train mode
-                            dag_logger.setup_gradient_tracking(raw_model)
-
-                            # Do a single forward/backward pass to capture gradients
-                            eval_X, eval_Y = get_batch("train")
-                            with ctx:
-                                _, eval_loss = model(eval_X, eval_Y)
-                            eval_loss.backward()
-
-                            # Now get the gradient information
-                            eval_extra.update(dag_logger.get_extra_vals(raw_model))
-                            dag_logger.format_console_logging(raw_model)
-
-                            # Clear gradients and switch back to eval mode
-                            model.zero_grad()
-                            model.eval()
-                        except Exception as e:
-                            print(
-                                f"Warning: Failed to capture gradients during evaluation: {e}"
-                            )
-                            # Fallback to just getting non-gradient extra values
-                            eval_extra.update(dag_logger.get_extra_vals(raw_model))
-                            dag_logger.format_console_logging(raw_model)
+                        # Get non-gradient DAG values (gradients are logged during training)
+                        eval_extra.update(dag_logger.get_extra_vals(raw_model))
+                        dag_logger.format_console_logging(raw_model)
 
                     # Run math evaluation if enabled
                     math_scores = {}
@@ -745,19 +722,8 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                                 else base_log_dict
                             )
 
-                            # Check if gradients are being logged
-                            grad_keys = [
-                                k for k in log_dict.keys() if k.startswith("op_grad/")
-                            ]
-                            if dag_logger and len(grad_keys) == 0:
-                                print(
-                                    f"Warning: No gradient keys found in wandb log_dict for evaluation at iter {iter_num}"
-                                )
-                                print(f"Available keys: {list(log_dict.keys())}")
-                            elif dag_logger and len(grad_keys) > 0:
-                                print(
-                                    f"Logging {len(grad_keys)} gradient values to wandb (evaluation)"
-                                )
+                            # Note: Gradient logging happens during training steps, not evaluation
+                            # Evaluation logs non-gradient metrics only
 
                             wandb.log(log_dict, step=iter_num, commit=False)
                         except Exception as e:
@@ -835,11 +801,12 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                             else base_dict
                         )
 
-                        # Check if gradients are being logged
+                        # Check if gradients are being logged during training
                         grad_keys = [
                             k for k in log_dict.keys() if k.startswith("op_grad/")
                         ]
                         if dag_logger and len(grad_keys) == 0:
+                            # During training, missing gradients could indicate an issue
                             print(
                                 f"Warning: No gradient keys found in wandb log_dict for training at iter {iter_num}"
                             )

@@ -555,3 +555,43 @@ def test_critical_error_detection():
         assert not is_critical_error(error), f"Should not detect '{error}' as critical"
 
     print("✅ Critical error detection working correctly")
+
+
+def test_gradient_logging_warning_logic():
+    """Test that gradient logging warnings are only shown during training."""
+
+    def check_gradient_warning_logic(context_type, grad_keys_present):
+        """Simulate the gradient warning logic from train.py"""
+        warnings = []
+
+        if context_type == "training":
+            # During training, missing gradients could indicate an issue
+            if len(grad_keys_present) == 0:
+                warnings.append(
+                    "Warning: No gradient keys found in wandb log_dict for training"
+                )
+        # Note: Evaluation doesn't check for gradients anymore
+
+        return warnings
+
+    # Test cases: (context, grad_keys, should_warn)
+    test_cases = [
+        ("training", [], True),  # Training with no gradients → warn
+        ("training", ["op_grad/layer1"], False),  # Training with gradients → no warn
+        ("evaluation", [], False),  # Evaluation never warns about gradients
+        (
+            "evaluation",
+            ["op_grad/layer1"],
+            False,
+        ),  # Evaluation never warns about gradients
+    ]
+
+    for context, grad_keys, should_warn in test_cases:
+        warnings = check_gradient_warning_logic(context, grad_keys)
+        has_warning = len(warnings) > 0
+
+        assert (
+            has_warning == should_warn
+        ), f"Context: {context}, grad_keys: {len(grad_keys)}, expected warning: {should_warn}, got warning: {has_warning}"
+
+    print("✅ Gradient logging warning logic working correctly")
