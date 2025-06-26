@@ -109,19 +109,17 @@ def test_gpt_dag_depth_variations():
 
 
 def test_extra_vals_functionality():
-    """Test extra_vals method for both standard and DAG models."""
-    # Standard GPT should return empty dict
+    """Test that standard GPT models work without extra logging."""
+    # Standard GPT should work fine without extra_vals method
     config_std = GPTConfig(
         n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=0
     )
     model_std = GPT(config_std)
 
-    # Before and after forward pass
-    assert model_std.extra_vals() == {}
-
+    # Model should work fine without extra_vals
     x = torch.randint(0, 100, (2, 8))
-    model_std(x)
-    assert model_std.extra_vals() == {}
+    logits, loss = model_std(x)
+    assert logits is not None
 
     # DAG model should have node values
     config_dag = GPTConfig(

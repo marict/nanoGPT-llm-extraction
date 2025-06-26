@@ -222,11 +222,16 @@ class DAGController(nn.Module):
         self.last_op_logits_with_grad: torch.Tensor | None = None
 
     def forward(
-        self, embeds: torch.Tensor, operand_ctx: torch.Tensor, op_ctx: torch.Tensor
+        self,
+        embeds: torch.Tensor,
+        operand_ctx: torch.Tensor,
+        op_ctx: torch.Tensor,
+        node_mask: torch.Tensor | None = None,
     ):
         # embeds: (B, N, H)
         # operand_ctx: (B, H)
         # op_ctx: (B, H)
+        # node_mask: (B, N) - True = node is visible, False = hidden (causal masking)
         B, N, H = embeds.shape
 
         # Attention over embeddings to select operands
@@ -237,6 +242,11 @@ class DAGController(nn.Module):
         # Compute attention scores
         scores1 = torch.bmm(query1, keys.transpose(1, 2)).squeeze(1)  # (B, N)
         scores2 = torch.bmm(query2, keys.transpose(1, 2)).squeeze(1)  # (B, N)
+
+        # Apply causal node mask (hide future nodes)
+        if node_mask is not None:
+            scores1 = scores1.masked_fill(~node_mask, -1e9)
+            scores2 = scores2.masked_fill(~node_mask, -1e9)
 
         # Apply Gumbel-Softmax to get discrete selections
         scores1 = safe_clamp(scores1)
@@ -295,15 +305,63 @@ class DifferentiableDAG(nn.Module):
         # embedding combination MLP
         self.embed_mlp = nn.Linear(4 * hidden_dim + len(op_funcs), hidden_dim)
 
+    def forward_token(
+        self,
+        embeds_list: list[torch.Tensor],  # nodes so far (B,H)
+        values_list: list[torch.Tensor],  # scalars so far (B)
+        operand_ctx: torch.Tensor,  # (B,H) for this token
+        op_ctx: torch.Tensor,  # (B,H) for this token
+    ):
+        """
+        One DAG step for the *current* token.
+        Only nodes in embeds_list / values_list are visible.
+        Returns new_emb, new_val for the token.
+        """
+        B = operand_ctx.size(0)
+        N = len(embeds_list)
+
+        if N == 0:
+            # No nodes available yet, return zero embeddings and values
+            device = operand_ctx.device
+            new_emb = torch.zeros(B, self.hidden_dim, device=device)
+            new_val = torch.zeros(B, device=device)
+            return new_emb, new_val
+
+        # (B,N,H) and (B,N)
+        embeds = torch.stack(embeds_list, dim=1)
+        values = torch.stack(values_list, dim=1)
+
+        # causal mask: current token sees nodes 0…N-1 (all True)
+        node_mask = embeds.new_ones(B, N, dtype=torch.bool)
+
+        a1, a2, op_w = self.controller(embeds, operand_ctx, op_ctx, node_mask)
+
+        e1 = (a1.unsqueeze(-1) * embeds).sum(1)
+        e2 = (a2.unsqueeze(-1) * embeds).sum(1)
+        v1 = (a1 * values).sum(1)
+        v2 = (a2 * values).sum(1)
+
+        # compute operation outputs for all operations
+        outs = torch.stack([op(v1, v2) for op in op_funcs], dim=1)  # (B, n_ops)
+        new_val = (op_w * outs).sum(1)
+
+        # Project to embedding space to inform the embedding combinator
+        v1_emb = self.scalar_to_embed(v1.unsqueeze(-1))
+        v2_emb = self.scalar_to_embed(v2.unsqueeze(-1))
+
+        concat = torch.cat([e1, e2, v1_emb, v2_emb, op_w], dim=-1)
+        delta = self.embed_mlp(concat)
+        new_emb = 0.5 * (e1 + e2) + delta  # residual
+
+        return new_emb, new_val
+
     def forward(
         self,
         embeds_list: list[torch.Tensor],  # each (B , H)
         values_list: list[torch.Tensor],  # each (B)  scalar
         operand_ctx: torch.Tensor,  # (B , H)
         op_ctx: torch.Tensor,  # (B , H)
-        return_info: bool = False,
     ):
-        attn_hist, op_hist = [], []
         B, _ = embeds_list[0].shape
 
         for step in range(self.num_steps):
@@ -348,12 +406,6 @@ class DifferentiableDAG(nn.Module):
             embeds_list.append(new_emb)
             values_list.append(new_val)
 
-            if return_info:
-                attn_hist.append(self.controller.last_attn)
-                op_hist.append(self.controller.last_op_weights)
-
-        if return_info:
-            return embeds_list, values_list, attn_hist, op_hist
         return embeds_list, values_list
 
 
@@ -441,16 +493,12 @@ class GPT(nn.Module):
             )
             self.mix_gate = nn.Linear(config.n_embd * 2, 1)
 
-            self.token_attn = nn.MultiheadAttention(
-                config.n_embd, config.n_head, batch_first=True
-            )
-            self.value_attn = nn.MultiheadAttention(
-                config.n_embd, config.n_head, batch_first=True
-            )
             self.node_embed_block = Block(config)
             self.operand_ctx_block = Block(config)
             self.op_ctx_block = Block(config)
             self.post_dag_block = Block(config)
+            # Add LayerNorm for dag_sem normalization before mixing
+            self.dag_norm = LayerNorm(config.n_embd, bias=config.bias)
 
         # init all weights
         self.apply(self._init_weights)
@@ -534,7 +582,7 @@ class GPT(nn.Module):
                 result.append(float(val))
         return result
 
-    def forward(self, idx, targets=None, return_dag_info: bool = False):
+    def forward(self, idx, targets=None):
         _, T = idx.shape
         device = idx.device
         assert T <= self.config.block_size
@@ -556,84 +604,101 @@ class GPT(nn.Module):
                 logits = self.lm_head(hidden[:, [-1], :])
                 loss = None
 
-            if return_dag_info:
-                return logits, loss, {"values": [], "embeds": [], "attn": [], "op": []}
             return logits, loss
 
-        # DAG augmentation mode
-        node_embeds = self.node_embed_block(hidden)
-        node_values = self.value_extractor(node_embeds)
+        # DAG augmentation mode - token-by-token causal processing
+        original_hidden = hidden.clone()  # Keep original for causal contexts
+        node_embeds = self.node_embed_block(original_hidden)
 
-        embeds_list = [node_embeds[:, i, :] for i in range(T)]
-        values_list = [node_values[:, i] for i in range(T)]
+        # Initialize node storage
+        nodes_embeds = []
+        nodes_values = []
 
-        # guarantee at least two nodes
-        while len(embeds_list) < 2:
-            embeds_list.append(torch.zeros_like(embeds_list[0]))
-            values_list.append(torch.zeros_like(values_list[0]))
+        # Store for logging (collect gate values and norms for all tokens)
+        all_gates = []
+        all_dag_sem_raw = []
+        all_dag_sem = []
+        all_fused = []
 
-        # Generate operand and operator context
-        operand_ctx = self.operand_ctx_block(node_embeds).mean(dim=1)
-        op_ctx = self.op_ctx_block(node_embeds).mean(dim=1)
+        # Create new hidden states list to avoid in-place operations
+        new_hidden_list = []
 
-        # Run DAG
-        dag_out = self.dag(
-            embeds_list, values_list, operand_ctx, op_ctx, return_info=return_dag_info
-        )
-        if return_dag_info:
-            embeds_list, values_list, att_hist, op_hist = dag_out
-        else:
-            embeds_list, values_list = dag_out
-            att_hist = op_hist = None
+        for t in range(T):
+            # Contexts for this token (only from previous tokens, causal)
+            # IMPORTANT: Use original_hidden to avoid feedback from DAG modifications
+            if t == 0:
+                # First token: use just current token for context
+                operand_ctx_t = self.operand_ctx_block(original_hidden[:, [t], :]).mean(
+                    dim=1
+                )
+                op_ctx_t = self.op_ctx_block(original_hidden[:, [t], :]).mean(dim=1)
+            else:
+                # Later tokens: use only previous tokens for context (strictly causal)
+                operand_ctx_t = self.operand_ctx_block(original_hidden[:, :t, :]).mean(
+                    dim=1
+                )
+                op_ctx_t = self.op_ctx_block(original_hidden[:, :t, :]).mean(dim=1)
 
-        # Project values and aggregate
-        value_tensor = torch.stack(values_list, dim=1).unsqueeze(-1)
-        value_proj = self.scalar_to_embed(value_tensor)
-        attn_out, _ = self.value_attn(value_proj, value_proj, value_proj)
-        pooled_values = attn_out.mean(dim=1)
+            # Extract current token's initial embedding and value
+            current_node_embed = node_embeds[:, t, :]
+            current_node_value = self.value_extractor(
+                current_node_embed.unsqueeze(1)
+            ).squeeze(1)
 
-        # Refine and fuse with hidden state
-        dag_sem = self.post_dag_block(pooled_values.unsqueeze(1)).squeeze(1)
-        gate = torch.sigmoid(
-            self.mix_gate(torch.cat([hidden[:, -1, :], dag_sem], dim=-1))
-        )
-        fused = (1 - gate) * hidden[:, -1, :] + gate * dag_sem
-        hidden = torch.cat([hidden[:, :-1, :], fused.unsqueeze(1)], dim=1)
+            # Run DAG step using only PREVIOUS nodes (strictly causal)
+            if len(nodes_embeds) >= 1:  # Have previous nodes to use
+                new_emb, new_val = self.dag.forward_token(
+                    nodes_embeds, nodes_values, operand_ctx_t, op_ctx_t
+                )
+                # Use DAG-processed version
+                final_node_embed = new_emb
+                final_node_value = new_val
+            else:
+                # First token: no previous nodes, use original
+                final_node_embed = current_node_embed
+                final_node_value = current_node_value
 
-        # Store gate and norm values for logging
-        self.last_gate_values = gate.detach()  # Store gate values for debugging
+            # Add the final processed node to our collection for future tokens
+            nodes_embeds.append(final_node_embed)
+            nodes_values.append(final_node_value)
+
+            # Fuse dag_sem into token-t hidden state
+            dag_sem_raw = self.post_dag_block(final_node_embed.unsqueeze(1)).squeeze(1)
+            dag_sem = self.dag_norm(dag_sem_raw)
+            gate = torch.sigmoid(
+                self.mix_gate(torch.cat([original_hidden[:, t, :], dag_sem], dim=-1))
+            )
+            fused_hidden = (1 - gate) * original_hidden[:, t, :] + gate * dag_sem
+            new_hidden_list.append(fused_hidden)
+
+            # Store for logging
+            all_gates.append(gate.detach())
+            all_dag_sem_raw.append(dag_sem_raw.norm(dim=-1).mean().detach())
+            all_dag_sem.append(dag_sem.norm(dim=-1).mean().detach())
+            all_fused.append(fused_hidden.norm(dim=-1).mean().detach())
+
+        # Reconstruct hidden tensor from list
+        hidden = torch.stack(new_hidden_list, dim=1)
+
+        # Store gate and norm values for logging (use last token's values)
+        self.last_gate_values = all_gates[-1] if all_gates else None
         self.last_norm_values = {
-            "hidden": hidden[:, -1, :].norm(dim=-1).mean().detach(),
-            "dag_sem": dag_sem.norm(dim=-1).mean().detach(),
-            "fused": fused.norm(dim=-1).mean().detach(),
+            "hidden": all_fused[-1] if all_fused else torch.tensor(0.0),
+            "dag_sem_raw": (
+                all_dag_sem_raw[-1] if all_dag_sem_raw else torch.tensor(0.0)
+            ),
+            "dag_sem": all_dag_sem[-1] if all_dag_sem else torch.tensor(0.0),
+            "fused": all_fused[-1] if all_fused else torch.tensor(0.0),
         }
 
-        # Store activations and values for logging
-        self.last_activations = {
-            "node_embeds": node_embeds,
-            "value_proj": value_proj,
-            "operand_ctx": operand_ctx,
-            "op_ctx": op_ctx,
-            "op_logits": self.dag.controller.last_op_logits,
-        }
-        self.last_values_list = values_list
+        # Store values for logging
+        self.last_values_list = nodes_values
 
         logits = self.lm_head(hidden)
         loss = None
         if targets is not None:
             loss = self._compute_loss(logits, targets)
 
-        if return_dag_info:
-            return (
-                logits,
-                loss,
-                {
-                    "values": values_list,
-                    "embeds": embeds_list,
-                    "attn": att_hist,
-                    "op": op_hist,
-                },
-            )
         return logits, loss
 
     def crop_block_size(self, block_size):
@@ -767,12 +832,6 @@ class GPT(nn.Module):
         flops_promised = 312e12  # A100 GPU bfloat16 peak flops is 312 TFLOPS
         mfu = flops_achieved / flops_promised
         return mfu
-
-    def extra_vals(self):
-        """Return any extra values to log during validation.
-        This method is kept for compatibility but logging is now handled by DAGLogger.
-        """
-        return {}
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):

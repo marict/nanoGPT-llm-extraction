@@ -51,81 +51,43 @@ def sample_batch():
 # --------------------------------------------------------------------- #
 # Test operation probabilities logging
 # --------------------------------------------------------------------- #
-def test_get_op_probabilities(small_dag_model, sample_batch):
-    """Test that operation probabilities are correctly computed and returned."""
+def test_operation_console_logging(small_dag_model, sample_batch):
+    """Test that operation probabilities can be displayed in console format."""
     model, _ = small_dag_model
     input_ids, target_ids = sample_batch
 
     # Forward pass
     logits, loss = model(input_ids, target_ids)
 
-    # Get operation probabilities using DAGLogger
+    # Get console logging via DAGLogger (should not crash)
     logger = DAGLogger()
-    op_probs = logger.get_op_probabilities(model)
-
-    # Check that we have the wandb time-series plot format
-    assert op_probs is not None, "Should have operation probabilities"
-    assert (
-        "op_probs_timeseries" in op_probs
-    ), f"Expected op_probs_timeseries key, got: {list(op_probs.keys())}"
-
-    # The plot should be a wandb plot object
-    # Just check that the plot object exists - actual validation of
-    # plot content would require complex wandb internals testing
-    assert op_probs["op_probs_timeseries"] is not None, "Plot should not be None"
-
-
-def test_get_op_probabilities_no_forward_pass(small_dag_model):
-    """Test that get_op_probabilities returns empty dict when no forward pass has been done."""
-    model, _ = small_dag_model
-
-    # No forward pass yet
-    logger = DAGLogger()
-    op_probs = logger.get_op_probabilities(model)
-
-    # Should return empty dict
-    assert op_probs == {}
+    try:
+        logger.format_console_logging(model)
+        # If we get here without exception, console logging works
+        assert True
+    except Exception as e:
+        pytest.fail(f"Console logging failed: {e}")
 
 
 # --------------------------------------------------------------------- #
 # Test operand probabilities logging
 # --------------------------------------------------------------------- #
-def test_get_operand_probabilities(small_dag_model, sample_batch):
-    """Test that operand selection probabilities are correctly returned."""
+def test_operand_console_logging(small_dag_model, sample_batch):
+    """Test that operand selection information can be displayed in console format."""
     model, _ = small_dag_model
     input_ids, target_ids = sample_batch
 
     # Forward pass
     logits, loss = model(input_ids, target_ids)
 
-    # Get operand probabilities using DAGLogger
+    # Get console logging via DAGLogger (should not crash)
     logger = DAGLogger()
-    operand_probs = logger.get_operand_probabilities(model)
-
-    # Check that we have probabilities for both operands
-    assert len(operand_probs) > 0, "No operand probabilities found"
-
-    # Should have time-series plots for both operands
-    assert "operand1_probs_timeseries" in operand_probs, "Missing operand1 time-series"
-    assert "operand2_probs_timeseries" in operand_probs, "Missing operand2 time-series"
-
-    # The plots should be wandb plot objects
-    for key in ["operand1_probs_timeseries", "operand2_probs_timeseries"]:
-        # Just check that the plot object exists - actual validation of
-        # plot content would require complex wandb internals testing
-        assert operand_probs[key] is not None, f"Plot {key} is None"
-
-
-def test_get_operand_probabilities_no_forward_pass(small_dag_model):
-    """Test that get_operand_probabilities returns empty dict when no forward pass has been done."""
-    model, _ = small_dag_model
-
-    # Get operand probabilities without forward pass
-    logger = DAGLogger()
-    operand_probs = logger.get_operand_probabilities(model)
-
-    # Should return empty dict
-    assert operand_probs == {}
+    try:
+        logger.format_console_logging(model)
+        # If we get here without exception, operand logging works
+        assert True
+    except Exception as e:
+        pytest.fail(f"Operand console logging failed: {e}")
 
 
 # --------------------------------------------------------------------- #
@@ -209,7 +171,7 @@ def test_gradient_computation_consistency(small_dag_model, sample_batch):
 
 
 def test_extra_vals_includes_all_logging_info(small_dag_model, sample_batch):
-    """Test that extra_vals includes both entropy and gradient information."""
+    """Test that extra_vals includes gate/norm and gradient information."""
     model, _ = small_dag_model
     input_ids, target_ids = sample_batch
 
@@ -225,9 +187,10 @@ def test_extra_vals_includes_all_logging_info(small_dag_model, sample_batch):
     # Get extra values using DAGLogger
     extra_vals = logger.get_extra_vals(model)
 
-    # Check for entropy values
-    entropy_keys = [key for key in extra_vals.keys() if key.startswith("dag_entropy/")]
-    assert len(entropy_keys) > 0, "No entropy values found"
+    # Check for gate and norm values
+    gate_keys = [key for key in extra_vals.keys() if key.startswith("gate/")]
+    norm_keys = [key for key in extra_vals.keys() if key.startswith("norm/")]
+    assert len(gate_keys) > 0 or len(norm_keys) > 0, "No gate or norm values found"
 
     # Check for gradient values
     grad_keys = [
@@ -288,21 +251,17 @@ def test_logging_after_multiple_forward_passes(small_dag_model, sample_batch):
         model.zero_grad()
 
         # Check logging still works
-        op_probs = logger.get_op_probabilities(model)
-        operand_probs = logger.get_operand_probabilities(model)
         extra_vals = logger.get_extra_vals(model)
 
-        assert op_probs is not None, "Should have operation probabilities"
-        # Check we get the expected format for operation probabilities
-        assert (
-            "op_probs_timeseries" in op_probs
-        ), f"Iteration {i}: expected timeseries format"
-        assert len(op_probs) == 1, f"Iteration {i}: should have exactly one plot"
+        # Check that we have meaningful logging data
+        gate_keys = [k for k in extra_vals if k.startswith("gate/")]
+        norm_keys = [k for k in extra_vals if k.startswith("norm/")]
+        grad_keys = [k for k in extra_vals if k.startswith("op_grad/")]
 
-        assert len(operand_probs) > 0, f"Iteration {i}: no operand probabilities found"
-        assert any(
-            key.startswith("op_grad/") for key in extra_vals.keys()
-        ), f"Iteration {i}: no operation gradients found"
+        assert (
+            len(gate_keys) > 0 or len(norm_keys) > 0
+        ), f"Iteration {i}: no gate or norm values found"
+        assert len(grad_keys) > 0, f"Iteration {i}: no operation gradients found"
 
 
 def test_gradient_tracking_with_grad_context(small_dag_model, sample_batch):
@@ -314,14 +273,14 @@ def test_gradient_tracking_with_grad_context(small_dag_model, sample_batch):
     with torch.no_grad():
         _, _ = model(input_ids, target_ids)
 
-    # Should still be able to get probabilities and operand probs
+    # Should still be able to get console logging
     logger = DAGLogger()
-    op_probs = logger.get_op_probabilities(model)
-    operand_probs = logger.get_operand_probabilities(model)
-
-    assert op_probs is not None, "Should have operation probabilities"
-    assert "op_probs_timeseries" in op_probs, "Expected timeseries format under no_grad"
-    assert len(op_probs) == 1, "Should have exactly one plot under no_grad"
+    try:
+        logger.format_console_logging(model)
+        # If we get here without exception, console logging works under no_grad
+        assert True
+    except Exception as e:
+        pytest.fail(f"Console logging failed under no_grad: {e}")
 
 
 # --------------------------------------------------------------------- #
@@ -335,8 +294,8 @@ def test_logging_integration_training_scenario(small_dag_model):
     logger = DAGLogger()
 
     # Simulate training loop
-    all_op_probs = []
-    all_operand_probs = []
+    all_gate_vals = []
+    all_norm_vals = []
     all_gradients = []
 
     for step in range(5):
@@ -356,12 +315,14 @@ def test_logging_integration_training_scenario(small_dag_model):
         loss.backward()
 
         # Collect logging information
-        op_probs = logger.get_op_probabilities(model)
-        operand_probs = logger.get_operand_probabilities(model)
         extra_vals = logger.get_extra_vals(model)
 
-        all_op_probs.append(op_probs)
-        all_operand_probs.append(operand_probs)
+        all_gate_vals.append(
+            {k: v for k, v in extra_vals.items() if k.startswith("gate/")}
+        )
+        all_norm_vals.append(
+            {k: v for k, v in extra_vals.items() if k.startswith("norm/")}
+        )
         all_gradients.append(
             {k: v for k, v in extra_vals.items() if k.startswith("op_grad/")}
         )
@@ -370,27 +331,39 @@ def test_logging_integration_training_scenario(small_dag_model):
         model.zero_grad()
 
     # Verify we collected data for all steps
-    assert len(all_op_probs) == 5
-    assert len(all_operand_probs) == 5
+    assert len(all_gate_vals) == 5
+    assert len(all_norm_vals) == 5
     assert len(all_gradients) == 5
 
     # Verify each step has complete data
     for step in range(5):
-        assert all_op_probs[step] is not None, "Should have operation probabilities"
-        # Check we get the expected format for operation probabilities
+        # Should have either gate or norm values
         assert (
-            "op_probs_timeseries" in all_op_probs[step]
-        ), f"Step {step}: expected timeseries format"
-        assert (
-            len(all_op_probs[step]) == 1
-        ), f"Step {step}: should have exactly one plot"
+            len(all_gate_vals[step]) > 0 or len(all_norm_vals[step]) > 0
+        ), f"Step {step}: no gate or norm values found"
 
-        assert (
-            len(all_operand_probs[step]) > 0
-        ), f"Step {step}: no operand probabilities found"
+        # Should have complete gradient data
         assert len(all_gradients[step]) == len(
             op_names
         ), f"Step {step}: incomplete gradients"
+
+        # Gate values should be in [0,1]
+        for gate_key, gate_val in all_gate_vals[step].items():
+            assert isinstance(
+                gate_val, float
+            ), f"Step {step}: gate {gate_key} is not float"
+            assert (
+                0.0 <= gate_val <= 1.0
+            ), f"Step {step}: gate {gate_key} not in [0,1]: {gate_val}"
+
+        # Norm values should be positive
+        for norm_key, norm_val in all_norm_vals[step].items():
+            assert isinstance(
+                norm_val, float
+            ), f"Step {step}: norm {norm_key} is not float"
+            assert (
+                norm_val >= 0
+            ), f"Step {step}: norm {norm_key} is negative: {norm_val}"
 
         # Gradients should be reasonable values
         for grad_key, grad_val in all_gradients[step].items():
@@ -440,7 +413,8 @@ def test_gate_and_norm_logging():
 
     # Check that norm values are present
     assert "norm/hidden" in extra_vals, "Hidden norm should be logged"
-    assert "norm/dag_sem" in extra_vals, "DAG semantic norm should be logged"
+    assert "norm/dag_sem_raw" in extra_vals, "DAG semantic raw norm should be logged"
+    assert "norm/dag_sem" in extra_vals, "DAG semantic normalized norm should be logged"
     assert "norm/fused" in extra_vals, "Fused norm should be logged"
 
     # Verify gate values are in reasonable range [0, 1]
@@ -453,7 +427,12 @@ def test_gate_and_norm_logging():
 
     # Verify norm values are positive
     assert extra_vals["norm/hidden"] > 0, "Hidden norm should be positive"
-    assert extra_vals["norm/dag_sem"] > 0, "DAG semantic norm should be positive"
+    assert (
+        extra_vals["norm/dag_sem_raw"] > 0
+    ), "DAG semantic raw norm should be positive"
+    assert (
+        extra_vals["norm/dag_sem"] > 0
+    ), "DAG semantic normalized norm should be positive"
     assert extra_vals["norm/fused"] > 0, "Fused norm should be positive"
 
     print("✅ Gate and norm logging working correctly")

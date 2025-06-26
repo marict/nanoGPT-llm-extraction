@@ -99,32 +99,29 @@ def test_operation_logging_during_training_step():
 
     loss.backward()
 
-    # Test all logging functions work together
-    # 1. Operation probabilities
-    op_probs = logger.get_op_probabilities(model)
-    assert op_probs is not None, "Should have operation probabilities"
-    # Check we get the expected format for operation probabilities
-    assert "op_probs_timeseries" in op_probs, "Expected timeseries format"
-    assert len(op_probs) == 1, "Should have exactly one plot"
+    # Test console logging works
+    try:
+        logger.format_console_logging(model)
+        # If we get here without exception, console logging works
+        assert True
+    except Exception as e:
+        pytest.fail(f"Console logging failed: {e}")
+    # Test that wandb logging dict works
+    wandb_dict = logger.get_wandb_logging_dict(model)
+    assert isinstance(wandb_dict, dict), "Should return a dictionary"
 
-    # 2. Operand probabilities
-    operand_probs = logger.get_operand_probabilities(model)
-    assert len(operand_probs) > 0, "Should have operand probabilities"
-
-    # Check that operand probabilities are in timeseries format
-    assert (
-        "operand1_probs_timeseries" in operand_probs
-    ), "Should have operand1 timeseries"
-    assert (
-        "operand2_probs_timeseries" in operand_probs
-    ), "Should have operand2 timeseries"
+    # Should have gate and norm values
+    gate_keys = [k for k in wandb_dict if k.startswith("gate/")]
+    norm_keys = [k for k in wandb_dict if k.startswith("norm/")]
+    assert len(gate_keys) > 0 or len(norm_keys) > 0, "Should have gate or norm values"
 
     # 3. Extra values (including gradients)
     extra_vals = logger.get_extra_vals(model)
 
-    # Check for entropy values
-    entropy_keys = [key for key in extra_vals.keys() if key.startswith("dag_entropy/")]
-    assert len(entropy_keys) > 0, "Should have entropy values"
+    # Check for gate and norm values
+    gate_keys = [key for key in extra_vals.keys() if key.startswith("gate/")]
+    norm_keys = [key for key in extra_vals.keys() if key.startswith("norm/")]
+    assert len(gate_keys) > 0 or len(norm_keys) > 0, "No gate or norm values found"
 
     # Check for gradient values
     grad_keys = [key for key in extra_vals.keys() if key.startswith("op_grad/")]
@@ -183,24 +180,27 @@ def test_console_logging_format():
     loss.backward()
 
     # Test that format_console_logging works
-    logger.format_console_logging(model)
+    try:
+        logger.format_console_logging(model)
+        # If we get here without exception, console logging works
+        assert True
+    except Exception as e:
+        pytest.fail(f"Console logging failed: {e}")
 
-    # Also test individual methods for backward compatibility
-    op_probs = logger.get_op_probabilities(model)
-    operand_probs = logger.get_operand_probabilities(model)
+    # Test that wandb logging dict works
+    wandb_dict = logger.get_wandb_logging_dict(model)
+    assert isinstance(wandb_dict, dict), "Should return a dictionary"
 
-    assert op_probs is not None, "Should have operation probabilities"
-    # Verify the data is properly formatted - operation probabilities are now plots
-    assert "op_probs_timeseries" in op_probs, "Expected timeseries format"
-
-    # Verify operand probabilities are properly formatted as timeseries
-    assert len(operand_probs) > 0, "Should have operand probabilities"
-    assert (
-        "operand1_probs_timeseries" in operand_probs
-    ), "Should have operand1 timeseries"
-    assert (
-        "operand2_probs_timeseries" in operand_probs
-    ), "Should have operand2 timeseries"
+    # Should have gate and norm values
+    gate_keys = [k for k in wandb_dict if k.startswith("gate/")]
+    norm_keys = [k for k in wandb_dict if k.startswith("norm/")]
+    assert len(gate_keys) > 0 or len(norm_keys) > 0, "Should have gate or norm values"
+    # Test node values
+    node_values = logger.get_node_values_list(model)
+    assert len(node_values) > 0, "Should have node values"
+    assert all(
+        isinstance(v, float) for v in node_values
+    ), "All node values should be floats"
 
 
 def test_node_values_logging():
@@ -296,16 +296,29 @@ def test_logging_api_integration():
 
     # Test logging API
     logger = DAGLogger()
-    logger.format_console_logging(model)
 
-    # Verify all components work
-    op_probs = logger.get_op_probabilities(model)
-    operand_probs = logger.get_operand_probabilities(model)
+    # Test console logging
+    try:
+        logger.format_console_logging(model)
+        # If we get here without exception, console logging works
+        assert True
+    except Exception as e:
+        pytest.fail(f"Console logging failed: {e}")
+
+    # Test wandb logging
+    wandb_dict = logger.get_wandb_logging_dict(model)
+    assert isinstance(wandb_dict, dict), "Should return a dictionary"
+
+    # Should have gate and norm values
+    gate_keys = [k for k in wandb_dict if k.startswith("gate/")]
+    norm_keys = [k for k in wandb_dict if k.startswith("norm/")]
+    assert len(gate_keys) > 0 or len(norm_keys) > 0, "Should have gate or norm values"
+    # Test node values
     node_values = logger.get_node_values_list(model)
-
     assert len(node_values) > 0, "Should have node values"
-    assert len(op_probs) > 0, "Should have operation probabilities"
-    assert len(operand_probs) > 0, "Should have operand probabilities"
+    assert all(
+        isinstance(v, float) for v in node_values
+    ), "All node values should be floats"
 
 
 def test_dag_logging_after_text_generation():
@@ -332,24 +345,32 @@ def test_dag_logging_after_text_generation():
     with torch.no_grad():
         _ = model.generate(prompt, max_new_tokens=2, temperature=0.8, top_k=10)
 
-    # DAG logging after generation
-    op_probs = dag_logger.get_op_probabilities(model)
-    operand_probs = dag_logger.get_operand_probabilities(model)
+    # Test console logging after generation
+    try:
+        dag_logger.format_console_logging(model)
+        # If we get here without exception, console logging works
+        assert True
+    except Exception as e:
+        pytest.fail(f"Console logging failed: {e}")
+
+    # Test wandb logging after generation
+    wandb_dict = dag_logger.get_wandb_logging_dict(model)
+    assert isinstance(wandb_dict, dict), "Should return a dictionary"
+
+    # Should have gate and norm values
+    gate_keys = [k for k in wandb_dict if k.startswith("gate/")]
+    norm_keys = [k for k in wandb_dict if k.startswith("norm/")]
+    assert len(gate_keys) > 0 or len(norm_keys) > 0, "Should have gate or norm values"
+    # Test node values
     node_values = dag_logger.get_node_values_list(model)
-
-    # Verify we have the expected logging information
-    assert op_probs is not None, "Should have operation probabilities"
-    assert (
-        "op_probs_timeseries" in op_probs
-    ), "Should have operation probabilities timeseries"
-    assert len(op_probs) == 1, "Should have exactly one operation plot"
-
-    assert len(operand_probs) > 0, "Should have operand probabilities"
     assert len(node_values) > 0, "Should have node values"
+    assert all(
+        isinstance(v, float) for v in node_values
+    ), "All node values should be floats"
 
 
 def test_operation_logits_removed():
-    """Test that operation logits are no longer available."""
+    """Test that operation logits and probabilities are no longer available."""
     cfg = GPTConfig(
         vocab_size=30,
         block_size=6,
@@ -371,29 +392,43 @@ def test_operation_logits_removed():
     with torch.no_grad():
         model.generate(prompt, max_new_tokens=1)
 
-    # Verify operation logits method no longer exists
+    # Verify old methods no longer exist
     assert not hasattr(
         dag_logger, "get_op_logits_dict"
     ), "get_op_logits_dict should be removed"
+    assert not hasattr(
+        dag_logger, "get_op_probabilities"
+    ), "get_op_probabilities should be removed"
 
-    # Verify wandb logging dict doesn't contain operation logits
+    # Verify wandb logging dict doesn't contain old keys
     wandb_dict = dag_logger.get_wandb_logging_dict(model)
 
+    # Should not have any operation logits or probabilities
     op_logit_keys = [k for k in wandb_dict.keys() if k.startswith("op_logits/")]
+    op_prob_keys = [k for k in wandb_dict.keys() if k.startswith("op_probs/")]
+    op_timeseries_keys = [k for k in wandb_dict.keys() if k == "op_probs_timeseries"]
+
     assert (
         len(op_logit_keys) == 0
     ), f"Should not have operation logits keys, found: {op_logit_keys}"
+    assert (
+        len(op_prob_keys) == 0
+    ), f"Should not have operation probability keys, found: {op_prob_keys}"
+    assert (
+        len(op_timeseries_keys) == 0
+    ), f"Should not have operation timeseries, found: {op_timeseries_keys}"
 
-    # But should contain operation probabilities and operand probabilities
-    op_prob_keys = [k for k in wandb_dict.keys() if k.startswith("op_probs/")]
-    operand_prob_keys = [k for k in wandb_dict.keys() if k.startswith("operand")]
+    # But should have gate and norm values
+    gate_keys = [k for k in wandb_dict.keys() if k.startswith("gate/")]
+    norm_keys = [k for k in wandb_dict.keys() if k.startswith("norm/")]
+    assert len(gate_keys) > 0 or len(norm_keys) > 0, "Should have gate or norm values"
 
-    assert op_prob_keys is not None, "Should have operation probabilities"
-    # Operation probabilities are now in timeseries format
-    op_timeseries_keys = [k for k in wandb_dict.keys() if k == "op_probs_timeseries"]
-    assert len(op_timeseries_keys) == 1, "Should have exactly one operation timeseries"
-
-    assert len(operand_prob_keys) > 0, "Should have operand probability keys"
+    # Test node values
+    node_values = dag_logger.get_node_values_list(model)
+    assert len(node_values) > 0, "Should have node values"
+    assert all(
+        isinstance(v, float) for v in node_values
+    ), "All node values should be floats"
 
 
 def test_gradient_capture_after_text_generation():

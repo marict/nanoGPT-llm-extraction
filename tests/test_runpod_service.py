@@ -118,57 +118,6 @@ def test_start_cloud_training(monkeypatch):
     assert "config.py" in docker_args
 
 
-# ---------------------------------------------------------------------------
-# helper: very small tokenizer for test_visualize_dag_attention
-# ---------------------------------------------------------------------------
-class SimpleTokenizer:
-    def __init__(self, ids):
-        self._ids = ids
-
-    def encode(self, text):
-        # Return the pre-baked token list irrespective of text (good enough for a unit test)
-        return self._ids
-
-
-# ---------------------------------------------------------------------------
-# test visualize_dag_attention
-# ---------------------------------------------------------------------------
-def test_visualize_dag_attention(tmp_path):
-    """
-    Fast smoke-test the visualisation helper by mocking matplotlib operations.
-    """
-
-    # Mock matplotlib to avoid actual plotting
-    with patch("matplotlib.pyplot.figure"), patch("matplotlib.pyplot.subplots"), patch(
-        "matplotlib.pyplot.savefig"
-    ) as mock_savefig, patch("matplotlib.pyplot.close"):
-
-        # Mock the actual visualization function to just create a file
-        def mock_viz_func(*args, **kwargs):
-            save_path = kwargs.get("save_path", str(tmp_path / "viz.png"))
-            Path(save_path).touch()  # Create empty file
-            return save_path
-
-        # Simple mock that just tests the interface
-        tokens = [0, 1]  # minimal tokens
-        out_path = tmp_path / "viz.png"
-
-        # Mock the actual function call
-        with patch.object(
-            rp, "visualize_dag_attention", side_effect=mock_viz_func
-        ) as mock_viz:
-            result_file = rp.visualize_dag_attention(
-                None,  # model (mocked)
-                SimpleTokenizer(tokens),
-                prompt="0 1",
-                save_path=str(out_path),
-            )
-
-            # Verify the function was called and file exists
-            assert mock_viz.called
-            assert Path(result_file).exists(), "Visualization file not created"
-
-
 # --------------------------------------------------------------------- #
 # Test init_local_wandb_and_open_browser
 # --------------------------------------------------------------------- #

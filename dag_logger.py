@@ -26,12 +26,6 @@ class DAGLogger:
         self.gradient_hooks = []
         self.captured_gradients = {}
 
-        # Time-series data for tracking probabilities over training
-        self.step_counter = 0
-        self.operation_prob_history = {op: [] for op in op_names}
-        self.operand_prob_history = {}  # Will be initialized based on number of nodes
-        self.step_history = []
-
     def setup_gradient_tracking(self, model) -> None:
         """
         Set up gradient tracking hooks for a DAG model.
@@ -43,26 +37,11 @@ class DAGLogger:
         self.clear_gradient_hooks()
         self.captured_gradients = {}
 
-        # Only set up hooks if model has done a forward pass
-        if not hasattr(model, "last_activations"):
-            return
-
-        # Register hooks for standard activations
-        for name, tensor in model.last_activations.items():
-            if tensor is not None and tensor.requires_grad:
-
-                def make_hook(n=name):
-                    def save_grad(grad):
-                        self.captured_gradients[n] = grad.detach().mean().item()
-
-                    return save_grad
-
-                hook = tensor.register_hook(make_hook())
-                self.gradient_hooks.append(hook)
-
         # Special handling for op_logits gradients
         if (
-            hasattr(model.dag.controller, "last_op_logits_with_grad")
+            hasattr(model, "dag")
+            and hasattr(model.dag, "controller")
+            and hasattr(model.dag.controller, "last_op_logits_with_grad")
             and model.dag.controller.last_op_logits_with_grad is not None
             and model.dag.controller.last_op_logits_with_grad.requires_grad
         ):
@@ -98,15 +77,6 @@ class DAGLogger:
         """
         metrics = {}
 
-        # Add entropy metrics
-        if hasattr(model, "last_activations"):
-            for name, act in model.last_activations.items():
-                if act is not None:
-                    with torch.no_grad():
-                        prob = torch.softmax(act, dim=-1)
-                        ent = -(prob * (prob + 1e-8).log()).sum(-1).mean()
-                        metrics[f"dag_entropy/{name}"] = ent.item()
-
         # Add gradient metrics
         for grad_name, grad_val in self.captured_gradients.items():
             if grad_name.startswith("op_grad/") or grad_name == "op_logits_mean":
@@ -131,150 +101,6 @@ class DAGLogger:
 
         return metrics
 
-    def update_probability_history(self, model) -> None:
-        """
-        Update the time-series history with current model probabilities.
-        Call this during training to accumulate data for time-series plots.
-
-        Args:
-            model: DAGGPT model instance
-        """
-        # Update operation probabilities
-        if (
-            hasattr(model, "last_activations")
-            and "op_logits" in model.last_activations
-            and model.last_activations["op_logits"] is not None
-        ):
-            with torch.no_grad():
-                op_logits = model.last_activations["op_logits"]
-                probs = F.softmax(op_logits, dim=-1)[0].detach().cpu().numpy()
-
-                for i, op_name in enumerate(op_names):
-                    self.operation_prob_history[op_name].append(float(probs[i]))
-
-        # Update operand probabilities
-        if (
-            hasattr(model, "dag")
-            and hasattr(model.dag, "controller")
-            and hasattr(model.dag.controller, "last_attn")
-            and model.dag.controller.last_attn is not None
-        ):
-            with torch.no_grad():
-                last_attn = model.dag.controller.last_attn
-                attn_probs = last_attn[0].detach().cpu().numpy()  # (2, N)
-
-                # Initialize operand history if not done yet
-                if not self.operand_prob_history:
-                    num_nodes = attn_probs.shape[1]
-                    for operand_idx in range(2):  # 2 operands
-                        for node_idx in range(num_nodes):
-                            key = f"operand{operand_idx+1}_node{node_idx}"
-                            self.operand_prob_history[key] = []
-
-                # Update operand probabilities
-                for operand_idx in range(attn_probs.shape[0]):  # 2 operands
-                    for node_idx in range(attn_probs.shape[1]):  # N nodes
-                        key = f"operand{operand_idx+1}_node{node_idx}"
-                        prob = float(attn_probs[operand_idx, node_idx])
-                        self.operand_prob_history[key].append(prob)
-
-        # Update step counter and history
-        self.step_history.append(self.step_counter)
-        self.step_counter += 1
-
-    def get_op_probabilities(self, model) -> Dict[str, object]:
-        """
-        Get operation probabilities as a time-series wandb plot showing evolution over training.
-
-        Args:
-            model: DAGGPT model instance
-
-        Returns:
-            Dictionary containing wandb time-series plot for operation probabilities
-        """
-        # Update the current step data first
-        self.update_probability_history(model)
-
-        # Create plot with whatever data we have (even single point)
-        if len(self.step_history) == 0:
-            return {}
-
-        # Create time-series data for wandb
-        # Organize data by operation for line_series format
-        xs = self.step_history  # Single x array for all operations
-        ys = []  # List of y arrays, one per operation
-        keys = []  # Operation names
-
-        for op_name in op_names:
-            if op_name in self.operation_prob_history:
-                history = self.operation_prob_history[op_name]
-                # Only include data points we have
-                if len(history) >= len(self.step_history):
-                    ys.append(history[: len(self.step_history)])
-                    keys.append(op_name)
-
-        if not ys:
-            return {}
-
-        # Create a multi-line time series plot
-        line_plot = wandb.plot.line_series(
-            xs=xs,  # Single x array (training steps)
-            ys=ys,  # List of y arrays (probabilities for each operation)
-            keys=keys,  # Operation names for legend
-            title="Operation Probabilities Over Training",
-            xname="Training Step",
-        )
-
-        return {"op_probs_timeseries": line_plot}
-
-    def get_operand_probabilities(self, model) -> Dict[str, object]:
-        """
-        Get operand selection probabilities as time-series wandb plots showing evolution over training.
-
-        Args:
-            model: DAGGPT model instance
-
-        Returns:
-            Dictionary containing wandb time-series plots for operand probabilities
-        """
-        # Update history if we don't have enough data points yet
-        if len(self.step_history) == 0:
-            self.update_probability_history(model)
-
-        # Create plot with whatever data we have
-        if len(self.step_history) == 0 or not self.operand_prob_history:
-            return {}
-
-        operand_plots = {}
-
-        # Create separate time-series plots for each operand
-        for operand_idx in range(2):  # 2 operands
-            xs = self.step_history  # Single x array for all nodes
-            ys = []  # List of y arrays, one per node
-            keys = []  # Node names
-
-            # Collect data for all nodes of this operand
-            for key, history in self.operand_prob_history.items():
-                if key.startswith(f"operand{operand_idx+1}_"):
-                    node_name = key.replace(f"operand{operand_idx+1}_", "")
-                    # Only include data points we have
-                    if len(history) >= len(self.step_history):
-                        ys.append(history[: len(self.step_history)])
-                        keys.append(node_name)
-
-            if ys:
-                line_plot = wandb.plot.line_series(
-                    xs=xs,  # Single x array (training steps)
-                    ys=ys,  # List of y arrays (probabilities for each node)
-                    keys=keys,  # Node names for legend
-                    title=f"Operand {operand_idx + 1} Node Probabilities Over Training",
-                    xname="Training Step",
-                )
-
-                operand_plots[f"operand{operand_idx+1}_probs_timeseries"] = line_plot
-
-        return operand_plots
-
     def get_node_values_list(self, model) -> List[float]:
         """
         Get node values from the model as a list.
@@ -297,12 +123,13 @@ class DAGLogger:
         """
         # Operation probabilities - calculate directly for console output
         if (
-            hasattr(model, "last_activations")
-            and "op_logits" in model.last_activations
-            and model.last_activations["op_logits"] is not None
+            hasattr(model, "dag")
+            and hasattr(model.dag, "controller")
+            and hasattr(model.dag.controller, "last_op_logits")
+            and model.dag.controller.last_op_logits is not None
         ):
             with torch.no_grad():
-                op_logits = model.last_activations["op_logits"]
+                op_logits = model.dag.controller.last_op_logits
                 # Take the first sample in the batch and convert to probabilities
                 probs = F.softmax(op_logits, dim=-1)[0].detach().cpu().numpy()
 
@@ -355,17 +182,6 @@ class DAGLogger:
             ]
             print(f"Norms: {', '.join(norm_strs)}")
 
-    def log_training_step(self, model) -> None:
-        """
-        Log probabilities for a single training step.
-        Call this method after each forward pass during training to accumulate
-        time-series data for plotting.
-
-        Args:
-            model: DAGGPT model instance
-        """
-        self.update_probability_history(model)
-
     def get_wandb_logging_dict(self, model, base_dict: Optional[Dict] = None) -> Dict:
         """
         Get dictionary suitable for wandb logging.
@@ -383,7 +199,5 @@ class DAGLogger:
         # Add all logging metrics
         log_dict = dict(base_dict)
         log_dict.update(self.get_extra_vals(model))
-        log_dict.update(self.get_op_probabilities(model))
-        log_dict.update(self.get_operand_probabilities(model))
 
         return log_dict

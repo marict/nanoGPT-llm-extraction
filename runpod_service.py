@@ -271,46 +271,6 @@ def init_local_wandb_and_open_browser(
         return None
 
 
-def visualize_dag_attention(
-    model,
-    tokenizer,
-    prompt: str,
-    save_path: str = "dag_attention.png",
-):
-    """Run ``model`` on ``prompt`` and save a DAG attention heatmap."""
-
-    import matplotlib.pyplot as plt
-    import torch
-
-    from dag_model import GPT
-
-    if not isinstance(model, GPT):
-        raise TypeError("model must be GPT with DAG capability")
-
-    tokens = tokenizer.encode(prompt)
-    x = torch.tensor(tokens).unsqueeze(0)
-    model.eval()
-    with torch.no_grad():
-        _, _, dag_info = model(x, return_dag_info=True)
-
-    attn_history: Sequence[torch.Tensor] = dag_info["attn"]
-    max_len = max(t.numel() for t in attn_history)
-    mat = torch.zeros(len(attn_history), max_len)
-    for i, att in enumerate(attn_history):
-        mat[i, : att.numel()] = att
-
-    fig, ax = plt.subplots()
-    im = ax.imshow(mat.numpy(), aspect="auto", cmap="viridis")
-    ax.set_xlabel("Node")
-    ax.set_ylabel("DAG Step")
-    plt.colorbar(im, ax=ax)
-    plt.tight_layout()
-    plt.savefig(save_path)
-    plt.close(fig)
-    print(f"Saved DAG attention visualization to {save_path}")
-    return save_path
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="RunPod helper")
     sub = parser.add_subparsers(dest="cmd", required=True)
