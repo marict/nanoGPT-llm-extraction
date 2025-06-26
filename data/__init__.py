@@ -18,6 +18,7 @@ def prepare_dataset(
     data_dir: Optional[Path] = None,
     subset: float = 1.0,
     num_proc: int = 8,
+    force: bool = False,
 ) -> Tuple[int, int]:
     """Prepare a dataset for training.
 
@@ -26,6 +27,7 @@ def prepare_dataset(
         data_dir: Optional path to prepare the dataset in. If None, uses the dataset's default location.
         subset: Fraction of each split to keep (0 < subset ≤ 1)
         num_proc: Number of processes to use for tokenization (only used by openwebtext and proofpile)
+        force: Force re-preparation even if files already exist
 
     Returns:
         Tuple of (train_tokens, val_tokens)
@@ -39,10 +41,10 @@ def prepare_dataset(
         )
 
     if data_dir is None:
-        data_dir = Path("data") / dataset
+        data_dir = Path("data")
 
-    # Shakespeare only takes data_dir and subset, others take num_proc as well
+    # Shakespeare only takes data_dir, subset, and force; others take num_proc as well
     if dataset == "shakespeare":
-        return DATASETS[dataset](data_dir, subset)
+        return DATASETS[dataset](data_dir, subset, force)
     else:
-        return DATASETS[dataset](data_dir, num_proc, subset)
+        return DATASETS[dataset](data_dir, num_proc, subset, force)

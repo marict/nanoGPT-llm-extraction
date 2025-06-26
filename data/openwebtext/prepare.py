@@ -19,7 +19,9 @@ sys.path.append(str(Path(__file__).parent.parent))
 from data.common_prep import DataPrep, add_num_proc_arg, get_common_parser
 
 
-def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> tuple[int, int]:
+def prepare(
+    data_dir: Path, num_proc: int = 8, subset: float = 1.0, force: bool = False
+) -> tuple[int, int]:
     """Prepare the OpenWebText dataset for training.
 
     Downloads the dataset, splits into train/val, and exports to binary files.
@@ -28,12 +30,31 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> tuple[int
         data_dir: Directory to save the prepared dataset
         num_proc: Number of processes to use for tokenization
         subset: Fraction of each split to keep (0 < subset ≤ 1)
+        force: Force re-preparation even if files already exist
 
     Returns:
         Tuple of (train_tokens, val_tokens)
     """
-    prep = DataPrep(data_dir)
+    # Initialize DataPrep with dataset-specific subfolder
+    prep = DataPrep(data_dir, dataset_name="openwebtext")
     subset = prep.validate_subset(subset)
+
+    # Check if files already exist (unless force is specified)
+    if not force:
+        if prep.check_existing_files():
+            token_counts = prep.get_existing_token_counts()
+            if token_counts:
+                train_tokens, val_tokens = token_counts
+                print(
+                    f"📁 Using existing files - Train: {train_tokens:,} tokens, Val: {val_tokens:,} tokens"
+                )
+                return train_tokens, val_tokens
+            else:
+                print(
+                    "⚠️  Could not read token counts from existing files, proceeding with preparation"
+                )
+
+    print(f"🔄 Starting OpenWebText dataset preparation (subset: {subset})")
 
     # number of workers in load_dataset() call
     # best number might be different from num_proc above as it also depends on NW speed.
@@ -48,6 +69,7 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> tuple[int
     # Load the OpenWebText dataset with streaming for subset selection
     if subset < 1.0:
         # For subsets, use streaming to avoid downloading full dataset
+        print("📥 Loading OpenWebText dataset with streaming...")
         dataset = load_dataset("openwebtext", streaming=True, trust_remote_code=True)
 
         # Calculate how many examples to take from train split
@@ -76,6 +98,7 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> tuple[int
     else:
         # For full dataset, use regular loading
         # takes 54GB in huggingface .cache dir, at least 30GB more to run
+        print("📥 Loading full OpenWebText dataset...")
         dataset = load_dataset(
             "openwebtext", num_proc=num_proc_load_dataset, trust_remote_code=True
         )
@@ -104,6 +127,7 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> tuple[int
     #     })
     # })
 
+    print("🔄 Tokenizing dataset...")
     # Tokenize the dataset using common utility
     process_fn = prep.create_tokenization_function("text")
 
@@ -118,6 +142,7 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> tuple[int
         for split, dset in split_dataset.items()
     }
 
+    print("💾 Writing binary files...")
     # Write binary files using common utility
     for split, dset in tokenized.items():
         prep.write_binary_file(dset, split)
@@ -133,9 +158,11 @@ if __name__ == "__main__":
     add_num_proc_arg(parser, default=8)
     args = parser.parse_args()
 
-    train_tokens, val_tokens = prepare(args.data_dir, args.num_proc, args.subset)
+    train_tokens, val_tokens = prepare(
+        args.data_dir, args.num_proc, args.subset, args.force
+    )
 
-    prep = DataPrep(args.data_dir)
+    prep = DataPrep(args.data_dir, dataset_name="openwebtext")
     prep.print_completion("openwebtext", train_tokens, val_tokens)
 
     # train.bin is ~17GB, val.bin ~8.5MB

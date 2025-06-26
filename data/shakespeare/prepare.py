@@ -16,7 +16,9 @@ sys.path.append(str(Path(__file__).parent.parent))
 from data.common_prep import DataPrep, get_common_parser
 
 
-def prepare(data_dir: Path, subset: float = 1.0) -> tuple[int, int]:
+def prepare(
+    data_dir: Path, subset: float = 1.0, force: bool = False
+) -> tuple[int, int]:
     """Prepare the tiny Shakespeare dataset for training.
 
     Downloads the dataset if needed, splits into train/val, and exports to binary files.
@@ -24,19 +26,40 @@ def prepare(data_dir: Path, subset: float = 1.0) -> tuple[int, int]:
     Args:
         data_dir: Directory to save the prepared dataset
         subset: Fraction of each split to keep (0 < subset ≤ 1)
+        force: Force re-preparation even if files already exist
 
     Returns:
         Tuple of (train_tokens, val_tokens)
     """
-    prep = DataPrep(data_dir)
+    # Initialize DataPrep with dataset-specific subfolder
+    prep = DataPrep(data_dir, dataset_name="shakespeare")
     subset = prep.validate_subset(subset)
 
+    # Check if files already exist (unless force is specified)
+    if not force:
+        if prep.check_existing_files():
+            token_counts = prep.get_existing_token_counts()
+            if token_counts:
+                train_tokens, val_tokens = token_counts
+                print(
+                    f"📁 Using existing files - Train: {train_tokens:,} tokens, Val: {val_tokens:,} tokens"
+                )
+                return train_tokens, val_tokens
+            else:
+                print(
+                    "⚠️  Could not read token counts from existing files, proceeding with preparation"
+                )
+
+    print(f"🔄 Starting Shakespeare dataset preparation (subset: {subset})")
+
     # Download the tiny shakespeare dataset
-    input_file_path = data_dir / "input.txt"
+    input_file_path = prep.data_dir / "input.txt"
     if not input_file_path.exists():
+        print("📥 Downloading Shakespeare dataset...")
         data_url = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
         with open(input_file_path, "w") as f:
             f.write(requests.get(data_url).text)
+        print("📥 Download complete")
 
     with open(input_file_path, "r") as f:
         data = f.read()
@@ -84,9 +107,9 @@ if __name__ == "__main__":
     parser = get_common_parser("Prepare the Shakespeare dataset.")
     args = parser.parse_args()
 
-    train_tokens, val_tokens = prepare(args.data_dir, args.subset)
+    train_tokens, val_tokens = prepare(args.data_dir, args.subset, args.force)
 
-    prep = DataPrep(args.data_dir)
+    prep = DataPrep(args.data_dir, dataset_name="shakespeare")
     prep.print_completion("shakespeare", train_tokens, val_tokens)
 
 # train.bin has 301,966 tokens

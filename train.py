@@ -410,18 +410,25 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     # --------------------------------------------------------------------- #
     data_start = time.time()
     print(f"[{time.time() - setup_start:.2f}s] Loading data")
-    data_dir = Path("data") / cfg.dataset
+    # Look for data in dataset-specific subfolder (new structure)
+    data_dir = Path("data") / cfg.dataset / cfg.dataset
+    # If dataset-specific subfolder doesn't exist, try legacy location
+    if not data_dir.exists():
+        data_dir = Path("data") / cfg.dataset
+
     if not (data_dir / "train.bin").exists():
         if master_process:
             print(
                 f"[{time.time() - setup_start:.2f}s] Preparing dataset {cfg.dataset}... with subset {cfg.subset}"
             )
             train_tokens, val_tokens = prepare_dataset(
-                cfg.dataset, data_dir, cfg.subset
+                cfg.dataset, Path("data"), cfg.subset
             )
             print(
                 f"[{time.time() - setup_start:.2f}s] Dataset prepared. Train: {train_tokens:,}, Val: {val_tokens:,}"
             )
+            # Update data_dir to point to the newly created dataset-specific folder
+            data_dir = Path("data") / cfg.dataset
 
     print(f"[{time.time() - setup_start:.2f}s] Loading meta")
     meta_path = data_dir / "meta.pkl"
