@@ -222,7 +222,7 @@ def init_local_wandb_and_open_browser(
             notes=f"Remote training on RunPod instance {run_name}",
         )
 
-        wandb_url = run.url
+        wandb_url = run.url + "/logs"  # Open directly to logs page
         wandb_run_id = run.id
         print(f"Wandb run created: {wandb_url}")
 

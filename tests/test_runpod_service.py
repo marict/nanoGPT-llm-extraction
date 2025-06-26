@@ -192,7 +192,10 @@ def test_init_local_wandb_comprehensive(monkeypatch):
     monkeypatch.setenv("WANDB_API_KEY", "test_key_123")
 
     result = rp.init_local_wandb_and_open_browser("test-project", "test_run_123")
-    assert result == ("https://wandb.ai/test/project/runs/test_run_123", "test_run_123")
+    assert result == (
+        "https://wandb.ai/test/project/runs/test_run_123/logs",
+        "test_run_123",
+    )
 
     # Test 2: Missing API key
     monkeypatch.delenv("WANDB_API_KEY", raising=False)
@@ -277,3 +280,33 @@ def test_start_cloud_training_comprehensive(monkeypatch, tmp_path):
     assert len(wandb_calls) == 1
     assert wandb_calls[0]["project"] == "custom-project-name"
     assert wandb_calls[0]["run_id"] == "custom-project-name"
+
+
+def test_wandb_logs_url_modification(monkeypatch):
+    """Test that wandb URLs are modified to point to logs page."""
+
+    class MockRun:
+        url = "https://wandb.ai/test/project/runs/test_run_123"
+        id = "test_run_123"
+
+    class MockWandb:
+        def init(self, project, name, tags, notes):
+            return MockRun()
+
+        class Settings:
+            def __init__(self):
+                pass
+
+    monkeypatch.setattr(rp, "wandb", MockWandb())
+    monkeypatch.setenv("WANDB_API_KEY", "test_key_123")
+
+    result = rp.init_local_wandb_and_open_browser("test-project", "test_run_123")
+
+    assert result is not None
+    wandb_url, run_id = result
+
+    # Verify the URL includes /logs suffix
+    assert wandb_url == "https://wandb.ai/test/project/runs/test_run_123/logs"
+    assert run_id == "test_run_123"
+
+    print("✅ Wandb logs URL modification working correctly")

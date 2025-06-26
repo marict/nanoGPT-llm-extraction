@@ -243,8 +243,8 @@ class DAGController(nn.Module):
         scores2 = safe_clamp(scores2)
 
         # Use Gumbel-Softmax for discrete selection
-        att1 = F.gumbel_softmax(scores1, tau=self.temperature, hard=True)
-        att2 = F.gumbel_softmax(scores2, tau=self.temperature, hard=True)
+        att1 = F.gumbel_softmax(scores1, tau=self.temperature, hard=False)
+        att2 = F.gumbel_softmax(scores2, tau=self.temperature, hard=False)
 
         # Prevent gradient issues by ensuring selections are valid
         att1 = att1 + 1e-10 * torch.ones_like(att1)
