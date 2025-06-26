@@ -36,7 +36,7 @@ min_lr = 1e-5
 dataset = "proofpile"
 
 backend = "nccl"
-dtype = "bfloat16"  # keep this, fine on A100/H100
+dtype = "float32"
 compile = False  # set False to avoid extra compilation overhead
 
 always_save_checkpoint = True

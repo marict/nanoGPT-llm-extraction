@@ -44,5 +44,6 @@ lr_decay_iters = 600000
 min_lr = 6e-5
 
 backend = "gloo"
-dtype = "float32"
+dtype = "bfloat16"  # keep this, fine on A100/H100
+# dtype = "float32"
 compile = False

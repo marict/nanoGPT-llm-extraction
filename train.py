@@ -368,8 +368,17 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     original_dtype = cfg.dtype
     if cfg.dtype == "bfloat16":
         if device == "cuda" and torch.cuda.is_bf16_supported():
-            # BFloat16 is supported on this CUDA device
-            actual_dtype = "bfloat16"
+            # Test if BFloat16 actually works with a simple operation
+            try:
+                test_tensor = torch.tensor([1.0], device=device, dtype=torch.bfloat16)
+                test_result = test_tensor * 2.0  # Simple operation
+                actual_dtype = "bfloat16"
+            except Exception as e:
+                # BFloat16 claimed to be supported but doesn't work
+                actual_dtype = "float16"
+                print(
+                    f"⚠️  BFloat16 theoretically supported but failed in practice on this CUDA device. Falling back to Float16. Error: {e}"
+                )
         elif device == "cuda":
             # CUDA available but BFloat16 not supported, fallback to float16
             actual_dtype = "float16"
@@ -384,6 +393,9 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
             )
     else:
         actual_dtype = cfg.dtype
+
+    # Update the config to use the actual dtype throughout the rest of the system
+    cfg.dtype = actual_dtype
 
     ptdtype = {
         "float32": torch.float32,
@@ -615,6 +627,10 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
 
         # Initialize DAG logger for models that support it
         dag_logger = DAGLogger()
+
+        # Track consecutive errors to prevent infinite retry loops
+        consecutive_errors = 0
+        max_consecutive_errors = 5
 
         while True:
             lr = get_lr(iter_num, cfg=cfg) if cfg.decay_lr else cfg.learning_rate
@@ -854,14 +870,52 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                         f"mfu {running_mfu*100:.2f}%"
                     )
 
+                # Reset error counter on successful training step
+                consecutive_errors = 0
+
                 iter_num += 1
                 if iter_num > cfg.max_iters:
                     break
             except Exception as e:
-                print(f"Warning: Error during training step: {e}")
-                # Try to recover by getting a new batch
+                error_msg = str(e)
+                consecutive_errors += 1
+                print(
+                    f"Warning: Error during training step ({consecutive_errors}/{max_consecutive_errors}): {e}"
+                )
+
+                # Check for critical errors that indicate fundamental incompatibility
+                critical_errors = [
+                    "Got unsupported ScalarType BFloat16",
+                    "CUDA out of memory",
+                    "device-side assert triggered",
+                    "not implemented for",
+                    "RuntimeError: Expected",
+                ]
+
+                is_critical = any(
+                    critical_pattern in error_msg
+                    for critical_pattern in critical_errors
+                )
+
+                if is_critical:
+                    print(f"CRITICAL ERROR: {error_msg}")
+                    print(
+                        "This error indicates a fundamental compatibility issue that cannot be recovered from."
+                    )
+                    print("Stopping training to prevent resource waste.")
+                    break
+
+                # Check if we've had too many consecutive errors
+                if consecutive_errors >= max_consecutive_errors:
+                    print(
+                        f"FATAL: Too many consecutive errors ({consecutive_errors}). Stopping training."
+                    )
+                    break
+
+                # For non-critical errors, try to recover by getting a new batch
                 try:
                     X, Y = get_batch("train")
+                    print("Recovered from non-critical error, continuing training...")
                 except Exception as e2:
                     print(f"Fatal: Could not recover from error: {e2}")
                     break

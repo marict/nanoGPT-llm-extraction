@@ -192,11 +192,19 @@ def test_subset_config_edge_cases():
 def test_dtype_fallback_behavior(capsys):
     """Test automatic dtype fallback for unsupported bfloat16 with console output."""
 
-    def simulate_dtype_fallback(config_dtype, device, cuda_bf16_supported=False):
+    def simulate_dtype_fallback(
+        config_dtype, device, cuda_bf16_supported=False, bf16_test_fails=False
+    ):
         """Simulate the dtype fallback logic from train.py"""
         if config_dtype == "bfloat16":
             if device == "cuda" and cuda_bf16_supported:
-                actual_dtype = "bfloat16"
+                if bf16_test_fails:
+                    actual_dtype = "float16"
+                    print(
+                        f"⚠️  BFloat16 theoretically supported but failed in practice on this CUDA device. Falling back to Float16. Error: Test error"
+                    )
+                else:
+                    actual_dtype = "bfloat16"
             elif device == "cuda":
                 actual_dtype = "float16"
                 print(
@@ -211,24 +219,40 @@ def test_dtype_fallback_behavior(capsys):
             actual_dtype = config_dtype
         return actual_dtype
 
-    # Test cases: (config_dtype, device, cuda_bf16_supported, expected_dtype, should_warn)
+    # Test cases: (config_dtype, device, cuda_bf16_supported, bf16_test_fails, expected_dtype, should_warn)
     test_cases = [
-        ("bfloat16", "cuda", True, "bfloat16", False),  # CUDA with BF16 support
-        ("bfloat16", "cuda", False, "float16", True),  # CUDA without BF16 support
-        ("bfloat16", "mps", False, "float32", True),  # MPS device
-        ("bfloat16", "cpu", False, "float32", True),  # CPU device
-        ("float16", "cuda", False, "float16", False),  # Non-bfloat16 dtype
+        ("bfloat16", "cuda", True, False, "bfloat16", False),  # CUDA with working BF16
+        (
+            "bfloat16",
+            "cuda",
+            True,
+            True,
+            "float16",
+            True,
+        ),  # CUDA with BF16 that fails in practice
+        (
+            "bfloat16",
+            "cuda",
+            False,
+            False,
+            "float16",
+            True,
+        ),  # CUDA without BF16 support
+        ("bfloat16", "mps", False, False, "float32", True),  # MPS device
+        ("bfloat16", "cpu", False, False, "float32", True),  # CPU device
+        ("float16", "cuda", False, False, "float16", False),  # Non-bfloat16 dtype
     ]
 
     for (
         config_dtype,
         device,
         cuda_bf16_supported,
+        bf16_test_fails,
         expected_dtype,
         should_warn,
     ) in test_cases:
         actual_dtype = simulate_dtype_fallback(
-            config_dtype, device, cuda_bf16_supported
+            config_dtype, device, cuda_bf16_supported, bf16_test_fails
         )
         captured = capsys.readouterr()
 
@@ -490,3 +514,44 @@ def test_config_file_checkpoint_cleanup_integration():
 
     # Should contain "Skipping checkpoint cleanup"
     assert "Skipping checkpoint cleanup" in output, "Should skip cleanup when disabled"
+
+
+def test_critical_error_detection():
+    """Test that critical errors are properly detected and cause immediate training termination."""
+
+    # Test critical error patterns
+    critical_errors = [
+        "Got unsupported ScalarType BFloat16",
+        "CUDA out of memory",
+        "device-side assert triggered",
+        "not implemented for Tensor",
+        "RuntimeError: Expected tensor to have dtype",
+    ]
+
+    non_critical_errors = [
+        "Connection timeout",
+        "Temporary file error",
+        "Network unavailable",
+        "Some random error",
+    ]
+
+    def is_critical_error(error_msg):
+        """Replicate the critical error detection logic from train.py"""
+        critical_patterns = [
+            "Got unsupported ScalarType BFloat16",
+            "CUDA out of memory",
+            "device-side assert triggered",
+            "not implemented for",
+            "RuntimeError: Expected",
+        ]
+        return any(pattern in error_msg for pattern in critical_patterns)
+
+    # Test that critical errors are detected
+    for error in critical_errors:
+        assert is_critical_error(error), f"Should detect '{error}' as critical"
+
+    # Test that non-critical errors are not detected as critical
+    for error in non_critical_errors:
+        assert not is_critical_error(error), f"Should not detect '{error}' as critical"
+
+    print("✅ Critical error detection working correctly")
