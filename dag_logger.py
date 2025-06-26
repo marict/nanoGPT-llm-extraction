@@ -145,25 +145,26 @@ class DAGLogger:
             and model.dag.controller.last_attn is not None
         ):
             with torch.no_grad():
-                # last_attn is (B, 2, N) - batch, 2 operands, N nodes
+                # last_attn is (B, T, 2, N) - batch, time, 2 operands, N nodes
                 # Take the first sample in the batch
-                attn_probs = (
-                    model.dag.controller.last_attn[0].detach().cpu().numpy()
-                )  # (2, N)
+                attn_probs = model.dag.controller.last_attn[0]  # (T, 2, N)
 
-                # Find the chosen operands (highest probability for each)
-                operand1_choice = int(attn_probs[0].argmax())
-                operand2_choice = int(attn_probs[1].argmax())
-                max_nodes = attn_probs.shape[1]
+                print("Operands chosen per token position:")
+                for t in range(attn_probs.shape[0]):
+                    # Find the chosen operands for this token
+                    operand1_choice = int(attn_probs[t, 0].argmax())
+                    operand2_choice = int(attn_probs[t, 1].argmax())
+                    max_nodes = attn_probs.shape[-1]
+                    print(
+                        f"  Token {t}: {operand1_choice}, {operand2_choice} (out of {max_nodes})"
+                    )
 
-                print(
-                    f"Operands chosen: {operand1_choice}, {operand2_choice} (out of {max_nodes})"
-                )
-
-        # Node values
+        # Node values (now per token)
         node_values = self.get_node_values_list(model)
         if node_values:
-            print(f"Node values: {[f'{val:.4f}' for val in node_values]}")
+            print("Node values per token position:")
+            for t, val in enumerate(node_values):
+                print(f"  Token {t}: {val:.4f}")
 
         # Gate values
         if hasattr(model, "last_gate_values") and model.last_gate_values is not None:

@@ -54,6 +54,23 @@ def test_causal_dag_forward_pass(causal_dag_model):
             len(node_values) == seq_len
         ), f"Expected {seq_len} nodes, got {len(node_values)}"
 
+        # Check that node values are properly shaped
+        if hasattr(model, "dag"):
+            # Check that node storage tensors have correct shape
+            B, N, T, H = model.dag.node_embeds.shape
+            assert T == seq_len, f"Expected {seq_len} time steps, got {T}"
+            assert (
+                N == config.dag_depth + 1
+            ), f"Expected {config.dag_depth + 1} nodes, got {N}"
+            assert H == config.n_embd, f"Expected {config.n_embd} hidden dim, got {H}"
+
+            # Check node values tensor shape
+            B, N, T = model.dag.node_values.shape
+            assert T == seq_len, f"Expected {seq_len} time steps, got {T}"
+            assert (
+                N == config.dag_depth + 1
+            ), f"Expected {config.dag_depth + 1} nodes, got {N}"
+
 
 def test_causal_dag_gradient_flow(causal_dag_model):
     """Test that gradients flow properly through all tokens."""
@@ -152,6 +169,19 @@ def test_causal_dag_node_growth(causal_dag_model):
         assert (
             len(node_values) == seq_len
         ), f"Seq len {seq_len}: expected {seq_len} nodes, got {len(node_values)}"
+
+        # Check node storage tensors
+        if hasattr(model, "dag"):
+            # Node embeddings should be (B, N, T, H)
+            B, N, T, H = model.dag.node_embeds.shape
+            assert T == seq_len, f"Expected {seq_len} time steps, got {T}"
+            assert (
+                N == config.dag_depth + 1
+            ), f"Expected {config.dag_depth + 1} nodes, got {N}"
+
+            # Node values should be (B, N, T)
+            B, N, T = model.dag.node_values.shape
+            assert T == seq_len, f"Expected {seq_len} time steps in values, got {T}"
 
         # All node values should be finite
         for i, val in enumerate(node_values):

@@ -399,11 +399,29 @@ def test_gate_and_norm_logging():
     with torch.no_grad():
         logits, loss = model(x)
 
+    # Check matrix shapes
+    if hasattr(model, "dag"):
+        # Node embeddings should be (B, N, T, H)
+        B, N, T, H = model.dag.node_embeds.shape
+        assert (
+            T == config.block_size
+        ), f"Expected {config.block_size} time steps, got {T}"
+        assert (
+            N == config.dag_depth + 1
+        ), f"Expected {config.dag_depth + 1} nodes, got {N}"
+        assert H == config.n_embd, f"Expected {config.n_embd} hidden dim, got {H}"
+
+        # Node values should be (B, N, T)
+        B, N, T = model.dag.node_values.shape
+        assert (
+            T == config.block_size
+        ), f"Expected {config.block_size} time steps in values, got {T}"
+
     # Get gate and norm values using DAGLogger
     logger = DAGLogger()
     extra_vals = logger.get_extra_vals(model)
 
-    # Check that gate values are present
+    # Check that gate values are present and properly shaped
     assert "gate/mean" in extra_vals, "Gate mean should be logged"
     assert "gate/min" in extra_vals, "Gate min should be logged"
     assert "gate/max" in extra_vals, "Gate max should be logged"
@@ -411,7 +429,7 @@ def test_gate_and_norm_logging():
         "gate/close_to_zero_ratio" in extra_vals
     ), "Gate close_to_zero_ratio should be logged"
 
-    # Check that norm values are present
+    # Check that norm values are present and properly shaped
     assert "norm/hidden" in extra_vals, "Hidden norm should be logged"
     assert "norm/dag_sem_raw" in extra_vals, "DAG semantic raw norm should be logged"
     assert "norm/dag_sem" in extra_vals, "DAG semantic normalized norm should be logged"
@@ -425,7 +443,7 @@ def test_gate_and_norm_logging():
         0.0 <= extra_vals["gate/close_to_zero_ratio"] <= 1.0
     ), "Close to zero ratio should be in [0, 1]"
 
-    # Verify norm values are positive
+    # Verify norm values are positive and properly shaped
     assert extra_vals["norm/hidden"] > 0, "Hidden norm should be positive"
     assert (
         extra_vals["norm/dag_sem_raw"] > 0
@@ -435,7 +453,14 @@ def test_gate_and_norm_logging():
     ), "DAG semantic normalized norm should be positive"
     assert extra_vals["norm/fused"] > 0, "Fused norm should be positive"
 
-    print("✅ Gate and norm logging working correctly")
+    # Test that we can get node values list
+    node_values = model.get_node_values_list()
+    assert (
+        len(node_values) == config.block_size
+    ), f"Expected {config.block_size} node values, got {len(node_values)}"
+    assert all(
+        torch.isfinite(torch.tensor(val)) for val in node_values
+    ), "All node values should be finite"
 
 
 if __name__ == "__main__":

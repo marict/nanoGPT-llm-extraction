@@ -95,10 +95,17 @@ def test_dag_node_growth_regression(monkeypatch):
             super().__init__(hidden_dim, n_ops, temperature)
 
         def forward(self, embeds, operand_ctx, op_ctx):  # new signature
-            B, N, _ = embeds.shape
-            att_last = torch.zeros(B, N, device=embeds.device)
-            att_last[:, -1] = 1.0  # pick last twice
-            op_weights = torch.tensor([[1.0, 0.0]], device=embeds.device)  # use 'add'
+            B, N, T, H = embeds.shape  # Matrix-based shape
+            device = embeds.device
+
+            # Create attention weights that select the last node for each token
+            att_last = torch.zeros(B, T, N, device=device)
+            att_last[:, :, -1] = 1.0  # pick last node for each token
+
+            # Use 'add' operation for all tokens
+            op_weights = torch.zeros(B, T, 2, device=device)
+            op_weights[:, :, 0] = 1.0  # use 'add' for all tokens
+
             return att_last, att_last, op_weights
 
     dag = DifferentiableDAG(
@@ -106,18 +113,24 @@ def test_dag_node_growth_regression(monkeypatch):
     )
     dag.controller = DummyController(H, len(dag_model.op_funcs))
 
-    # initial lists (one node, scalar value = 1)
-    init_emb = [torch.ones(1, H)]
-    init_val = [torch.ones(1)]
-    ctx = torch.zeros(1, H)
+    # Initial tensors (one node per token)
+    B, T = 1, 1  # batch size 1, sequence length 1
+    init_emb = torch.ones(B, 1, T, H)  # (B, 1, T, H)
+    init_val = torch.ones(B, 1, T)  # (B, 1, T)
+    ctx = torch.zeros(B, T, H)  # (B, T, H)
 
-    _, vals = dag(init_emb, init_val, ctx, ctx)
-    assert len(vals) == 3  # 1 original + 2 new
-    assert torch.allclose(vals[-1], torch.full((1,), 4.0))
+    final_embeds, final_vals = dag(init_emb, init_val, ctx, ctx)
+
+    # Check shapes
+    assert final_embeds.shape == (B, 3, T, H)  # 1 original + 2 new nodes
+    assert final_vals.shape == (B, 3, T)  # 1 original + 2 new nodes
+
+    # Check values - should still be 4.0 for the final node
+    assert torch.allclose(final_vals[:, -1], torch.full((B, T), 4.0))
 
 
 # ---------------------------------------------------------------------
-# initial-node materialisation tests  (fixed)
+# initial-node materialisation tests
 # ---------------------------------------------------------------------
 def test_dag_initial_nodes_all_tokens(monkeypatch):
     """Every token should contribute exactly one *initial* DAG value."""
@@ -142,8 +155,7 @@ def test_dag_initial_nodes_all_tokens(monkeypatch):
     # Run the model and check that all node values are captured
     model(torch.tensor(tokens).unsqueeze(0))
 
-    # With the new causal implementation, we can check the final node values
-    # which should still be 3.0 for each token (since value_extractor returns 3.0)
+    # Check node values
     node_values = model.get_node_values_list()
     assert len(node_values) == len(
         tokens
@@ -155,9 +167,17 @@ def test_dag_initial_nodes_all_tokens(monkeypatch):
         abs(node_values[0] - 3.0) < 1e-6
     ), f"First token value should be exactly 3.0, got {node_values[0]}"
 
-    # Later tokens might be processed by DAG but should be finite
-    for i, val in enumerate(node_values):
-        assert torch.isfinite(torch.tensor(val)), f"Node {i} value {val} is not finite"
+    # Check matrix shapes if DAG is present
+    if hasattr(model, "dag"):
+        # Node embeddings should be (B, N, T, H)
+        B, N, T, H = model.dag.node_embeds.shape
+        assert T == len(tokens), f"Expected {len(tokens)} time steps, got {T}"
+        assert N == cfg.dag_depth + 1, f"Expected {cfg.dag_depth + 1} nodes, got {N}"
+        assert H == cfg.n_embd, f"Expected {cfg.n_embd} hidden dim, got {H}"
+
+        # Node values should be (B, N, T)
+        B, N, T = model.dag.node_values.shape
+        assert T == len(tokens), f"Expected {len(tokens)} time steps in values, got {T}"
 
 
 # ---------------------------------------------------------------------

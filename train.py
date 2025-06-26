@@ -669,7 +669,9 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                         generated_sample = "No tokenizer available"
 
                     # Get non-gradient extra values for evaluation logging
-                    eval_extra = model.extra_vals()
+                    eval_extra = (
+                        {}
+                    )  # Initialize empty dict instead of calling model.extra_vals()
                     if dag_logger is not None:
                         # Get non-gradient DAG values (gradients are logged during training)
                         eval_extra.update(dag_logger.get_extra_vals(raw_model))
@@ -774,7 +776,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                     scaler.scale(loss).backward()
 
                 # Get extra values after backward pass (for gradients)
-                extra_vals = model.extra_vals()
+                extra_vals = {}
                 if dag_logger is not None:
                     extra_vals.update(dag_logger.get_extra_vals(raw_model))
 

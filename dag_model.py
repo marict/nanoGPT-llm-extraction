@@ -305,108 +305,89 @@ class DifferentiableDAG(nn.Module):
         # embedding combination MLP
         self.embed_mlp = nn.Linear(4 * hidden_dim + len(op_funcs), hidden_dim)
 
-    def forward_token(
-        self,
-        embeds_list: list[torch.Tensor],  # nodes so far (B,H)
-        values_list: list[torch.Tensor],  # scalars so far (B)
-        operand_ctx: torch.Tensor,  # (B,H) for this token
-        op_ctx: torch.Tensor,  # (B,H) for this token
-    ):
-        """
-        One DAG step for the *current* token.
-        Only nodes in embeds_list / values_list are visible.
-        Returns new_emb, new_val for the token.
-        """
-        B = operand_ctx.size(0)
-        N = len(embeds_list)
-
-        if N == 0:
-            # No nodes available yet, return zero embeddings and values
-            device = operand_ctx.device
-            new_emb = torch.zeros(B, self.hidden_dim, device=device)
-            new_val = torch.zeros(B, device=device)
-            return new_emb, new_val
-
-        # (B,N,H) and (B,N)
-        embeds = torch.stack(embeds_list, dim=1)
-        values = torch.stack(values_list, dim=1)
-
-        # causal mask: current token sees nodes 0…N-1 (all True)
-        node_mask = embeds.new_ones(B, N, dtype=torch.bool)
-
-        a1, a2, op_w = self.controller(embeds, operand_ctx, op_ctx, node_mask)
-
-        e1 = (a1.unsqueeze(-1) * embeds).sum(1)
-        e2 = (a2.unsqueeze(-1) * embeds).sum(1)
-        v1 = (a1 * values).sum(1)
-        v2 = (a2 * values).sum(1)
-
-        # compute operation outputs for all operations
-        outs = torch.stack([op(v1, v2) for op in op_funcs], dim=1)  # (B, n_ops)
-        new_val = (op_w * outs).sum(1)
-
-        # Project to embedding space to inform the embedding combinator
-        v1_emb = self.scalar_to_embed(v1.unsqueeze(-1))
-        v2_emb = self.scalar_to_embed(v2.unsqueeze(-1))
-
-        concat = torch.cat([e1, e2, v1_emb, v2_emb, op_w], dim=-1)
-        delta = self.embed_mlp(concat)
-        new_emb = 0.5 * (e1 + e2) + delta  # residual
-
-        return new_emb, new_val
-
     def forward(
         self,
-        embeds_list: list[torch.Tensor],  # each (B , H)
-        values_list: list[torch.Tensor],  # each (B)  scalar
-        operand_ctx: torch.Tensor,  # (B , H)
-        op_ctx: torch.Tensor,  # (B , H)
+        node_embeds: torch.Tensor,  # (B, N, T, H) - batch, num_nodes, time, hidden
+        node_values: torch.Tensor,  # (B, N, T) - batch, num_nodes, time
+        operand_ctx: torch.Tensor,  # (B, T, H) - batch, time, hidden
+        op_ctx: torch.Tensor,  # (B, T, H) - batch, time, hidden
     ):
-        B, _ = embeds_list[0].shape
+        """
+        Process nodes through DAG operations with causal masking.
+        Each token position can only attend to nodes from previous tokens.
 
-        for step in range(self.num_steps):
-            # stack existing nodes
-            embeds = torch.stack(embeds_list, dim=1)  # (B , N , H)
-            values = torch.stack(values_list, dim=1)  # (B , N)
+        Args:
+            node_embeds: Node embeddings tensor (B, N, T, H)
+            node_values: Node values tensor (B, N, T)
+            operand_ctx: Context for operand selection (B, T, H)
+            op_ctx: Context for operation selection (B, T, H)
 
-            emb_step = self.step_emb.weight[step].unsqueeze(0).expand(B, -1)  # (B , H)
+        Returns:
+            Tuple of (new_embeds, new_values) with shapes (B, N+1, T, H) and (B, N+1, T)
+        """
+        B, N, T, H = node_embeds.shape
+        device = node_embeds.device
 
-            # controller gives us discrete selections via Gumbel softmax
-            att1, att2, op_weights = self.controller(
-                embeds,
-                operand_ctx + emb_step,
-                op_ctx + emb_step,
+        # Initialize output tensors with one more node than input
+        new_embeds = torch.zeros(B, N + 1, T, H, device=device)
+        new_values = torch.zeros(B, N + 1, T, device=device)
+
+        # Copy existing nodes
+        new_embeds[:, :N] = node_embeds
+        new_values[:, :N] = node_values
+
+        # Process each token position
+        for t in range(T):
+            # Create causal mask for this token position
+            # Only allow access to nodes from previous tokens
+            causal_mask = torch.zeros(B, N, dtype=torch.bool, device=device)
+            if t > 0:
+                # Can use all nodes up to current token
+                causal_mask[:, :t] = True
+
+            # Get step embedding for this position
+            step_emb = self.step_emb.weight[0].unsqueeze(0).expand(B, -1)  # (B, H)
+
+            # Select operands and operation using controller
+            # Flatten available nodes for selection
+            flat_embeds = node_embeds[:, :, : t + 1].reshape(B, -1, H)  # (B, N*t, H)
+            flat_values = node_values[:, :, : t + 1].reshape(B, -1)  # (B, N*t)
+
+            # Create mask for flattened nodes
+            flat_mask = causal_mask.reshape(B, -1)  # (B, N*t)
+
+            # Get controller decisions
+            att1, att2, op_w = self.controller(
+                flat_embeds,
+                operand_ctx[:, t] + step_emb,  # (B, H)
+                op_ctx[:, t] + step_emb,  # (B, H)
+                flat_mask,
             )
 
-            # select embeddings using discrete attention (one-hot from Gumbel softmax)
-            e1 = torch.sum(att1.unsqueeze(-1) * embeds, dim=1)  # (B , H)
-            e2 = torch.sum(att2.unsqueeze(-1) * embeds, dim=1)  # (B , H)
+            # Select embeddings and values
+            e1 = (att1.unsqueeze(-1) * flat_embeds).sum(1)  # (B, H)
+            e2 = (att2.unsqueeze(-1) * flat_embeds).sum(1)  # (B, H)
+            v1 = (att1 * flat_values).sum(1)  # (B)
+            v2 = (att2 * flat_values).sum(1)  # (B)
 
-            # select values using discrete attention (one-hot from Gumbel softmax)
-            v1 = torch.sum(att1 * values, dim=1)  # (B)
-            v2 = torch.sum(att2 * values, dim=1)  # (B)
+            # Compute operation outputs
+            outs = torch.stack([op(v1, v2) for op in op_funcs], dim=1)  # (B, n_ops)
+            new_val = (op_w * outs).sum(1)  # (B)
 
-            # compute operation outputs for all operations
-            outs = torch.stack([op(v1, v2) for op in op_funcs], dim=1)  # (B , n_ops)
+            # Project scalar values to embedding space
+            v1_emb = self.scalar_to_embed(v1.unsqueeze(-1))  # (B, H)
+            v2_emb = self.scalar_to_embed(v2.unsqueeze(-1))  # (B, H)
 
-            # select single operation using discrete selection (one-hot from Gumbel softmax)
-            new_val = torch.sum(op_weights * outs, dim=1)  # (B)
-
-            # Project to embedding space to inform the embedding combinator
-            v1_embed = self.scalar_to_embed(v1.unsqueeze(-1))
-            v2_embed = self.scalar_to_embed(v2.unsqueeze(-1))
-
-            # compute new embed
-            concat = torch.cat(
-                [e1, e2, v1_embed, v2_embed, op_weights], dim=-1
-            )  # (B , 4H + n_ops)
+            # Compute new embedding
+            concat = torch.cat([e1, e2, v1_emb, v2_emb, op_w], dim=-1)
             delta = self.embed_mlp(concat)
             new_emb = 0.5 * (e1 + e2) + delta  # residual
 
-            embeds_list.append(new_emb)
-            values_list.append(new_val)
+            # Store new node
+            new_embeds[:, -1, t] = new_emb
+            new_values[:, -1, t] = new_val
 
-        return embeds_list, values_list
+        return new_embeds, new_values
 
 
 # ---------------------------------------------------------------------------
@@ -561,7 +542,8 @@ class GPT(nn.Module):
         Used for logging during evaluation.
 
         Returns:
-            List of node values as floats, empty list if no forward pass or dag_depth=0
+            List of node values as floats, empty list if no forward pass or dag_depth=0.
+            For causal DAG, returns the final node value for each token position.
         """
         if self.config.dag_depth == 0:
             return []
@@ -569,14 +551,19 @@ class GPT(nn.Module):
         if not hasattr(self, "last_values_list") or self.last_values_list is None:
             return []
 
+        # For causal DAG, last_values_list is a tensor of shape (B, T)
+        # where B is batch size and T is sequence length
+        # We want to return the mean across batch for each token position
+        if isinstance(self.last_values_list, torch.Tensor):
+            return [val.mean().item() for val in self.last_values_list.transpose(0, 1)]
+
+        # Fallback for non-tensor case (shouldn't happen with causal DAG)
         result = []
         for val in self.last_values_list:
             if hasattr(val, "item"):
-                # For scalar tensors, extract the scalar value
                 if val.numel() == 1:
                     result.append(val.item())
                 else:
-                    # For batch tensors, take the mean
                     result.append(val.mean().item())
             else:
                 result.append(float(val))
@@ -608,24 +595,24 @@ class GPT(nn.Module):
 
         # DAG augmentation mode - token-by-token causal processing
         original_hidden = hidden.clone()  # Keep original for causal contexts
-        node_embeds = self.node_embed_block(original_hidden)
+        node_embeds = self.node_embed_block(original_hidden)  # (B, T, H)
 
-        # Initialize node storage
-        nodes_embeds = []
-        nodes_values = []
+        # Initialize node storage tensors
+        B, T, H = node_embeds.shape
+        device = node_embeds.device
 
-        # Store for logging (collect gate values and norms for all tokens)
-        all_gates = []
-        all_dag_sem_raw = []
-        all_dag_sem = []
-        all_fused = []
+        # Start with initial nodes for each token position
+        # Shape: (B, 1, T, H) for embeddings, (B, 1, T) for values
+        initial_embeds = node_embeds.unsqueeze(1)  # Add node dimension
+        initial_values = self.value_extractor(node_embeds).unsqueeze(
+            1
+        )  # Add node dimension
 
-        # Create new hidden states list to avoid in-place operations
-        new_hidden_list = []
-
+        # Get contexts for operand and operation selection
+        # For each position t, context comes from positions 0 to t-1
+        operand_ctx_list = []
+        op_ctx_list = []
         for t in range(T):
-            # Contexts for this token (only from previous tokens, causal)
-            # IMPORTANT: Use original_hidden to avoid feedback from DAG modifications
             if t == 0:
                 # First token: use just current token for context
                 operand_ctx_t = self.operand_ctx_block(original_hidden[:, [t], :]).mean(
@@ -638,37 +625,45 @@ class GPT(nn.Module):
                     dim=1
                 )
                 op_ctx_t = self.op_ctx_block(original_hidden[:, :t, :]).mean(dim=1)
+            operand_ctx_list.append(operand_ctx_t)
+            op_ctx_list.append(op_ctx_t)
 
-            # Extract current token's initial embedding and value
-            current_node_embed = node_embeds[:, t, :]
-            current_node_value = self.value_extractor(
-                current_node_embed.unsqueeze(1)
-            ).squeeze(1)
+        # Stack contexts: (B, T, H)
+        operand_ctx = torch.stack(operand_ctx_list, dim=1)
+        op_ctx = torch.stack(op_ctx_list, dim=1)
 
-            # Run DAG step using only PREVIOUS nodes (strictly causal)
-            if len(nodes_embeds) >= 1:  # Have previous nodes to use
-                new_emb, new_val = self.dag.forward_token(
-                    nodes_embeds, nodes_values, operand_ctx_t, op_ctx_t
-                )
-                # Use DAG-processed version
-                final_node_embed = new_emb
-                final_node_value = new_val
-            else:
-                # First token: no previous nodes, use original
-                final_node_embed = current_node_embed
-                final_node_value = current_node_value
+        # Run DAG processing
+        final_embeds, final_values = self.dag(
+            initial_embeds,  # (B, 1, T, H)
+            initial_values,  # (B, 1, T)
+            operand_ctx,  # (B, T, H)
+            op_ctx,  # (B, T, H)
+        )
 
-            # Add the final processed node to our collection for future tokens
-            nodes_embeds.append(final_node_embed)
-            nodes_values.append(final_node_value)
+        # Store for logging
+        self.last_values_list = final_values[
+            :, -1
+        ]  # Take last node's values for each position
+
+        # Store gate and norm values for logging
+        all_gates = []
+        all_dag_sem_raw = []
+        all_dag_sem = []
+        all_fused = []
+
+        # Process each token position
+        new_hidden_list = []
+        for t in range(T):
+            # Get the final node embedding for this position
+            final_node_embed = final_embeds[:, -1, t]  # (B, H)
 
             # Fuse dag_sem into token-t hidden state
             dag_sem_raw = self.post_dag_block(final_node_embed.unsqueeze(1)).squeeze(1)
             dag_sem = self.dag_norm(dag_sem_raw)
             gate = torch.sigmoid(
-                self.mix_gate(torch.cat([original_hidden[:, t, :], dag_sem], dim=-1))
+                self.mix_gate(torch.cat([original_hidden[:, t], dag_sem], dim=-1))
             )
-            fused_hidden = (1 - gate) * original_hidden[:, t, :] + gate * dag_sem
+            fused_hidden = (1 - gate) * original_hidden[:, t] + gate * dag_sem
             new_hidden_list.append(fused_hidden)
 
             # Store for logging
@@ -690,9 +685,6 @@ class GPT(nn.Module):
             "dag_sem": all_dag_sem[-1] if all_dag_sem else torch.tensor(0.0),
             "fused": all_fused[-1] if all_fused else torch.tensor(0.0),
         }
-
-        # Store values for logging
-        self.last_values_list = nodes_values
 
         logits = self.lm_head(hidden)
         loss = None
