@@ -336,32 +336,30 @@ class DifferentiableDAG(nn.Module):
         new_embeds[:, :N] = node_embeds
         new_values[:, :N] = node_values
 
-        # Process each token position
+        # Process each DAG step
         for t in range(T):
             # Create causal mask for this token position
-            # Only allow access to nodes from previous tokens
-            causal_mask = torch.zeros(B, N, dtype=torch.bool, device=device)
+            # Only allow access to nodes from previous tokens and current token
+            causal_mask = torch.zeros(B, N, T, dtype=torch.bool, device=device)
             if t > 0:
                 # Can use all nodes up to current token
-                causal_mask[:, :t] = True
+                causal_mask[:, :, :t] = True
+            # Can also use nodes at current position
+            causal_mask[:, :, t] = True
 
-            # Get step embedding for this position
-            step_emb = self.step_emb.weight[0].unsqueeze(0).expand(B, -1)  # (B, H)
-
-            # Select operands and operation using controller
             # Flatten available nodes for selection
             flat_embeds = node_embeds[:, :, : t + 1].reshape(B, -1, H)  # (B, N*t, H)
             flat_values = node_values[:, :, : t + 1].reshape(B, -1)  # (B, N*t)
 
             # Create mask for flattened nodes
-            flat_mask = causal_mask.reshape(B, -1)  # (B, N*t)
+            flat_mask = causal_mask.reshape(B, -1)  # (B, N*T)
 
-            # Get controller decisions
+            # Get controller decisions with causal masking
             att1, att2, op_w = self.controller(
                 flat_embeds,
-                operand_ctx[:, t] + step_emb,  # (B, H)
-                op_ctx[:, t] + step_emb,  # (B, H)
-                flat_mask,
+                operand_ctx[:, t] + self.step_emb.weight[0].unsqueeze(0),  # (B, H)
+                op_ctx[:, t] + self.step_emb.weight[0].unsqueeze(0),  # (B, H)
+                flat_mask[:, : flat_embeds.size(1)],  # Only use valid positions
             )
 
             # Select embeddings and values
