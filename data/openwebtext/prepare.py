@@ -1,21 +1,22 @@
-# saves the openwebtext dataset to a binary file for training. following was helpful:
-# https://github.com/HazyResearch/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py
+#!/usr/bin/env python
+"""
+prepare_openwebtext.py
+Prepare the OpenWebText dataset for language-model training.
 
-import os
-import pickle
+Saves the openwebtext dataset to a binary file for training. Following was helpful:
+https://github.com/HazyResearch/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py
+"""
+
+from __future__ import annotations
+
+import sys
 from pathlib import Path
 
 import numpy as np
 from datasets import Dataset, load_dataset
-from tiktoken import get_encoding
 
-# Disable progress bars to prevent broken newlines in containers/remote terminals
-os.environ.setdefault("TQDM_DISABLE", "1")
-
-# Also disable datasets library progress bars
-import datasets
-
-datasets.disable_progress_bars()
+sys.path.append(str(Path(__file__).parent.parent))
+from data.common_prep import DataPrep, add_num_proc_arg, get_common_parser
 
 
 def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> tuple[int, int]:
@@ -31,20 +32,13 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> tuple[int
     Returns:
         Tuple of (train_tokens, val_tokens)
     """
-    # Create output directory
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    # number of workers in .map() call
-    # good number to use is ~order number of cpu cores // 2
-    num_proc = num_proc
+    prep = DataPrep(data_dir)
+    subset = prep.validate_subset(subset)
 
     # number of workers in load_dataset() call
     # best number might be different from num_proc above as it also depends on NW speed.
     # it is better than 1 usually though
     num_proc_load_dataset = num_proc
-
-    # Validate subset parameter
-    subset = max(min(subset, 1.0), 0.0)
 
     if subset < 1.0:
         print(f"Using subset {subset:.6f} - will download only required examples")
@@ -110,22 +104,13 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> tuple[int
     #     })
     # })
 
-    # we now want to tokenize the dataset. first define the encoding function (gpt2 bpe)
-    enc = get_encoding("gpt2")
-
-    def process(example):
-        ids = enc.encode_ordinary(
-            example["text"]
-        )  # encode_ordinary ignores any special tokens
-        ids.append(enc.eot_token)  # add the end of text token, e.g. 50256 for gpt2 bpe
-        # note: I think eot should be prepended not appended... hmm. it's called "eot" though...
-        out = {"ids": ids, "len": len(ids)}
-        return out
+    # Tokenize the dataset using common utility
+    process_fn = prep.create_tokenization_function("text")
 
     # tokenize the dataset
     tokenized = {
         split: dset.map(
-            process,
+            process_fn,
             remove_columns=["text"],
             desc=f"tokenizing {split} split",
             num_proc=num_proc,
@@ -133,63 +118,25 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> tuple[int
         for split, dset in split_dataset.items()
     }
 
-    # concatenate all the ids in each dataset into one large file we can use for training
+    # Write binary files using common utility
     for split, dset in tokenized.items():
-        arr_len = np.sum(dset["len"], dtype=np.uint64)
-        filename = data_dir / f"{split}.bin"
-        dtype = np.uint16  # (can do since enc.max_token_value == 50256 is < 2**16)
-        arr = np.memmap(filename, dtype=dtype, mode="w+", shape=(arr_len,))
-        # Use adaptive batching based on dataset size
-        dataset_size = len(dset)
-        total_batches = min(
-            1024, max(1, dataset_size // 100)
-        )  # At least 1 batch, at most 1024
+        prep.write_binary_file(dset, split)
 
-        idx = 0
-        for batch_idx in range(total_batches):
-            # Batch together samples for faster write
-            batch = dset.shard(
-                num_shards=total_batches, index=batch_idx, contiguous=True
-            ).with_format("numpy")
-            arr_batch = np.concatenate(batch["ids"])
-            # Write into mmap
-            arr[idx : idx + len(arr_batch)] = arr_batch
-            idx += len(arr_batch)
-        arr.flush()
-
-    # save the meta information as well, to help us encode/decode later
-    meta = {
-        "vocab_size": 50257,  # GPT-2 vocab size
-        "tokenizer": "gpt2",
-    }
-    with open(data_dir / "meta.pkl", "wb") as f:
-        pickle.dump(meta, f)
+    # Save metadata
+    prep.save_meta()
 
     return int(np.sum(tokenized["train"]["len"])), int(np.sum(tokenized["val"]["len"]))
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Prepare the OpenWebText dataset.")
-    parser.add_argument(
-        "--data-dir", type=Path, default=Path(__file__).parent, help="Output directory."
-    )
-    parser.add_argument(
-        "--num-proc", type=int, default=8, help="Parallel worker processes."
-    )
-    parser.add_argument(
-        "--subset",
-        type=float,
-        default=1.0,
-        help="Fraction of each split to keep (0 < subset ≤ 1).",
-    )
-
+    parser = get_common_parser("Prepare the OpenWebText dataset.")
+    add_num_proc_arg(parser, default=8)
     args = parser.parse_args()
+
     train_tokens, val_tokens = prepare(args.data_dir, args.num_proc, args.subset)
-    print(f"✅ Preparation complete for openwebtext")
-    print(f"Train tokens: {train_tokens:,}")
-    print(f"Val tokens:   {val_tokens:,}")
+
+    prep = DataPrep(args.data_dir)
+    prep.print_completion("openwebtext", train_tokens, val_tokens)
 
     # train.bin is ~17GB, val.bin ~8.5MB
     # train has ~9B tokens (9,035,582,198)

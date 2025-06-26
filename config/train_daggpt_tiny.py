@@ -19,6 +19,7 @@ dag_depth = 4  # reduce DAG cost
 n_layer = 2  # very shallow
 n_head = 4  # just enough heads
 n_embd = 128  # smallest safe embedding
+subset = 0.2  # subset of the dataset to train on
 
 dropout = 0.1
 bias = True

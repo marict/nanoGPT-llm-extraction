@@ -12,28 +12,17 @@ python prepare_proofpile.py --data-dir /path/to/out --num-proc 8 --subset 0.0000
 
 from __future__ import annotations
 
-import argparse
-import os
-import pickle
+import sys
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Tuple
 
 import numpy as np
 from datasets import load_dataset
-from tiktoken import get_encoding
 
-# Disable progress bars to prevent broken newlines in containers/remote terminals
-os.environ.setdefault("TQDM_DISABLE", "1")
-
-# Also disable datasets library progress bars
-import datasets
-
-datasets.disable_progress_bars()
+sys.path.append(str(Path(__file__).parent.parent))
+from data.common_prep import DataPrep, add_num_proc_arg, get_common_parser
 
 
-# --------------------------------------------------------------------------- #
-# Core routine
-# --------------------------------------------------------------------------- #
 def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> Tuple[int, int]:
     """Download, tokenize, and binarize Proof-Pile.
 
@@ -47,8 +36,8 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> Tuple[int
     -------
     (train_tokens, val_tokens)
     """
-    data_dir.mkdir(parents=True, exist_ok=True)
-    subset = max(min(subset, 1.0), 0.0)
+    prep = DataPrep(data_dir)
+    subset = prep.validate_subset(subset)
     pct = subset * 100.0
 
     # constants are approximate dataset sizes at time of writing
@@ -88,19 +77,12 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> Tuple[int
     for k, d in split_dataset.items():
         print(f"  {k}: {len(d):,} examples")
 
-    # --------------------------------------------------------------------- #
-    # Tokenize
-    # --------------------------------------------------------------------- #
-    enc = get_encoding("gpt2")
-
-    def _encode(example: Dict[str, str]):
-        ids = enc.encode_ordinary(example["text"])
-        ids.append(enc.eot_token)
-        return {"ids": ids, "len": len(ids)}
+    # Tokenize using common utility
+    process_fn = prep.create_tokenization_function("text")
 
     tokenized = {
         split: d.map(
-            _encode,
+            process_fn,
             remove_columns=[c for c in d.column_names if c != "text"],
             desc=f"tokenizing {split}",
             num_proc=num_proc,
@@ -108,47 +90,26 @@ def prepare(data_dir: Path, num_proc: int = 8, subset: float = 1.0) -> Tuple[int
         for split, d in split_dataset.items()
     }
 
-    # --------------------------------------------------------------------- #
-    # Write uint16 streams
-    # --------------------------------------------------------------------- #
+    # Write binary files using common utility
     for split, d in tokenized.items():
-        arr_len = np.sum(d["len"], dtype=np.uint64)
-        mmap = np.memmap(
-            data_dir / f"{split}.bin", dtype=np.uint16, mode="w+", shape=(arr_len,)
-        )
+        prep.write_binary_file(d, split)
 
-        total_batches = min(1024, max(1, len(d) // 100))
-        idx = 0
-        for b in range(total_batches):
-            shard = d.shard(total_batches, b, contiguous=True).with_format("numpy")
-            batch_ids = np.concatenate(shard["ids"])
-            mmap[idx : idx + len(batch_ids)] = batch_ids
-            idx += len(batch_ids)
-        mmap.flush()
-
-    # save tokenizer meta
-    with (data_dir / "meta.pkl").open("wb") as f:
-        pickle.dump({"vocab_size": 50257, "tokenizer": "gpt2"}, f)
+    # Save metadata
+    prep.save_meta()
 
     return int(np.sum(tokenized["train"]["len"])), int(np.sum(tokenized["val"]["len"]))
 
 
-# --------------------------------------------------------------------------- #
-# CLI
-# --------------------------------------------------------------------------- #
-def _get_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Prepare the Proof-Pile dataset.")
-    p.add_argument("--data-dir", type=Path, default=Path("."), help="Output directory")
-    p.add_argument("--num-proc", type=int, default=8, help="Tokenization workers")
-    p.add_argument(
-        "--subset", type=float, default=1.0, help="Fraction of each split to keep"
-    )
-    return p
+def _get_parser():
+    """Get argument parser for ProofPile preparation."""
+    parser = get_common_parser("Prepare the Proof-Pile dataset.")
+    add_num_proc_arg(parser, default=8)
+    return parser
 
 
 if __name__ == "__main__":
     args = _get_parser().parse_args()
     tr_tok, va_tok = prepare(args.data_dir, args.num_proc, args.subset)
-    print("✅ Preparation complete")
-    print(f"Train tokens: {tr_tok:,}")
-    print(f"Val tokens:   {va_tok:,}")
+
+    prep = DataPrep(args.data_dir)
+    prep.print_completion("proof-pile", tr_tok, va_tok)

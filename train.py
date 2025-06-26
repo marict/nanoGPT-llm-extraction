@@ -355,12 +355,47 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     torch.manual_seed(1337 + seed_offset)
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
-    device = "cuda" if CUDA_AVAILABLE else "cpu"
+
+    # Determine the best available device
+    if CUDA_AVAILABLE:
+        device = "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+
+    # Smart dtype handling with fallback for unsupported bfloat16
+    original_dtype = cfg.dtype
+    if cfg.dtype == "bfloat16":
+        if device == "cuda" and torch.cuda.is_bf16_supported():
+            # BFloat16 is supported on this CUDA device
+            actual_dtype = "bfloat16"
+        elif device == "cuda":
+            # CUDA available but BFloat16 not supported, fallback to float16
+            actual_dtype = "float16"
+            print(
+                f"⚠️  BFloat16 requested but not supported on this CUDA device. Falling back to Float16."
+            )
+        else:
+            # Non-CUDA device (CPU/MPS), fallback to float32 for stability
+            actual_dtype = "float32"
+            print(
+                f"⚠️  BFloat16 requested but not supported on {device} device. Falling back to Float32."
+            )
+    else:
+        actual_dtype = cfg.dtype
+
     ptdtype = {
         "float32": torch.float32,
         "bfloat16": torch.bfloat16,
         "float16": torch.float16,
-    }[cfg.dtype]
+    }[actual_dtype]
+
+    if original_dtype != actual_dtype:
+        print(
+            f"[{time.time() - setup_start:.2f}s] Dtype fallback: {original_dtype} → {actual_dtype}"
+        )
+
     ctx = (
         nullcontext()
         if device == "cpu"
@@ -520,7 +555,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
 
     # Different scaler for different torch versions
     # One for the local version and one for the runpod version
-    scalar_enabled = cfg.dtype == "float16"
+    scalar_enabled = actual_dtype == "float16"
     scaler = (
         torch.cuda.amp.GradScaler(enabled=scalar_enabled)
         if TORCH_2_2_1

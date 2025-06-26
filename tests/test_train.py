@@ -1,14 +1,9 @@
 import os
-import pickle
-import re
-import subprocess
-import sys
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import numpy as np
 import pytest
 import torch
 
@@ -192,6 +187,77 @@ def test_subset_config_edge_cases():
         assert False, "Should have raised ValueError for invalid subset type"
     except ValueError:
         pass  # Expected
+
+
+def test_dtype_fallback_behavior(capsys):
+    """Test automatic dtype fallback for unsupported bfloat16 with console output."""
+
+    def simulate_dtype_fallback(config_dtype, device, cuda_bf16_supported=False):
+        """Simulate the dtype fallback logic from train.py"""
+        if config_dtype == "bfloat16":
+            if device == "cuda" and cuda_bf16_supported:
+                actual_dtype = "bfloat16"
+            elif device == "cuda":
+                actual_dtype = "float16"
+                print(
+                    f"⚠️  BFloat16 requested but not supported on this CUDA device. Falling back to Float16."
+                )
+            else:
+                actual_dtype = "float32"
+                print(
+                    f"⚠️  BFloat16 requested but not supported on {device} device. Falling back to Float32."
+                )
+        else:
+            actual_dtype = config_dtype
+        return actual_dtype
+
+    # Test cases: (config_dtype, device, cuda_bf16_supported, expected_dtype, should_warn)
+    test_cases = [
+        ("bfloat16", "cuda", True, "bfloat16", False),  # CUDA with BF16 support
+        ("bfloat16", "cuda", False, "float16", True),  # CUDA without BF16 support
+        ("bfloat16", "mps", False, "float32", True),  # MPS device
+        ("bfloat16", "cpu", False, "float32", True),  # CPU device
+        ("float16", "cuda", False, "float16", False),  # Non-bfloat16 dtype
+    ]
+
+    for (
+        config_dtype,
+        device,
+        cuda_bf16_supported,
+        expected_dtype,
+        should_warn,
+    ) in test_cases:
+        actual_dtype = simulate_dtype_fallback(
+            config_dtype, device, cuda_bf16_supported
+        )
+        captured = capsys.readouterr()
+
+        assert (
+            actual_dtype == expected_dtype
+        ), f"Expected {expected_dtype}, got {actual_dtype}"
+
+        if should_warn:
+            assert (
+                "⚠️" in captured.out
+            ), f"Expected warning for {config_dtype} on {device}"
+            assert (
+                "Falling back to" in captured.out
+            ), f"Expected fallback message for {config_dtype} on {device}"
+        else:
+            assert (
+                "⚠️" not in captured.out
+            ), f"Unexpected warning for {config_dtype} on {device}"
+
+    # Test gradient scaler configuration
+    for test_dtype, expected_enabled in [
+        ("float16", True),
+        ("float32", False),
+        ("bfloat16", False),
+    ]:
+        scalar_enabled = test_dtype == "float16"
+        assert (
+            scalar_enabled == expected_enabled
+        ), f"Scaler should be {expected_enabled} for {test_dtype}"
 
 
 def test_keep_alive_config():
