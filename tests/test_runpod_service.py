@@ -172,10 +172,10 @@ def test_visualize_dag_attention(tmp_path):
 # --------------------------------------------------------------------- #
 # Test init_local_wandb_and_open_browser
 # --------------------------------------------------------------------- #
-def test_init_local_wandb_and_open_browser_success(monkeypatch):
-    """Test successful wandb initialization and browser opening."""
+def test_init_local_wandb_comprehensive(monkeypatch):
+    """Comprehensive test of wandb initialization with various scenarios."""
 
-    # Mock wandb
+    # Test 1: Successful wandb initialization
     class MockRun:
         url = "https://wandb.ai/test/project/runs/test_run_123"
         id = "test_run_123"
@@ -188,87 +188,44 @@ def test_init_local_wandb_and_open_browser_success(monkeypatch):
             def __init__(self):
                 pass
 
-    mock_wandb = MockWandb()
-    monkeypatch.setattr(rp, "wandb", mock_wandb)
-
-    # Mock environment
+    monkeypatch.setattr(rp, "wandb", MockWandb())
     monkeypatch.setenv("WANDB_API_KEY", "test_key_123")
 
-    # Note: subprocess.run is already mocked globally by the fixture
-
-    # Test the function
     result = rp.init_local_wandb_and_open_browser("test-project", "test_run_123")
-
     assert result == ("https://wandb.ai/test/project/runs/test_run_123", "test_run_123")
 
-
-def test_init_local_wandb_and_open_browser_no_api_key(monkeypatch):
-    """Test when WANDB_API_KEY is not set."""
-
-    # Remove WANDB_API_KEY
+    # Test 2: Missing API key
     monkeypatch.delenv("WANDB_API_KEY", raising=False)
-
     result = rp.init_local_wandb_and_open_browser("test-project", "test_run_123")
-
     assert result is None
 
-
-def test_init_local_wandb_and_open_browser_wandb_fails(monkeypatch):
-    """Test when wandb initialization fails."""
-
-    # Mock wandb to raise an exception
+    # Test 3: Wandb initialization fails
     def mock_wandb_init(*args, **kwargs):
         raise Exception("Wandb initialization failed")
 
-    class MockWandb:
+    class MockWandbFail:
         init = mock_wandb_init
 
         class Settings:
             def __init__(self):
                 pass
 
-    monkeypatch.setattr(rp, "wandb", MockWandb())
+    monkeypatch.setattr(rp, "wandb", MockWandbFail())
     monkeypatch.setenv("WANDB_API_KEY", "test_key_123")
 
     result = rp.init_local_wandb_and_open_browser("test-project", "test_run_123")
-
     assert result is None
 
 
-def test_init_local_wandb_and_open_browser_chrome_fails(monkeypatch):
-    """Test when Chrome opening fails but wandb succeeds."""
+def test_start_cloud_training_comprehensive(monkeypatch, tmp_path):
+    """Comprehensive test of cloud training with various configurations."""
 
-    # Mock wandb
-    class MockRun:
-        url = "https://wandb.ai/test/project/runs/test_run_123"
-        id = "test_run_123"
+    # Setup common mocks
+    created_pods = []
 
-    class MockWandb:
-        def init(self, project, name, tags, notes):
-            return MockRun()
-
-        class Settings:
-            def __init__(self):
-                pass
-
-    monkeypatch.setattr(rp, "wandb", MockWandb())
-    monkeypatch.setenv("WANDB_API_KEY", "test_key_123")
-
-    # Note: subprocess.run is already mocked globally by the fixture
-
-    # Test the function
-    result = rp.init_local_wandb_and_open_browser("test-project", "test_run_123")
-
-    # Should still return tuple even if Chrome opening fails
-    assert result == ("https://wandb.ai/test/project/runs/test_run_123", "test_run_123")
-
-
-def test_start_cloud_training_with_wandb_integration(monkeypatch):
-    """Test that start_cloud_training calls wandb initialization."""
-
-    # Mock RunPod API
     def fake_create_pod(**kwargs):
-        return {"id": "pod123"}
+        created_pods.append(kwargs)
+        return {"id": f"pod{len(created_pods)}"}
 
     monkeypatch.setenv("RUNPOD_API_KEY", "test_key")
     monkeypatch.setattr(rp.runpod, "create_pod", fake_create_pod)
@@ -278,7 +235,6 @@ def test_start_cloud_training_with_wandb_integration(monkeypatch):
         lambda: [{"id": "gpu123", "displayName": rp.DEFAULT_GPU_TYPE}],
     )
 
-    # Track wandb initialization calls
     wandb_calls = []
 
     def mock_init_wandb(project_name, run_id):
@@ -287,119 +243,37 @@ def test_start_cloud_training_with_wandb_integration(monkeypatch):
 
     monkeypatch.setattr(rp, "init_local_wandb_and_open_browser", mock_init_wandb)
 
-    # Test
+    # Test 1: Default configuration
     pod_id = rp.start_cloud_training("config/test.py")
-
-    # Verify wandb was called
+    assert pod_id == "pod1"
     assert len(wandb_calls) == 1
-    assert wandb_calls[0]["project"] == "daggpt-train"  # default project name
-    assert (
-        wandb_calls[0]["run_id"] == "daggpt-train"
-    )  # run_id is pod_name now, not pod_id
+    assert wandb_calls[0]["project"] == "daggpt-train"
+    assert wandb_calls[0]["run_id"] == "daggpt-train"
 
+    # Test 2: With keep-alive flag
+    created_pods.clear()
+    wandb_calls.clear()
 
-def test_start_cloud_training_extracts_project_name_from_config(monkeypatch, tmp_path):
-    """Test that project name is extracted from config file."""
+    pod_id = rp.start_cloud_training("config/test.py", keep_alive=True)
+    assert pod_id == "pod1"
+    assert len(created_pods) == 1
+    assert "--keep-alive" in created_pods[0]["docker_args"]
 
-    # Create a test config file
+    # Test 3: Without keep-alive flag (explicit False)
+    created_pods.clear()
+    wandb_calls.clear()
+
+    pod_id = rp.start_cloud_training("config/test.py", keep_alive=False)
+    assert pod_id == "pod1"
+    assert len(created_pods) == 1
+    assert "--keep-alive" not in created_pods[0]["docker_args"]
+
+    # Test 4: Custom project name from config
     config_file = tmp_path / "test_config.py"
     config_file.write_text('name = "custom-project-name"\n')
 
-    # Mock RunPod API
-    def fake_create_pod(**kwargs):
-        return {"id": "pod456"}
-
-    monkeypatch.setenv("RUNPOD_API_KEY", "test_key")
-    monkeypatch.setattr(rp.runpod, "create_pod", fake_create_pod)
-    monkeypatch.setattr(
-        rp.runpod,
-        "get_gpus",
-        lambda: [{"id": "gpu123", "displayName": rp.DEFAULT_GPU_TYPE}],
-    )
-
-    # Track wandb initialization calls
-    wandb_calls = []
-
-    def mock_init_wandb(project_name, run_id):
-        wandb_calls.append({"project": project_name, "run_id": run_id})
-        return ("https://wandb.ai/test/project/runs/abc123", "abc123")
-
-    monkeypatch.setattr(rp, "init_local_wandb_and_open_browser", mock_init_wandb)
-
-    # Test
+    wandb_calls.clear()
     pod_id = rp.start_cloud_training(str(config_file))
-
-    # Verify wandb was called with custom project name
     assert len(wandb_calls) == 1
     assert wandb_calls[0]["project"] == "custom-project-name"
-    assert (
-        wandb_calls[0]["run_id"] == "custom-project-name"
-    )  # run_id is pod_name now, not pod_id
-
-
-def test_start_cloud_training_with_keep_alive(monkeypatch):
-    """Test that start_cloud_training handles keep-alive flag correctly."""
-
-    # Mock RunPod API
-    created_pods = []
-
-    def fake_create_pod(**kwargs):
-        created_pods.append(kwargs)
-        return {"id": "pod789"}
-
-    monkeypatch.setenv("RUNPOD_API_KEY", "test_key")
-    monkeypatch.setattr(rp.runpod, "create_pod", fake_create_pod)
-    monkeypatch.setattr(
-        rp.runpod,
-        "get_gpus",
-        lambda: [{"id": "gpu123", "displayName": rp.DEFAULT_GPU_TYPE}],
-    )
-
-    # Mock wandb initialization
-    def mock_init_wandb(project_name, run_id):
-        return ("https://wandb.ai/test/project/runs/abc123", "abc123")
-
-    monkeypatch.setattr(rp, "init_local_wandb_and_open_browser", mock_init_wandb)
-
-    # Test with keep_alive=True
-    pod_id = rp.start_cloud_training("config/test.py", keep_alive=True)
-
-    # Verify docker args include keep-alive flag
-    assert len(created_pods) == 1
-    docker_args = created_pods[0]["docker_args"]
-    assert "--keep-alive" in docker_args
-    assert pod_id == "pod789"
-
-
-def test_start_cloud_training_without_keep_alive(monkeypatch):
-    """Test that start_cloud_training works normally without keep-alive flag."""
-
-    # Mock RunPod API
-    created_pods = []
-
-    def fake_create_pod(**kwargs):
-        created_pods.append(kwargs)
-        return {"id": "pod999"}
-
-    monkeypatch.setenv("RUNPOD_API_KEY", "test_key")
-    monkeypatch.setattr(rp.runpod, "create_pod", fake_create_pod)
-    monkeypatch.setattr(
-        rp.runpod,
-        "get_gpus",
-        lambda: [{"id": "gpu123", "displayName": rp.DEFAULT_GPU_TYPE}],
-    )
-
-    # Mock wandb initialization
-    def mock_init_wandb(project_name, run_id):
-        return ("https://wandb.ai/test/project/runs/abc123", "abc123")
-
-    monkeypatch.setattr(rp, "init_local_wandb_and_open_browser", mock_init_wandb)
-
-    # Test with keep_alive=False (default)
-    pod_id = rp.start_cloud_training("config/test.py", keep_alive=False)
-
-    # Verify docker args do NOT include keep-alive flag
-    assert len(created_pods) == 1
-    docker_args = created_pods[0]["docker_args"]
-    assert "--keep-alive" not in docker_args
-    assert pod_id == "pod999"
+    assert wandb_calls[0]["run_id"] == "custom-project-name"

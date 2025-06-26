@@ -18,204 +18,91 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "container_setup.sh"
 
 
-# --------------------------------------------------------------------------- #
-# helpers
-# --------------------------------------------------------------------------- #
-def _print_result(name: str, ok: bool) -> bool:
-    icon = "✅" if ok else "❌"
-    print(f"{icon} {name}")
-    return ok
+def test_container_setup_comprehensive():
+    """Comprehensive test of container setup script existence, syntax, and required content."""
 
+    # Test 1: Basic file checks
+    assert SCRIPT.exists(), f"Container setup script not found at {SCRIPT}"
+    assert os.access(
+        SCRIPT, os.X_OK
+    ), f"Container setup script is not executable: {SCRIPT}"
 
-# --------------------------------------------------------------------------- #
-# individual checks
-# --------------------------------------------------------------------------- #
-def test_script_exists() -> None:
-    assert _print_result("script exists", SCRIPT.exists())
-    assert _print_result("script is executable", os.access(SCRIPT, os.X_OK))
-
-
-def test_bash_syntax() -> None:
-    print("\nchecking bash -n syntax …")
+    # Test 2: Bash syntax validation
     proc = subprocess.run(["bash", "-n", str(SCRIPT)], capture_output=True, text=True)
-    ok = proc.returncode == 0
-    if not ok:
-        print(proc.stderr.strip())
-    assert _print_result("bash syntax valid", ok)
+    assert (
+        proc.returncode == 0
+    ), f"Bash syntax error in {SCRIPT}:\n{proc.stderr.strip()}"
 
-
-def test_content_tokens() -> None:
-    required = {
-        "shebang": {
-            "token": "#!/usr/bin/env bash",
-            "purpose": "Script interpreter declaration - tells system to run with bash",
-        },
-        "error handling": {
-            "token": "set -e",
-            "purpose": "Exit on any error - critical for container reliability",
-        },
-        "timing variable": {
-            "token": "start_time=",
-            "purpose": "Timing variable for log timestamps - needed for log() function",
-        },
-        "apt-get": {
-            "token": "apt-get",
-            "purpose": "System package installation - needed to install tree and other dependencies",
-        },
-        "pip install": {
-            "token": "pip install",
-            "purpose": "Python package installation - needed to install project dependencies",
-        },
-        "python train": {
-            "token": "python -u train.py",
-            "purpose": "Training script execution - core functionality of the container",
-        },
-        "arg forward": {
-            "token": 'python -u train.py "$@"',
-            "purpose": "Argument forwarding - allows passing training arguments to the script",
-        },
-        "training completion": {
-            "token": "python -u train.py",
-            "purpose": "Training script execution - container stops automatically via stop_runpod",
-        },
-        "keep-alive support": {
-            "token": "tail -f /dev/null",
-            "purpose": "Keep container alive when --keep-alive flag is used",
-        },
-        "log function": {
-            "token": "log()",
-            "purpose": "Logging function definition - provides structured logging with timestamps",
-        },
-        "cd to repo": {
-            "token": "cd /workspace/repo",
-            "purpose": "Change to repository directory - ensures we're in the right working directory",
-        },
-    }
-
+    # Test 3: Required content and structure
     text = SCRIPT.read_text()
-    print("\nscanning script tokens …")
-    missing_tokens = []
+    lines = text.splitlines()
 
-    for label, info in required.items():
-        token = info["token"]
-        purpose = info["purpose"]
-        found = token in text
-        if not found:
-            missing_tokens.append(f"  ❌ {label}: '{token}' - {purpose}")
-        else:
-            print(f"  ✅ {label}: '{token}'")
-
-    if missing_tokens:
-        print("\n❌ MISSING REQUIRED TOKENS:")
-        for missing in missing_tokens:
-            print(missing)
-        print(f"\nThe container setup script is missing essential components.")
-        print(f"Please check {SCRIPT} and ensure all required tokens are present.")
-        assert (
-            False
-        ), f"Container setup script missing {len(missing_tokens)} required tokens"
-
-    print(f"\n✅ All {len(required)} required tokens found in container setup script")
-
-
-def test_structure_hints() -> None:
-    lines = SCRIPT.read_text().splitlines()
-
-    checks = [
+    # Required tokens with their purposes
+    required_checks = [
         (
-            "has shebang",
-            lines[0].startswith("#!/usr/bin/env bash"),
-            "First line must declare bash interpreter",
+            "#!/usr/bin/env bash",
+            "Script interpreter declaration",
+            lambda: lines[0].startswith("#!/usr/bin/env bash"),
         ),
         (
-            "has set -e",
-            any("set -e" in l for l in lines),
-            "Script must exit on errors for container reliability",
+            "set -e",
+            "Exit on any error for container reliability",
+            lambda: "set -e" in text,
         ),
         (
-            "has start_time var",
-            any("start_time=" in l for l in lines),
-            "Timing variable needed for log timestamps",
+            "start_time=",
+            "Timing variable for log timestamps",
+            lambda: "start_time=" in text,
+        ),
+        ("apt-get", "System package installation", lambda: "apt-get" in text),
+        ("pip install", "Python package installation", lambda: "pip install" in text),
+        (
+            "python -u train.py",
+            "Training script execution",
+            lambda: "python -u train.py" in text,
         ),
         (
-            "has apt-get",
-            any("apt-get" in l for l in lines),
-            "System package installation required",
+            'python -u train.py "$@"',
+            "Argument forwarding capability",
+            lambda: 'python -u train.py "$@"' in text,
         ),
         (
-            "has pip install",
-            any("pip install" in l for l in lines),
-            "Python package installation required",
+            "tail -f /dev/null",
+            "Keep-alive support",
+            lambda: "tail -f /dev/null" in text,
         ),
+        ("log()", "Logging function definition", lambda: "log()" in text),
         (
-            "has training execution",
-            any("python -u train.py" in l for l in lines),
-            "Training script execution - container stops automatically",
-        ),
-        (
-            "has keep-alive support",
-            any("tail -f /dev/null" in l for l in lines),
-            "Keep container alive when --keep-alive flag is used",
-        ),
-        (
-            "has log function",
-            any("log()" in l for l in lines),
-            "Logging function needed for structured output",
-        ),
-        (
-            "has cd to repo",
-            any("cd /workspace/repo" in l for l in lines),
-            "Must change to repository directory",
+            "cd /workspace/repo",
+            "Change to repository directory",
+            lambda: "cd /workspace/repo" in text,
         ),
     ]
 
-    print("\nchecking structure hints …")
-    missing_checks = []
+    # Check all requirements
+    missing_requirements = []
+    for token, purpose, check_fn in required_checks:
+        if not check_fn():
+            missing_requirements.append(f"Missing {token}: {purpose}")
 
-    for label, ok, purpose in checks:
-        if not ok:
-            missing_checks.append(f"  ❌ {label}: {purpose}")
-        else:
-            print(f"  ✅ {label}")
-
-    if missing_checks:
-        print("\n❌ STRUCTURE ISSUES FOUND:")
-        for missing in missing_checks:
-            print(missing)
-        print(f"\nThe container setup script has structural problems.")
-        print(
-            f"Please check {SCRIPT} and ensure all required structural elements are present."
-        )
-        assert (
-            False
-        ), f"Container setup script has {len(missing_checks)} structural issues"
-
-    print(f"\n✅ All {len(checks)} structural checks passed")
+    assert not missing_requirements, (
+        f"Container setup script missing {len(missing_requirements)} required elements:\n"
+        + "\n".join(f"  - {req}" for req in missing_requirements)
+    )
 
 
 # --------------------------------------------------------------------------- #
 # main entry (optional standalone run)
 # --------------------------------------------------------------------------- #
 def _run_all() -> int:
-    tests: list[tuple[str, Callable[[], None]]] = [
-        ("existence / exec", test_script_exists),
-        ("bash syntax", test_bash_syntax),
-        ("content tokens", test_content_tokens),
-        ("structure", test_structure_hints),
-    ]
-
     print("🧪 running container_setup.sh tests\n")
     try:
-        for name, fn in tests:
-            print(f"→ {name}")
-            fn()
-            print()
-    except AssertionError:
-        print("❌ some tests failed")
+        test_container_setup_comprehensive()
+        print("🎉 all tests passed")
+        return 0
+    except AssertionError as e:
+        print(f"❌ test failed: {e}")
         return 1
-
-    print("🎉 all tests passed")
-    return 0
 
 
 if __name__ == "__main__":

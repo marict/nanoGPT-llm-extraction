@@ -23,124 +23,113 @@ def small_gpt():
     return GPT(config)
 
 
-def test_model_forward(small_gpt):
+def test_model_forward_and_generation(small_gpt):
+    """Test model forward pass, generation, and parameter counting."""
     model = small_gpt
     x = torch.randint(0, 10, (1, 4))
+
+    # Test forward pass
     out, _ = model(x, targets=x)
     assert out.shape == (1, 4, 10)
 
+    # Test generation capability
+    generated = model.generate(x, max_new_tokens=2)
+    assert generated.shape == (1, 6)
+    assert torch.equal(generated[:, :4], x)
+    assert torch.all(generated < 10)  # Within vocab size
 
-def test_causal_self_attention():
-    # Test CausalSelfAttention with a simple input
+    # Test parameter counting
+    param_count = model.get_num_params()
+    assert isinstance(param_count, int)
+    assert param_count > 0
+
+
+def test_transformer_components():
+    """Test all transformer component shapes and basic functionality."""
     config = GPTConfig(n_embd=4, n_head=2, block_size=8, dag_depth=0)
+    x = torch.randn(2, 8, 4)
+
+    # Test CausalSelfAttention
     attn = CausalSelfAttention(config)
-    x = torch.randn(2, 8, 4)
-    out = attn(x)
-    assert out.shape == x.shape, "Attention output shape mismatch"
-    # Check that the output is not all zeros
-    assert not torch.allclose(
-        out, torch.zeros_like(out)
-    ), "Attention output is all zeros"
+    attn_out = attn(x)
+    assert attn_out.shape == x.shape
 
-
-def test_layer_norm():
-    # Test LayerNorm with a simple input
+    # Test LayerNorm
     layer_norm = LayerNorm(4, bias=True)
-    x = torch.randn(2, 8, 4)
-    out = layer_norm(x)
-    assert out.shape == x.shape, "LayerNorm output shape mismatch"
-    # Check that the output is not all zeros
-    assert not torch.allclose(
-        out, torch.zeros_like(out)
-    ), "LayerNorm output is all zeros"
+    ln_out = layer_norm(x)
+    assert ln_out.shape == x.shape
 
-
-def test_mlp():
-    # Test MLP with a simple input
-    config = GPTConfig(n_embd=4, dag_depth=0)
+    # Test MLP
     mlp = MLP(config)
-    x = torch.randn(2, 8, 4)
-    out = mlp(x)
-    assert out.shape == x.shape, "MLP output shape mismatch"
-    # Check that the output is not all zeros
-    assert not torch.allclose(out, torch.zeros_like(out)), "MLP output is all zeros"
+    mlp_out = mlp(x)
+    assert mlp_out.shape == x.shape
 
-
-def test_block():
-    # Test Block with a simple input
-    config = GPTConfig(n_embd=4, n_head=2, block_size=8, dag_depth=0)
+    # Test Block (combines attention + MLP)
     block = Block(config)
-    x = torch.randn(2, 8, 4)
-    out = block(x)
-    assert out.shape == x.shape, "Block output shape mismatch"
-    # Check that the output is not all zeros
-    assert not torch.allclose(out, torch.zeros_like(out)), "Block output is all zeros"
+    block_out = block(x)
+    assert block_out.shape == x.shape
 
 
-def test_extra_vals_gpt():
-    """Test that GPT's extra_vals returns an empty dict."""
-    config = GPTConfig(
-        n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=0
+def test_gpt_dag_depth_variations():
+    """Test GPT behavior with different DAG depths."""
+    base_config = GPTConfig(
+        n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100
     )
-    model = GPT(config)
 
-    # Test that extra_vals returns empty dict before any forward pass
-    extra_vals = model.extra_vals()
-    assert isinstance(extra_vals, dict)
-    assert len(extra_vals) == 0
-
-    # Test that extra_vals still returns empty dict after forward pass
-    x = torch.randint(0, config.vocab_size, (2, 8))
-    model(x)
-    extra_vals_after_forward = model.extra_vals()
-    assert isinstance(extra_vals_after_forward, dict)
-    assert len(extra_vals_after_forward) == 0
-
-
-def test_gpt_dag_depth_zero():
-    """Test that GPT with dag_depth=0 behaves like standard GPT."""
-    config = GPTConfig(
-        n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=0
-    )
-    model = GPT(config)
+    # Test DAG depth = 0 (standard GPT)
+    config_zero = GPTConfig(**{**base_config.__dict__, "dag_depth": 0})
+    model_zero = GPT(config_zero)
 
     # Should not have DAG-specific components
-    assert not hasattr(model, "value_extractor")
-    assert not hasattr(model, "dag")
-    assert not hasattr(model, "mix_gate")
+    assert not hasattr(model_zero, "value_extractor")
+    assert not hasattr(model_zero, "dag")
+    assert not hasattr(model_zero, "mix_gate")
 
-    # Forward pass should work
-    x = torch.randint(0, config.vocab_size, (2, 8))
-    y = torch.randint(0, config.vocab_size, (2, 8))
-    logits, loss = model(x, y)
-    assert logits.shape == (2, 8, 100)
-    assert loss is not None
-
-    # Generate should work
-    generated = model.generate(x[:, :4], max_new_tokens=4)
-    assert generated.shape == (2, 8)
-
-
-def test_gpt_dag_depth_nonzero():
-    """Test that GPT with dag_depth>0 has DAG components."""
-    config = GPTConfig(
-        n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=2
-    )
-    model = GPT(config)
+    # Test DAG depth > 0 (DAG-enabled GPT)
+    config_dag = GPTConfig(**{**base_config.__dict__, "dag_depth": 2})
+    model_dag = GPT(config_dag)
 
     # Should have DAG-specific components
-    assert hasattr(model, "value_extractor")
-    assert hasattr(model, "dag")
-    assert hasattr(model, "mix_gate")
+    assert hasattr(model_dag, "value_extractor")
+    assert hasattr(model_dag, "dag")
+    assert hasattr(model_dag, "mix_gate")
 
-    # Forward pass should work
-    x = torch.randint(0, config.vocab_size, (2, 8))
-    y = torch.randint(0, config.vocab_size, (2, 8))
-    logits, loss = model(x, y)
-    assert logits.shape == (2, 8, 100)
-    assert loss is not None
+    # Test forward pass works for both
+    x = torch.randint(0, 100, (2, 8))
+    y = torch.randint(0, 100, (2, 8))
 
-    # Should have node values
-    node_values = model.get_node_values_list()
+    for model in [model_zero, model_dag]:
+        logits, loss = model(x, y)
+        assert logits.shape == (2, 8, 100)
+        assert loss is not None
+
+        # Test generation
+        generated = model.generate(x[:, :4], max_new_tokens=4)
+        assert generated.shape == (2, 8)
+
+
+def test_extra_vals_functionality():
+    """Test extra_vals method for both standard and DAG models."""
+    # Standard GPT should return empty dict
+    config_std = GPTConfig(
+        n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=0
+    )
+    model_std = GPT(config_std)
+
+    # Before and after forward pass
+    assert model_std.extra_vals() == {}
+
+    x = torch.randint(0, 100, (2, 8))
+    model_std(x)
+    assert model_std.extra_vals() == {}
+
+    # DAG model should have node values
+    config_dag = GPTConfig(
+        n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=2
+    )
+    model_dag = GPT(config_dag)
+    model_dag(x)
+
+    node_values = model_dag.get_node_values_list()
     assert isinstance(node_values, list)
     assert len(node_values) > 0

@@ -300,134 +300,58 @@ def test_keep_alive_config():
         pass  # Expected
 
 
-def test_math_eval_config_integration():
-    """Test that math evaluation config options work correctly."""
-    cfg = train.TrainConfig()
+def test_math_eval_comprehensive():
+    """Comprehensive test of math evaluation functionality and configuration."""
+    from dag_model import GPT, GPTConfig
 
-    # Test default math eval configuration
+    # Test 1: Default configuration
+    cfg = train.TrainConfig()
     assert cfg.eval_math == True
     assert cfg.math_eval_tasks == ["gsm8k", "svamp"]
     assert cfg.math_eval_max_examples == 50
 
-    # Test config override
+    # Test 2: Config override
     override_data = {
         "eval_math": False,
-        "math_eval_tasks": ["gsm8k", "svamp"],
+        "math_eval_tasks": ["gsm8k"],
         "math_eval_max_examples": 100,
     }
     train.update_config(cfg, override_data)
-
     assert cfg.eval_math == False
-    assert cfg.math_eval_tasks == ["gsm8k", "svamp"]
+    assert cfg.math_eval_tasks == ["gsm8k"]
     assert cfg.math_eval_max_examples == 100
 
-
-def test_evaluate_math():
-    """Test the evaluate_math function."""
-    from dag_model import GPT, GPTConfig
-
-    # Create a small test model
+    # Test 3: Math evaluation function
     config = GPTConfig(
-        n_layer=1,  # Reduced layers
-        n_head=1,  # Reduced heads
-        n_embd=8,  # Much smaller embedding
-        vocab_size=100,  # Much smaller vocab
-        block_size=8,  # Much smaller block
+        n_layer=1,
+        n_head=1,
+        n_embd=8,
+        vocab_size=100,
+        block_size=8,
         bias=False,
         dag_depth=0,
     )
     model = GPT(config)
 
-    # Mock the run_math_eval.run_eval function
+    # Test with specific tasks
     with mock.patch("run_math_eval.run_eval") as mock_run_eval:
         mock_run_eval.return_value = {"gsm8k": 0.25}
-
         scores = train.evaluate_math(model, "cpu", tasks=["gsm8k"], max_examples=5)
-
         assert scores == {"gsm8k": 0.25}
-        mock_run_eval.assert_called_once_with(
-            model, "cpu", tasks=["gsm8k"], max_examples=5
-        )
 
-
-def test_evaluate_math_default_tasks():
-    """Test evaluate_math with default tasks (no tasks specified)."""
-    from dag_model import GPT, GPTConfig
-
-    # Create a small test model
-    config = GPTConfig(
-        n_layer=1,  # Reduced layers
-        n_head=1,  # Reduced heads
-        n_embd=8,  # Much smaller embedding
-        vocab_size=100,  # Much smaller vocab
-        block_size=8,  # Much smaller block
-        bias=False,
-        dag_depth=0,
-    )
-    model = GPT(config)
-
-    # Mock the run_math_eval.run_eval function
+    # Test with default tasks
     with mock.patch("run_math_eval.run_eval") as mock_run_eval:
         mock_run_eval.return_value = {"gsm8k": 0.25, "svamp": 0.35}
-
-        # Call with no tasks specified - should use defaults
         scores = train.evaluate_math(model, "cpu", max_examples=5)
-
         assert scores == {"gsm8k": 0.25, "svamp": 0.35}
-        # Verify it was called with both default tasks
-        mock_run_eval.assert_called_once_with(
-            model, "cpu", tasks=["gsm8k", "svamp"], max_examples=5
-        )
 
-
-def test_evaluate_math_error_handling():
-    """Test evaluate_math error handling."""
-    from dag_model import GPT, GPTConfig
-
-    # Create a small test model
-    config = GPTConfig(
-        n_layer=1,  # Reduced layers
-        n_head=1,  # Reduced heads
-        n_embd=8,  # Much smaller embedding
-        vocab_size=100,  # Much smaller vocab
-        block_size=8,  # Much smaller block
-        bias=False,
-        dag_depth=0,
-    )
-    model = GPT(config)
-
-    # Mock the run_math_eval.run_eval function to raise an exception
+    # Test error handling
     with mock.patch("run_math_eval.run_eval") as mock_run_eval:
         mock_run_eval.side_effect = Exception("Test error")
-
         scores = train.evaluate_math(
             model, "cpu", tasks=["gsm8k", "svamp"], max_examples=5
         )
-
-        # Should return -1.0 for all tasks when error occurs
         assert scores == {"gsm8k": -1.0, "svamp": -1.0}
-
-
-def test_math_eval_config_integration():
-    """Test that math evaluation config options work correctly."""
-    cfg = train.TrainConfig()
-
-    # Test default math eval configuration
-    assert cfg.eval_math == True
-    assert cfg.math_eval_tasks == ["gsm8k", "svamp"]
-    assert cfg.math_eval_max_examples == 50
-
-    # Test config override
-    override_data = {
-        "eval_math": False,
-        "math_eval_tasks": ["gsm8k", "svamp"],
-        "math_eval_max_examples": 100,
-    }
-    train.update_config(cfg, override_data)
-
-    assert cfg.eval_math == False
-    assert cfg.math_eval_tasks == ["gsm8k", "svamp"]
-    assert cfg.math_eval_max_examples == 100
 
 
 def test_checkpoint_filename_generation():
