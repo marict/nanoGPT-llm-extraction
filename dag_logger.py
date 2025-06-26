@@ -114,6 +114,21 @@ class DAGLogger:
             else:
                 metrics[f"dag_grad/{grad_name}"] = grad_val
 
+        # Add gate values (if available)
+        if hasattr(model, "last_gate_values") and model.last_gate_values is not None:
+            gate_values = model.last_gate_values
+            metrics["gate/mean"] = gate_values.mean().item()
+            metrics["gate/min"] = gate_values.min().item()
+            metrics["gate/max"] = gate_values.max().item()
+            # Check if gate is close to 0 (DAG not contributing)
+            close_to_zero = (gate_values < 0.1).float().mean().item()
+            metrics["gate/close_to_zero_ratio"] = close_to_zero
+
+        # Add norm values (if available)
+        if hasattr(model, "last_norm_values") and model.last_norm_values is not None:
+            for norm_name, norm_val in model.last_norm_values.items():
+                metrics[f"norm/{norm_name}"] = norm_val.item()
+
         return metrics
 
     def update_probability_history(self, model) -> None:
@@ -322,6 +337,23 @@ class DAGLogger:
         node_values = self.get_node_values_list(model)
         if node_values:
             print(f"Node values: {[f'{val:.4f}' for val in node_values]}")
+
+        # Gate values
+        if hasattr(model, "last_gate_values") and model.last_gate_values is not None:
+            gate_values = model.last_gate_values
+            gate_mean = gate_values.mean().item()
+            close_to_zero = (gate_values < 0.1).float().mean().item()
+            print(
+                f"Gate values: mean={gate_mean:.4f}, close_to_zero_ratio={close_to_zero:.4f}"
+            )
+
+        # Norm values
+        if hasattr(model, "last_norm_values") and model.last_norm_values is not None:
+            norm_strs = [
+                f"{name}={val.item():.4f}"
+                for name, val in model.last_norm_values.items()
+            ]
+            print(f"Norms: {', '.join(norm_strs)}")
 
     def log_training_step(self, model) -> None:
         """

@@ -402,5 +402,62 @@ def test_logging_integration_training_scenario(small_dag_model):
             ), f"Step {step}: gradient {grad_key} too large: {grad_val}"
 
 
+def test_gate_and_norm_logging():
+    """Test that gate values and norm values are properly captured and logged."""
+    from dag_model import GPT, GPTConfig
+
+    # Create a small DAG-enabled model
+    config = GPTConfig(
+        n_layer=2,
+        n_head=2,
+        n_embd=8,
+        vocab_size=32,
+        block_size=8,
+        bias=False,
+        dag_depth=2,
+    )
+    model = GPT(config)
+    model.eval()
+
+    # Create input
+    x = torch.randint(0, config.vocab_size, (1, config.block_size))
+
+    # Forward pass to generate activations
+    with torch.no_grad():
+        logits, loss = model(x)
+
+    # Get gate and norm values using DAGLogger
+    logger = DAGLogger()
+    extra_vals = logger.get_extra_vals(model)
+
+    # Check that gate values are present
+    assert "gate/mean" in extra_vals, "Gate mean should be logged"
+    assert "gate/min" in extra_vals, "Gate min should be logged"
+    assert "gate/max" in extra_vals, "Gate max should be logged"
+    assert (
+        "gate/close_to_zero_ratio" in extra_vals
+    ), "Gate close_to_zero_ratio should be logged"
+
+    # Check that norm values are present
+    assert "norm/hidden" in extra_vals, "Hidden norm should be logged"
+    assert "norm/dag_sem" in extra_vals, "DAG semantic norm should be logged"
+    assert "norm/fused" in extra_vals, "Fused norm should be logged"
+
+    # Verify gate values are in reasonable range [0, 1]
+    assert 0.0 <= extra_vals["gate/mean"] <= 1.0, "Gate mean should be in [0, 1]"
+    assert 0.0 <= extra_vals["gate/min"] <= 1.0, "Gate min should be in [0, 1]"
+    assert 0.0 <= extra_vals["gate/max"] <= 1.0, "Gate max should be in [0, 1]"
+    assert (
+        0.0 <= extra_vals["gate/close_to_zero_ratio"] <= 1.0
+    ), "Close to zero ratio should be in [0, 1]"
+
+    # Verify norm values are positive
+    assert extra_vals["norm/hidden"] > 0, "Hidden norm should be positive"
+    assert extra_vals["norm/dag_sem"] > 0, "DAG semantic norm should be positive"
+    assert extra_vals["norm/fused"] > 0, "Fused norm should be positive"
+
+    print("✅ Gate and norm logging working correctly")
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

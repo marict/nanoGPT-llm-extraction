@@ -600,6 +600,14 @@ class GPT(nn.Module):
         fused = (1 - gate) * hidden[:, -1, :] + gate * dag_sem
         hidden = torch.cat([hidden[:, :-1, :], fused.unsqueeze(1)], dim=1)
 
+        # Store gate and norm values for logging
+        self.last_gate_values = gate.detach()  # Store gate values for debugging
+        self.last_norm_values = {
+            "hidden": hidden[:, -1, :].norm(dim=-1).mean().detach(),
+            "dag_sem": dag_sem.norm(dim=-1).mean().detach(),
+            "fused": fused.norm(dim=-1).mean().detach(),
+        }
+
         # Store activations and values for logging
         self.last_activations = {
             "node_embeds": node_embeds,
