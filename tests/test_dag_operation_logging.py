@@ -431,7 +431,7 @@ def test_gate_and_norm_logging():
 
     # Check that norm values are present and properly shaped
     assert "norm/hidden" in extra_vals, "Hidden norm should be logged"
-    assert "norm/dag_sem_raw" in extra_vals, "DAG semantic raw norm should be logged"
+    # Note: dag_sem_raw is no longer available since DAG now returns post-processed hidden states
     assert "norm/dag_sem" in extra_vals, "DAG semantic normalized norm should be logged"
     assert "norm/fused" in extra_vals, "Fused norm should be logged"
 
@@ -445,9 +445,7 @@ def test_gate_and_norm_logging():
 
     # Verify norm values are positive and properly shaped
     assert extra_vals["norm/hidden"] > 0, "Hidden norm should be positive"
-    assert (
-        extra_vals["norm/dag_sem_raw"] > 0
-    ), "DAG semantic raw norm should be positive"
+    assert extra_vals["norm/dag_sem"] > 0, "DAG semantic raw norm should be positive"
     assert (
         extra_vals["norm/dag_sem"] > 0
     ), "DAG semantic normalized norm should be positive"
