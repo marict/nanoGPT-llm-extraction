@@ -461,5 +461,66 @@ def test_gate_and_norm_logging():
     ), "All node values should be finite"
 
 
+def test_dag_hidden_gradient_logging():
+    """Test that DAG hidden gradients are captured and logged correctly."""
+    cfg = GPTConfig(
+        n_layer=2, n_head=4, n_embd=64, block_size=32, vocab_size=100, dag_depth=2
+    )
+    model = GPT(cfg)
+    logger = DAGLogger()
+
+    # Forward pass
+    x = torch.randint(0, cfg.vocab_size, (2, 8))
+    y = torch.randint(0, cfg.vocab_size, (2, 8))
+    _, loss = model(x, y)
+
+    # Verify dag_hidden is stored
+    assert hasattr(model, "last_dag_hidden"), "Model should store last_dag_hidden"
+    assert model.last_dag_hidden is not None, "last_dag_hidden should not be None"
+    assert (
+        model.last_dag_hidden.requires_grad
+    ), "last_dag_hidden should require gradients"
+
+    # Setup gradient tracking and do backward pass
+    logger.setup_gradient_tracking(model)
+    loss.backward()
+
+    # Check that DAG hidden gradients are captured
+    extra_vals = logger.get_extra_vals(model)
+
+    expected_dag_grad_keys = [
+        "dag_grad/dag_hidden_grad_norm",
+        "dag_grad/dag_hidden_grad_mean",
+        "dag_grad/dag_hidden_grad_std",
+        "dag_grad/dag_hidden_grad_max",
+        "dag_grad/dag_hidden_grad_min",
+    ]
+
+    for key in expected_dag_grad_keys:
+        assert key in extra_vals, f"Missing DAG hidden gradient key: {key}"
+        assert isinstance(
+            extra_vals[key], float
+        ), f"DAG gradient {key} should be a float"
+        assert not torch.isnan(
+            torch.tensor(extra_vals[key])
+        ), f"DAG gradient {key} should not be NaN"
+        assert torch.isfinite(
+            torch.tensor(extra_vals[key])
+        ), f"DAG gradient {key} should be finite"
+
+    # Verify gradient norm is positive
+    grad_norm = extra_vals["dag_grad/dag_hidden_grad_norm"]
+    assert grad_norm >= 0, "Gradient norm should be non-negative"
+
+    # Verify std is non-negative
+    grad_std = extra_vals["dag_grad/dag_hidden_grad_std"]
+    assert grad_std >= 0, "Gradient std should be non-negative"
+
+    # Verify max >= min
+    grad_max = extra_vals["dag_grad/dag_hidden_grad_max"]
+    grad_min = extra_vals["dag_grad/dag_hidden_grad_min"]
+    assert grad_max >= grad_min, "Gradient max should be >= gradient min"
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

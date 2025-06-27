@@ -59,6 +59,30 @@ class DAGLogger:
             )
             self.gradient_hooks.append(hook)
 
+        # Add gradient tracking for dag_hidden (DAG semantic output before mixing)
+        if (
+            hasattr(model, "last_dag_hidden")
+            and model.last_dag_hidden is not None
+            and model.last_dag_hidden.requires_grad
+        ):
+
+            def save_dag_hidden_grad(grad):
+                # Save gradient statistics for dag_hidden
+                grad_norm = grad.detach().norm().item()
+                grad_mean = grad.detach().mean().item()
+                grad_std = grad.detach().std().item()
+                grad_max = grad.detach().max().item()
+                grad_min = grad.detach().min().item()
+
+                self.captured_gradients["dag_hidden_grad_norm"] = grad_norm
+                self.captured_gradients["dag_hidden_grad_mean"] = grad_mean
+                self.captured_gradients["dag_hidden_grad_std"] = grad_std
+                self.captured_gradients["dag_hidden_grad_max"] = grad_max
+                self.captured_gradients["dag_hidden_grad_min"] = grad_min
+
+            hook = model.last_dag_hidden.register_hook(save_dag_hidden_grad)
+            self.gradient_hooks.append(hook)
+
     def clear_gradient_hooks(self) -> None:
         """Remove all registered gradient hooks."""
         for hook in self.gradient_hooks:
@@ -182,6 +206,17 @@ class DAGLogger:
                 for name, val in model.last_norm_values.items()
             ]
             print(f"Norms: {', '.join(norm_strs)}")
+
+        # DAG hidden gradients (if available)
+        dag_grad_keys = [
+            k for k in self.captured_gradients.keys() if k.startswith("dag_hidden_grad")
+        ]
+        if dag_grad_keys:
+            grad_strs = [
+                f"{k.replace('dag_hidden_grad_', '')}={self.captured_gradients[k]:.6f}"
+                for k in dag_grad_keys
+            ]
+            print(f"DAG hidden gradients: {', '.join(grad_strs)}")
 
     def get_wandb_logging_dict(self, model, base_dict: Optional[Dict] = None) -> Dict:
         """

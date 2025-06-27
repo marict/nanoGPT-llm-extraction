@@ -788,6 +788,7 @@ class GPT(nn.Module):
         self.last_values_list = final_values[
             :, -1
         ]  # Take last node's values for each position
+        self.last_dag_hidden = dag_hidden  # Store for gradient tracking
 
         # Mix original and DAG hidden states using the DAGMixer
         hidden, gate_values = self.dag_mixer(original_hidden, dag_hidden)
