@@ -16,7 +16,7 @@ name = "daggpt-default"
 # tiny dataset and network for quick local testing
 dataset = "proofpile"
 gradient_accumulation_steps = 1
-batch_size = 16
+batch_size = 4
 block_size = 32
 subset = 0.000001
 clear_previous_checkpoints = True
@@ -27,7 +27,7 @@ n_embd = 32
 dropout = 0.0
 bias = False
 
-dag_depth = 4
+dag_depth = 2
 
 learning_rate = 6e-4
 max_iters = 10
