@@ -36,23 +36,18 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
-        # key, query, value projections for all heads, but in a batch
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
-        # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
-        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, "scaled_dot_product_attention")
         if not self.flash:
             print(
                 "WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0"
             )
-            # causal mask to ensure that attention is only applied to the left in the input sequence
             self.register_buffer(
                 "bias",
                 torch.tril(torch.ones(config.block_size, config.block_size)).view(
@@ -61,25 +56,14 @@ class CausalSelfAttention(nn.Module):
             )
 
     def forward(self, x):
-        B, T, C = (
-            x.size()
-        )  # batch size, sequence length, embedding dimensionality (n_embd)
+        B, T, C = x.size()
 
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(
-            1, 2
-        )  # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(
-            1, 2
-        )  # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(
-            1, 2
-        )  # (B, nh, T, hs)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
 
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
-            # efficient attention using Flash Attention CUDA kernels
             y = torch.nn.functional.scaled_dot_product_attention(
                 q,
                 k,
@@ -89,17 +73,13 @@ class CausalSelfAttention(nn.Module):
                 is_causal=True,
             )
         else:
-            # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
-            y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = (
-            y.transpose(1, 2).contiguous().view(B, T, C)
-        )  # re-assemble all head outputs side by side
+            y = att @ v
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
 
-        # output projection
         y = self.resid_dropout(self.c_proj(y))
         return y
 
@@ -196,13 +176,12 @@ op_names = ["add", "identity", "multiply", "subtract"]
 
 
 def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
-    # choose a head-room margin so exp(max_val) is still finite
     if logits.dtype == torch.float16:
-        max_val = 8.0  # exp(8)  ≈ 2981  fits in fp16
+        max_val = 8.0
     elif logits.dtype == torch.bfloat16:
-        max_val = 20.0  # exp(20) ≈ 4.85e8 fits in bf16
-    else:  # float32 or higher
-        max_val = 40.0  # exp(40) ≈ 2.35e17 fits in fp32
+        max_val = 20.0
+    else:
+        max_val = 40.0
     return logits.clamp(-max_val, max_val)
 
 
@@ -231,38 +210,24 @@ class DAGController(nn.Module):
         self.last_op_logits_with_grad: torch.Tensor | None = None
 
     def forward(
-        self,
-        embeds: torch.Tensor,
-        operand_ctx: torch.Tensor,
-        op_ctx: torch.Tensor,
+        self, embeds: torch.Tensor, operand_ctx: torch.Tensor, op_ctx: torch.Tensor
     ):
-        # embeds: (B, N, H)
-        # operand_ctx: (B, H)
-        # op_ctx: (B, H)
         B, N, H = embeds.shape
 
-        # Use MultiheadAttention for operand selection
-        # Query is the context, key/value are the embeddings
-        query1 = operand_ctx.unsqueeze(1)  # (B, 1, H)
-        query2 = operand_ctx.unsqueeze(1)  # (B, 1, H)
+        query1 = operand_ctx.unsqueeze(1)
+        query2 = operand_ctx.unsqueeze(1)
 
-        # Get attention outputs and weights
-        _, att_weights1 = self.operand_attn1(query1, embeds, embeds)  # (B, 1, N)
-        _, att_weights2 = self.operand_attn2(query2, embeds, embeds)  # (B, 1, N)
+        _, att_weights1 = self.operand_attn1(query1, embeds, embeds)
+        _, att_weights2 = self.operand_attn2(query2, embeds, embeds)
 
-        # Squeeze to get (B, N) and apply Gumbel softmax
-        att_weights1 = att_weights1.squeeze(1)  # (B, N)
-        att_weights2 = att_weights2.squeeze(1)  # (B, N)
+        att_weights1 = att_weights1.squeeze(1)
+        att_weights2 = att_weights2.squeeze(1)
 
-        # Apply safe clamping and Gumbel softmax
         att_weights1 = safe_clamp(att_weights1)
         att_weights2 = safe_clamp(att_weights2)
 
-        # Use deterministic Gumbel softmax for reproducible results
-        # Save current RNG state
         rng_state = torch.get_rng_state()
 
-        # Set deterministic seed based on input for reproducibility
         seed = int(torch.sum(att_weights1 * 1000).item()) % 2**31
         torch.manual_seed(seed)
         att1 = F.gumbel_softmax(att_weights1, tau=self.temperature, hard=False)
@@ -271,33 +236,26 @@ class DAGController(nn.Module):
         torch.manual_seed(seed)
         att2 = F.gumbel_softmax(att_weights2, tau=self.temperature, hard=False)
 
-        # Restore RNG state
         torch.set_rng_state(rng_state)
 
-        # Prevent gradient issues by ensuring selections are valid
         att1 = att1 + 1e-10 * torch.ones_like(att1)
         att2 = att2 + 1e-10 * torch.ones_like(att2)
 
-        # Operation selection
-        op_query = self.op_query_proj(op_ctx)  # (B, H)
-        op_logits = self.op_selector(op_query)  # (B, n_ops)
+        op_query = self.op_query_proj(op_ctx)
+        op_logits = self.op_selector(op_query)
         op_logits = safe_clamp(op_logits)
 
-        # Use deterministic Gumbel-Softmax for discrete operation selection
         rng_state_op = torch.get_rng_state()
         seed_op = int(torch.sum(op_logits * 1000).item()) % 2**31
         torch.manual_seed(seed_op)
         op_weights = F.gumbel_softmax(op_logits, tau=self.temperature, hard=True)
         torch.set_rng_state(rng_state_op)
 
-        # Prevent gradient issues by ensuring op weights are valid
         op_weights = op_weights + 1e-10 * torch.ones_like(op_weights)
 
-        # Store for logging
-        self.last_attn = torch.stack([att1, att2], dim=1)  # (B, 2, N)
+        self.last_attn = torch.stack([att1, att2], dim=1)
         self.last_op_weights = op_weights
         self.last_op_logits = op_logits
-        # Store op_logits with gradients for gradient tracking
         self.last_op_logits_with_grad = op_logits
 
         return att1, att2, op_weights
@@ -318,33 +276,40 @@ class DifferentiableDAG(nn.Module):
         self.scalar_to_embed = scalar_to_embed
         self.temperature = config.gumbel_temperature
 
-        # Initialize controller
-        self.controller = DAGController(
-            self.hidden_dim, len(op_funcs), self.temperature
-        )
+        # New parameters for fixed scratch space
+        self.scratch_nodes = config.dag_scratch_nodes
+        self.node_dim = config.dag_node_dim or (config.n_embd // 2)
+
+        # Initialize controller with node dimension
+        self.controller = DAGController(self.node_dim, len(op_funcs), self.temperature)
 
         # Step embeddings for each step in the DAG
         self.step_emb = nn.Embedding(self.dag_depth, self.hidden_dim)
 
-        # MLP to combine all inputs into final node embedding
-        input_dim = 4 * self.hidden_dim + len(
+        # MLP to combine all inputs into final node embedding (updated for node_dim)
+        input_dim = 4 * self.node_dim + len(
             op_funcs
         )  # 4 embeds (e1, e2, v1_emb, v2_emb) + op logits
-        self.embed_mlp = nn.Linear(input_dim, self.hidden_dim)
-
-        # Components moved from GPT class
+        self.embed_mlp = nn.Linear(input_dim, self.node_dim)
         self.node_embed_block = Block(config)
-        self.post_dag_block = Block(config)
-        self.dag_norm = LayerNorm(config.n_embd, bias=config.bias)
 
         # Value extractor and context selectors
         self.value_extractor = ValueExtractor(config)
         self.operand_ctx_selector = MaskedContextSelector(config, self.temperature)
         self.op_ctx_selector = MaskedContextSelector(config, self.temperature)
 
+        # Projection layer to convert full embeddings to node embeddings
+        self.to_node_embed = nn.Linear(config.n_embd, self.node_dim)
+        # Projection layer to convert node embeddings back to full embeddings
+        self.from_node_embed = nn.Linear(self.node_dim, config.n_embd)
+
         # Initialize node storage
         self.node_embeds = None  # Will be set in forward pass
         self.node_values = None  # Will be set in forward pass
+
+        # Post-DAG block and normalization
+        self.post_dag_block = Block(config)
+        self.dag_norm = LayerNorm(config.n_embd, bias=config.bias)
 
     def forward(
         self,
@@ -356,78 +321,90 @@ class DifferentiableDAG(nn.Module):
         # Process original hidden states to get node embeddings and values
         node_embeds = self.node_embed_block(original_hidden)  # (B, T, H)
 
-        # Initialize node storage tensors
-        # Start with initial nodes for each token position
-        # Shape: (B, N, T, H) for embeddings, (B, N, T) for values
-        # N = dag_depth + 1 nodes
-        N = self.dag_depth + 1
-        initial_embeds = node_embeds.unsqueeze(1).expand(-1, N, -1, -1)  # (B, N, T, H)
-        initial_values = (
-            self.value_extractor(node_embeds).unsqueeze(1).expand(-1, N, -1)
-        )  # (B, N, T)
+        # Convert to node dimension and initialize fixed scratch space
+        # Shape: (B, scratch_nodes, T, node_dim) for embeddings, (B, scratch_nodes, T) for values
+        initial_node_embeds = self.to_node_embed(node_embeds)  # (B, T, node_dim)
+        initial_values = self.value_extractor(node_embeds)  # (B, T)
+
+        # Initialize fixed-size scratch space
+        scratch_embeds = torch.zeros(
+            B, self.scratch_nodes, T, self.node_dim, device=device
+        )
+        scratch_values = torch.zeros(B, self.scratch_nodes, T, device=device)
+
+        # Initialize first node in scratch space - avoid in-place operations
+        scratch_embeds = scratch_embeds.clone()
+        scratch_values = scratch_values.clone()
+        scratch_embeds[:, 0, :, :] = initial_node_embeds  # (B, T, node_dim)
+        scratch_values[:, 0, :] = initial_values  # (B, T)
 
         # Get contexts for operand and operation selection using masked attention
-        # For each position t, context comes from positions 0 to t-1
-        causal_lengths = [t for t in range(T)]  # Position t can see 0 to t-1 tokens
+        # For each position t, context comes from positions 0 to t-1 (standard causal pattern)
 
         # Use masked context selectors with Gumbel softmax
-        operand_ctx = self.operand_ctx_selector(
-            original_hidden, causal_lengths
-        )  # (B, T, H)
-        op_ctx = self.op_ctx_selector(original_hidden, causal_lengths)  # (B, T, H)
+        operand_ctx = self.operand_ctx_selector(original_hidden)  # (B, T, H)
+        op_ctx = self.op_ctx_selector(original_hidden)  # (B, T, H)
+
+        # Convert contexts to node dimension
+        operand_ctx_node = self.to_node_embed(operand_ctx)  # (B, T, node_dim)
+        op_ctx_node = self.to_node_embed(op_ctx)  # (B, T, node_dim)
 
         # Store the current node state
-        self.node_embeds = initial_embeds
-        self.node_values = initial_values
+        self.node_embeds = scratch_embeds
+        self.node_values = scratch_values
 
-        # Start with current nodes
-        current_embeds = initial_embeds
-        current_values = initial_values
-
-        # Run dag_depth iterations to add dag_depth new nodes
+        # Run dag_depth iterations with FIFO overwriting
         for step in range(self.dag_depth):
-            # Initialize output tensors with one more node than current
-            new_embeds = torch.zeros(
-                B, current_embeds.shape[1] + 1, T, H, device=device
-            )
-            new_values = torch.zeros(B, current_values.shape[1] + 1, T, device=device)
-
-            # Copy existing nodes
-            new_embeds[:, :-1] = current_embeds
-            new_values[:, :-1] = current_values
+            # Target slot for new node (FIFO: overwrite oldest after filling initial)
+            if step == 0:
+                target_slot = 1  # Second slot for first step
+            else:
+                target_slot = step % self.scratch_nodes  # FIFO cycling
 
             for t in range(T):
-                # Create causal mask for this token position
-                # For each token t, we want access to ALL nodes from previous tokens
+                # Create causal access to nodes from previous tokens
                 if t == 0:
-                    # For the first token, use current existing nodes (for single token case)
-                    # This allows T=1 sequences to still do DAG operations
-                    flat_embeds = current_embeds[:, :, t].reshape(B, -1, H)  # (B, N, H)
-                    flat_values = current_values[:, :, t].reshape(B, -1)  # (B, N)
+                    # For the first token, use current nodes at this position
+                    flat_embeds = scratch_embeds[
+                        :, :, t
+                    ]  # (B, scratch_nodes, node_dim)
+                    flat_values = scratch_values[:, :, t]  # (B, scratch_nodes)
                 else:
-                    # For t>0, we can use all nodes from previous tokens (strictly causal)
-                    flat_embeds = current_embeds[:, :, :t].reshape(
-                        B, -1, H
-                    )  # (B, N*t, H)
-                    flat_values = current_values[:, :, :t].reshape(B, -1)  # (B, N*t)
+                    # For t>0, use all nodes from all previous tokens (causal)
+                    flat_embeds = scratch_embeds[:, :, :t].reshape(
+                        B, -1, self.node_dim
+                    )  # (B, scratch_nodes*t, node_dim)
+                    flat_values = scratch_values[:, :, :t].reshape(
+                        B, -1
+                    )  # (B, scratch_nodes*t)
 
                 # Skip if no nodes available
                 if flat_embeds.numel() == 0:
-                    new_embeds[:, -1, t] = 0
-                    new_values[:, -1, t] = 0
+                    # Avoid in-place operations for empty case
+                    new_scratch_embeds = scratch_embeds.clone()
+                    new_scratch_values = scratch_values.clone()
+                    new_scratch_embeds[:, target_slot, t] = 0
+                    new_scratch_values[:, target_slot, t] = 0
+                    scratch_embeds = new_scratch_embeds
+                    scratch_values = new_scratch_values
                     continue
 
                 # Get controller decisions
                 att1, att2, op_w = self.controller(
                     flat_embeds,
-                    operand_ctx[:, t]
-                    + self.step_emb.weight[step].unsqueeze(0),  # (B, H)
-                    op_ctx[:, t] + self.step_emb.weight[step].unsqueeze(0),  # (B, H)
+                    operand_ctx_node[:, t]
+                    + self.to_node_embed(
+                        self.step_emb.weight[step].unsqueeze(0)
+                    ),  # (B, node_dim)
+                    op_ctx_node[:, t]
+                    + self.to_node_embed(
+                        self.step_emb.weight[step].unsqueeze(0)
+                    ),  # (B, node_dim)
                 )
 
                 # Select embeddings and values from previous nodes
-                e1 = (att1.unsqueeze(-1) * flat_embeds).sum(1)  # (B, H)
-                e2 = (att2.unsqueeze(-1) * flat_embeds).sum(1)  # (B, H)
+                e1 = (att1.unsqueeze(-1) * flat_embeds).sum(1)  # (B, node_dim)
+                e2 = (att2.unsqueeze(-1) * flat_embeds).sum(1)  # (B, node_dim)
                 v1 = (att1 * flat_values).sum(1)  # (B)
                 v2 = (att2 * flat_values).sum(1)  # (B)
 
@@ -435,38 +412,50 @@ class DifferentiableDAG(nn.Module):
                 outs = torch.stack([op(v1, v2) for op in op_funcs], dim=1)  # (B, n_ops)
                 new_val = (op_w * outs).sum(1)  # (B)
 
-                # Project scalar values to embedding space
-                v1_emb = self.scalar_to_embed(v1.unsqueeze(-1))  # (B, H)
-                v2_emb = self.scalar_to_embed(v2.unsqueeze(-1))  # (B, H)
+                # Project scalar values to node embedding space
+                v1_emb = self.to_node_embed(
+                    self.scalar_to_embed(v1.unsqueeze(-1))
+                )  # (B, node_dim)
+                v2_emb = self.to_node_embed(
+                    self.scalar_to_embed(v2.unsqueeze(-1))
+                )  # (B, node_dim)
 
-                # Compute new embedding
+                # Compute new embedding in node space
                 concat = torch.cat([e1, e2, v1_emb, v2_emb, op_w], dim=-1)
                 delta = self.embed_mlp(concat)
                 new_emb = 0.5 * (e1 + e2) + delta  # residual
 
-                # Store new node
-                new_embeds[:, -1, t] = new_emb
-                new_values[:, -1, t] = new_val
-
-            # Update current nodes for next step
-            current_embeds = new_embeds
-            current_values = new_values
+                # Store new node in target slot (FIFO overwriting) - avoid in-place operations
+                # Clone tensors to avoid modifying originals, then assign
+                new_scratch_embeds = scratch_embeds.clone()
+                new_scratch_values = scratch_values.clone()
+                new_scratch_embeds[:, target_slot, t] = new_emb
+                new_scratch_values[:, target_slot, t] = new_val
+                scratch_embeds = new_scratch_embeds
+                scratch_values = new_scratch_values
 
         # Process each token position to create final hidden states
         new_hidden_list = []
         for t in range(T):
-            # Get the final node embedding for this position
-            final_node_embed = current_embeds[:, -1, t]  # (B, H)
+            # Get the latest computed node embedding for this position
+            # Use the last written slot (most recent computation)
+            final_slot = (
+                (self.dag_depth - 1) % self.scratch_nodes if self.dag_depth > 0 else 1
+            )
+            final_node_embed = scratch_embeds[:, final_slot, t]  # (B, node_dim)
 
-            # Process final node embedding through post-DAG block and normalization
-            dag_sem = self.post_dag_block(final_node_embed.unsqueeze(1)).squeeze(1)
+            # Convert back to full embedding dimension
+            final_full_embed = self.from_node_embed(final_node_embed)  # (B, H)
+
+            # Process final embedding through post-DAG block and normalization
+            dag_sem = self.post_dag_block(final_full_embed.unsqueeze(1)).squeeze(1)
             dag_sem = self.dag_norm(dag_sem)
             new_hidden_list.append(dag_sem)
 
         # Reconstruct hidden tensor from list
         final_hidden = torch.stack(new_hidden_list, dim=1)  # (B, T, H)
 
-        return final_hidden, current_embeds, current_values
+        return final_hidden, scratch_embeds, scratch_values
 
 
 # ---------------------------------------------------------------------------
@@ -511,23 +500,22 @@ class MaskedContextSelector(nn.Module):
         )
         self.temperature = temperature
 
-    def forward(self, hidden_states, causal_lengths):
+    def forward(self, hidden_states):
         # hidden_states: (B, T, H) - all token representations
-        # causal_lengths: list of length T, where causal_lengths[t] = number of tokens available at position t
+        # Causal pattern: position t can see positions 0 through t-1
         B, T, H = hidden_states.shape
         device = hidden_states.device
 
         # Create causal mask for each position
-        # We'll process each position separately to handle variable causal lengths
         outputs = []
 
         for t in range(T):
-            if causal_lengths[t] == 0:
+            if t == 0:
                 # No previous context available, use zero
                 outputs.append(torch.zeros(B, H, device=device))
             else:
-                # Use causal context up to position t
-                context_len = causal_lengths[t]
+                # Use causal context up to position t (positions 0 through t-1)
+                context_len = t
                 context = hidden_states[:, :context_len, :]  # (B, context_len, H)
                 query = hidden_states[
                     :, [t], :
@@ -624,6 +612,9 @@ class GPTConfig:
     )
     dag_depth: int = 4  # 0 = standard GPT, >0 = DAG-augmented GPT
     gumbel_temperature: float = 2.0
+    # New parameters for fixed scratch space optimization
+    dag_scratch_nodes: int = 2  # Fixed number of nodes per token (FIFO queue)
+    dag_node_dim: int = None  # Node embedding dimension (defaults to n_embd // 2)
 
 
 # ---------------------------------------------------------------------------
@@ -662,7 +653,13 @@ class GPT(nn.Module):
 
         # DAG-specific components (only if dag_depth > 0)
         if config.dag_depth > 0:
-            self.scalar_to_embed = nn.Linear(1, config.n_embd)
+            # Set default node dimension if not specified
+            if config.dag_node_dim is None:
+                config.dag_node_dim = config.n_embd // 2
+
+            self.scalar_to_embed = nn.Linear(
+                1, config.n_embd
+            )  # Still projects to full embedding
             self.dag = DifferentiableDAG(config, self.scalar_to_embed)
             self.dag_mixer = DAGMixer(config)
 
@@ -728,7 +725,7 @@ class GPT(nn.Module):
 
         Returns:
             List of node values as floats, empty list if no forward pass or dag_depth=0.
-            For causal DAG, returns the final node value for each token position.
+            For causal DAG with fixed scratch space, returns the final computed value for each token position.
         """
         if self.config.dag_depth == 0:
             return []
@@ -736,13 +733,27 @@ class GPT(nn.Module):
         if not hasattr(self, "last_values_list") or self.last_values_list is None:
             return []
 
-        # For causal DAG, last_values_list is a tensor of shape (B, T)
-        # where B is batch size and T is sequence length
-        # We want to return the mean across batch for each token position
+        # For fixed scratch space DAG, last_values_list is a tensor of shape (B, scratch_nodes, T)
+        # where B is batch size, scratch_nodes is the fixed scratch size, and T is sequence length
+        # We want to return the final computed value for each token position
         if isinstance(self.last_values_list, torch.Tensor):
-            return [val.mean().item() for val in self.last_values_list.transpose(0, 1)]
+            if self.last_values_list.dim() == 3:  # (B, scratch_nodes, T)
+                B, scratch_nodes, T = self.last_values_list.shape
+                # Get the final slot for each token (most recent computation)
+                final_slot = (
+                    (self.config.dag_depth - 1) % scratch_nodes
+                    if self.config.dag_depth > 0
+                    else 1
+                )
+                # Extract values from the final slot and average across batch
+                final_values = self.last_values_list[:, final_slot, :]  # (B, T)
+                return [val.mean().item() for val in final_values.transpose(0, 1)]
+            else:  # Fallback for old format (B, T)
+                return [
+                    val.mean().item() for val in self.last_values_list.transpose(0, 1)
+                ]
 
-        # Fallback for non-tensor case (shouldn't happen with causal DAG)
+        # Fallback for non-tensor case (shouldn't happen with new implementation)
         result = []
         for val in self.last_values_list:
             if hasattr(val, "item"):
@@ -784,10 +795,20 @@ class GPT(nn.Module):
         # Run DAG processing (handles everything internally)
         dag_hidden, final_embeds, final_values = self.dag(original_hidden)
 
-        # Store for logging
-        self.last_values_list = final_values[
-            :, -1
-        ]  # Take last node's values for each position
+        # Store for logging - extract from final slot in scratch space
+        if final_values.dim() == 3:  # (B, scratch_nodes, T)
+            B, scratch_nodes, T = final_values.shape
+            final_slot = (
+                (self.config.dag_depth - 1) % scratch_nodes
+                if self.config.dag_depth > 0
+                else 1
+            )
+            self.last_values_list = final_values[
+                :, final_slot, :
+            ]  # (B, T) - final computed values
+        else:
+            self.last_values_list = final_values  # Fallback
+
         self.last_dag_hidden = dag_hidden  # Store for gradient tracking
 
         # Mix original and DAG hidden states using the DAGMixer

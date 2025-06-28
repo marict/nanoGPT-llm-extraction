@@ -15,10 +15,8 @@ from typing import Any, Dict, Tuple
 import numpy as np
 from tiktoken import get_encoding
 
-# Disable progress bars to prevent broken newlines in containers/remote terminals
 os.environ.setdefault("TQDM_DISABLE", "1")
 
-# Also disable datasets library progress bars
 try:
     import datasets
 
@@ -50,7 +48,6 @@ class DataPrep:
         self.data_dir = Path(data_dir)
         self.dataset_name = dataset_name
 
-        # If dataset_name is provided, create dataset-specific subfolder
         if dataset_name:
             self.data_dir = self.data_dir / dataset_name
 
@@ -69,7 +66,6 @@ class DataPrep:
         if required_files is None:
             required_files = ["train.bin", "val.bin", "meta.pkl"]
 
-        # First check local files
         local_missing = []
         for filename in required_files:
             file_path = self.data_dir / filename
@@ -80,13 +76,11 @@ class DataPrep:
             print(f"✅ All required files found locally in {self.data_dir}")
             return True
 
-        # If local files are missing, check RunPod storage
         runpod_volume = _get_runpod_storage_path()
         if runpod_volume is None:
             print(f"Missing files: {local_missing}")
             return False
 
-        # Check RunPod storage for missing files
         runpod_data_dir = runpod_volume / "data" / self.data_dir.name
         runpod_missing = []
         runpod_available = []
@@ -102,7 +96,6 @@ class DataPrep:
             print(f"Missing files (local and RunPod): {runpod_missing}")
             return False
 
-        # All files found in RunPod storage - copy them locally
         print(f"📁 Found all files in RunPod storage: {runpod_data_dir}")
         self._copy_from_runpod_storage(runpod_data_dir, local_missing)
         print(f"✅ All required files restored from RunPod storage to {self.data_dir}")
@@ -117,7 +110,6 @@ class DataPrep:
         """
         import shutil
 
-        # Ensure local directory exists
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
         for filename in filenames:
@@ -140,9 +132,7 @@ class DataPrep:
             train_path = self.data_dir / "train.bin"
             val_path = self.data_dir / "val.bin"
 
-            # Check if files exist locally first
             if not (train_path.exists() and val_path.exists()):
-                # Try to get from RunPod storage
                 runpod_volume = _get_runpod_storage_path()
                 if runpod_volume:
                     runpod_data_dir = runpod_volume / "data" / self.data_dir.name
@@ -150,7 +140,6 @@ class DataPrep:
                     runpod_val_path = runpod_data_dir / "val.bin"
 
                     if runpod_train_path.exists() and runpod_val_path.exists():
-                        # Copy from RunPod and then read
                         self._copy_from_runpod_storage(
                             runpod_data_dir, ["train.bin", "val.bin", "meta.pkl"]
                         )
@@ -159,16 +148,14 @@ class DataPrep:
                 else:
                     return None
 
-            # Load meta to get dtype
             meta_path = self.data_dir / "meta.pkl"
-            dtype = np.uint16  # default
+            dtype = np.uint16
             if meta_path.exists():
                 with meta_path.open("rb") as f:
                     meta = pickle.load(f)
                     if meta.get("byte_level", False):
                         dtype = np.uint8
 
-            # Count tokens in existing files
             train_data = np.memmap(train_path, dtype=dtype, mode="r")
             val_data = np.memmap(val_path, dtype=dtype, mode="r")
 

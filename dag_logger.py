@@ -33,11 +33,9 @@ class DAGLogger:
         Args:
             model: DAGGPT model instance
         """
-        # Clear any existing hooks
         self.clear_gradient_hooks()
         self.captured_gradients = {}
 
-        # Special handling for op_logits gradients
         if (
             hasattr(model, "dag")
             and hasattr(model.dag, "controller")
@@ -47,10 +45,8 @@ class DAGLogger:
         ):
 
             def save_op_grad(grad):
-                # Save both mean and per-operation gradients
                 self.captured_gradients["op_logits_mean"] = grad.detach().mean().item()
-                # Save individual operation gradients
-                op_grads = grad.detach().mean(dim=0).cpu().numpy()  # Average over batch
+                op_grads = grad.detach().mean(dim=0).cpu().numpy()
                 for i, op_name in enumerate(op_names):
                     self.captured_gradients[f"op_grad/{op_name}"] = float(op_grads[i])
 
@@ -59,7 +55,6 @@ class DAGLogger:
             )
             self.gradient_hooks.append(hook)
 
-        # Add gradient tracking for dag_hidden (DAG semantic output before mixing)
         if (
             hasattr(model, "last_dag_hidden")
             and model.last_dag_hidden is not None
@@ -67,7 +62,6 @@ class DAGLogger:
         ):
 
             def save_dag_hidden_grad(grad):
-                # Save gradient statistics for dag_hidden
                 grad_norm = grad.detach().norm().item()
                 grad_mean = grad.detach().mean().item()
                 grad_std = grad.detach().std().item()
@@ -101,24 +95,20 @@ class DAGLogger:
         """
         metrics = {}
 
-        # Add gradient metrics
         for grad_name, grad_val in self.captured_gradients.items():
             if grad_name.startswith("op_grad/") or grad_name == "op_logits_mean":
                 metrics[grad_name] = grad_val
             else:
                 metrics[f"dag_grad/{grad_name}"] = grad_val
 
-        # Add gate values (if available)
         if hasattr(model, "last_gate_values") and model.last_gate_values is not None:
             gate_values = model.last_gate_values
             metrics["gate/mean"] = gate_values.mean().item()
             metrics["gate/min"] = gate_values.min().item()
             metrics["gate/max"] = gate_values.max().item()
-            # Check if gate is close to 0 (DAG not contributing)
             close_to_zero = (gate_values < 0.1).float().mean().item()
             metrics["gate/close_to_zero_ratio"] = close_to_zero
 
-        # Add norm values (if available)
         if hasattr(model, "last_norm_values") and model.last_norm_values is not None:
             for norm_name, norm_val in model.last_norm_values.items():
                 metrics[f"norm/{norm_name}"] = norm_val.item()
@@ -135,7 +125,6 @@ class DAGLogger:
         Returns:
             List of node values
         """
-        # Delegate to the model's own implementation to avoid duplication
         return model.get_node_values_list()
 
     def format_console_logging(self, model) -> None:
@@ -145,7 +134,6 @@ class DAGLogger:
         Args:
             model: DAGGPT model instance
         """
-        # Operation probabilities - calculate directly for console output
         if (
             hasattr(model, "dag")
             and hasattr(model.dag, "controller")
@@ -154,14 +142,12 @@ class DAGLogger:
         ):
             with torch.no_grad():
                 op_logits = model.dag.controller.last_op_logits
-                # Take the first sample in the batch and convert to probabilities
                 probs = F.softmax(op_logits, dim=-1)[0].detach().cpu().numpy()
 
                 print("Operation probabilities:")
                 for op_name, prob in zip(op_names, probs):
                     print(f"  {op_name}: {prob:.4f}")
 
-        # Operand choices (instead of all probabilities)
         if (
             hasattr(model, "dag")
             and hasattr(model.dag, "controller")
@@ -169,28 +155,23 @@ class DAGLogger:
             and model.dag.controller.last_attn is not None
         ):
             with torch.no_grad():
-                # last_attn is (B, T, 2, N) - batch, time, 2 operands, N nodes
-                # Take the first sample in the batch
-                attn_probs = model.dag.controller.last_attn[0]  # (T, 2, N)
+                attn_probs = model.dag.controller.last_attn[0]
 
-                print("Operands chosen per token position:")
-                for t in range(attn_probs.shape[0]):
-                    # Find the chosen operands for this token
-                    operand1_choice = int(attn_probs[t, 0].argmax())
-                    operand2_choice = int(attn_probs[t, 1].argmax())
+                print("Operands chosen:")
+                for o in range(attn_probs.shape[0]):
+                    operand1_choice = int(attn_probs[o, 0].argmax())
+                    operand2_choice = int(attn_probs[o, 1].argmax())
                     max_nodes = attn_probs.shape[-1]
                     print(
-                        f"  Token {t}: {operand1_choice}, {operand2_choice} (out of {max_nodes})"
+                        f"  Operand {o}: {operand1_choice}, {operand2_choice} (out of {max_nodes})"
                     )
 
-        # Node values (now per token)
         node_values = self.get_node_values_list(model)
         if node_values:
             print("Node values per token position:")
             for t, val in enumerate(node_values):
                 print(f"  Token {t}: {val:.4f}")
 
-        # Gate values
         if hasattr(model, "last_gate_values") and model.last_gate_values is not None:
             gate_values = model.last_gate_values
             gate_mean = gate_values.mean().item()

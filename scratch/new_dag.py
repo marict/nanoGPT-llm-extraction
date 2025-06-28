@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
+from visualize_dag import visualize_dag
 
 
 def gumbel_noise(shape, eps=1e-20):
@@ -58,32 +59,64 @@ def sample_dag_adjacency_hard(
     U_logits: torch.Tensor, perm_logits: torch.Tensor, edge_thresh: float = 0.5
 ) -> torch.Tensor:
     """
-    Hard version of DAG adjacency sampling for inference.
-    - U_logits: logits for upper triangular matrix (N, N)
-    - perm_logits: logits for node ordering (N, N)
-    - edge_thresh: threshold for binarizing edge presence
+    Hard DAG adjacency sampling with guaranteed ENTER→EXIT path.
     """
     N = U_logits.size(0)
-
-    # Create hard permutation matrix (P_hard) using row-wise argmax
     P_hard = logits_to_hard_permutation_matrix(perm_logits)
 
-    # Force upper-triangular structure in U, then threshold
+    # Build U_hard with upper-triangular mask and threshold
     U = torch.sigmoid(U_logits) * torch.triu(torch.ones_like(U_logits), diagonal=1)
     U_hard = (U > edge_thresh).float()
 
-    # Construct hard adjacency matrix A_hard = P^T U P
     A_hard = P_hard.T @ U_hard @ P_hard
-    A_hard.fill_diagonal_(0)  # remove any self loops
-
+    A_hard.fill_diagonal_(0)
     return A_hard
 
 
-N = 5
+def sample_ops_soft(op_logits: torch.Tensor, tau: float = 0.5) -> torch.Tensor:
+    return F.gumbel_softmax(op_logits, tau=tau, hard=False, dim=-1)
+
+
+def sample_ops_hard(op_logits: torch.Tensor) -> torch.Tensor:
+    return F.gumbel_softmax(op_logits, tau=0.5, hard=True, dim=-1)
+
+
+def enforce_enter_exit_constraints(A, enter_node=0, exit_node=-1):
+    # Enter node: no incoming edges
+    A[:, enter_node] = 0
+    # Exit node: no outgoing edges
+    A[exit_node, :] = 0
+    A[enter_node, exit_node] = 1.0
+    return A
+
+
+ops = ["PLUS", "SUBTRACT", "MULTIPLY"]
+K = len(ops)
+
+N = 20
+
 U_logits = torch.randn(N, N, requires_grad=True)
 perm_logits = torch.randn(N, N, requires_grad=True)
-A = sample_dag_adjacency(U_logits, perm_logits)
+op_logits = torch.randn(
+    N - 2, K, requires_grad=True
+)  # learnable or predicted by a model
+
+A = enforce_enter_exit_constraints(sample_dag_adjacency(U_logits, perm_logits))
 print(A)
 
-A_hard = sample_dag_adjacency_hard(U_logits, perm_logits)
+A_hard = enforce_enter_exit_constraints(
+    sample_dag_adjacency_hard(U_logits, perm_logits)
+)
 print(A_hard)
+
+chosen = sample_ops_hard(op_logits)  # (N, K) one-hot
+op_indices = chosen.argmax(dim=-1)  # (N,)
+node_ops = ["ENTER"] + [ops[i] for i in op_indices] + ["EXIT"]
+
+# visualize_dag(A_hard, node_labels=node_ops)
+
+# Create a simple upper triangular matrix DAG
+A = torch.randn(N, N)
+A = A * torch.triu(torch.ones_like(A), diagonal=1)
+A = enforce_enter_exit_constraints(A)
+visualize_dag(A, node_labels=["ENTER"] + [i for i in range(N - 2)] + ["EXIT"])

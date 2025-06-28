@@ -1,4 +1,3 @@
-# tests/test_dag_operation_logging.py
 import sys
 from pathlib import Path
 
@@ -10,13 +9,9 @@ import wandb
 from dag_logger import DAGLogger
 from dag_model import GPT, GPTConfig, op_names
 
-# Add the parent directory to sys.path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
-# --------------------------------------------------------------------- #
-# fixtures
-# --------------------------------------------------------------------- #
 @pytest.fixture
 def small_dag_model():
     """Create a small DAG model for testing."""
@@ -31,7 +26,7 @@ def small_dag_model():
         bias=False,
     )
     model = GPT(cfg)
-    model.train()  # Enable training mode for gradient computation
+    model.train()
     return model, cfg
 
 
@@ -48,76 +43,54 @@ def sample_batch():
     return input_ids, target_ids
 
 
-# --------------------------------------------------------------------- #
-# Test operation probabilities logging
-# --------------------------------------------------------------------- #
 def test_operation_console_logging(small_dag_model, sample_batch):
     """Test that operation probabilities can be displayed in console format."""
     model, _ = small_dag_model
     input_ids, target_ids = sample_batch
 
-    # Forward pass
     logits, loss = model(input_ids, target_ids)
 
-    # Get console logging via DAGLogger (should not crash)
     logger = DAGLogger()
     try:
         logger.format_console_logging(model)
-        # If we get here without exception, console logging works
         assert True
     except Exception as e:
         pytest.fail(f"Console logging failed: {e}")
 
 
-# --------------------------------------------------------------------- #
-# Test operand probabilities logging
-# --------------------------------------------------------------------- #
 def test_operand_console_logging(small_dag_model, sample_batch):
     """Test that operand selection information can be displayed in console format."""
     model, _ = small_dag_model
     input_ids, target_ids = sample_batch
 
-    # Forward pass
     logits, loss = model(input_ids, target_ids)
 
-    # Get console logging via DAGLogger (should not crash)
     logger = DAGLogger()
     try:
         logger.format_console_logging(model)
-        # If we get here without exception, operand logging works
         assert True
     except Exception as e:
         pytest.fail(f"Operand console logging failed: {e}")
 
 
-# --------------------------------------------------------------------- #
-# Test gradient logging
-# --------------------------------------------------------------------- #
 def test_operation_gradient_capture(small_dag_model, sample_batch):
     """Test that operation gradients are correctly captured."""
     model, _ = small_dag_model
     input_ids, target_ids = sample_batch
 
-    # Forward pass
     logits, loss = model(input_ids, target_ids)
 
-    # Set up gradient tracking before backward pass
     logger = DAGLogger()
     logger.setup_gradient_tracking(model)
-
-    # Backward pass to compute gradients
     loss.backward()
 
-    # Get extra values which should include gradients
     extra_vals = logger.get_extra_vals(model)
 
-    # Check for operation gradient keys
     expected_grad_keys = [f"op_grad/{op}" for op in op_names]
     found_grad_keys = [key for key in extra_vals.keys() if key.startswith("op_grad/")]
 
     assert len(found_grad_keys) > 0, "No operation gradients found in extra_vals"
 
-    # Check that we have gradients for all operations
     for key in expected_grad_keys:
         assert key in extra_vals, f"Missing gradient key: {key}"
         assert isinstance(
@@ -133,31 +106,25 @@ def test_gradient_computation_consistency(small_dag_model, sample_batch):
     gradients_run1 = []
     gradients_run2 = []
 
-    # Set up logger
     logger = DAGLogger()
 
-    # First run
     logits1, loss1 = model(input_ids, target_ids)
     logger.setup_gradient_tracking(model)
     loss1.backward()
     extra_vals1 = logger.get_extra_vals(model)
     gradients_run1 = [extra_vals1.get(f"op_grad/{op}", 0.0) for op in op_names]
 
-    # Reset model gradients
     model.zero_grad()
 
-    # Second run with same input (gradients may vary due to Gumbel sampling)
     logits2, loss2 = model(input_ids, target_ids)
     logger.setup_gradient_tracking(model)
     loss2.backward()
     extra_vals2 = logger.get_extra_vals(model)
     gradients_run2 = [extra_vals2.get(f"op_grad/{op}", 0.0) for op in op_names]
 
-    # Verify gradients are reasonable (finite, not too large)
     for i, op in enumerate(op_names):
         grad1, grad2 = gradients_run1[i], gradients_run2[i]
 
-        # Check gradients are finite
         assert torch.isfinite(
             torch.tensor(grad1)
         ), f"Gradient for {op} in run1 is not finite: {grad1}"
@@ -165,7 +132,6 @@ def test_gradient_computation_consistency(small_dag_model, sample_batch):
             torch.tensor(grad2)
         ), f"Gradient for {op} in run2 is not finite: {grad2}"
 
-        # Check gradients are reasonable (not too large)
         assert abs(grad1) < 1.0, f"Gradient for {op} in run1 is too large: {grad1}"
         assert abs(grad2) < 1.0, f"Gradient for {op} in run2 is too large: {grad2}"
 
@@ -407,9 +373,11 @@ def test_gate_and_norm_logging():
             T == config.block_size
         ), f"Expected {config.block_size} time steps, got {T}"
         assert (
-            N == config.dag_depth + 1
-        ), f"Expected {config.dag_depth + 1} nodes, got {N}"
-        assert H == config.n_embd, f"Expected {config.n_embd} hidden dim, got {H}"
+            N == config.dag_scratch_nodes
+        ), f"Expected {config.dag_scratch_nodes} nodes, got {N}"
+        assert (
+            H == config.dag_node_dim
+        ), f"Expected {config.dag_node_dim} hidden dim, got {H}"
 
         # Node values should be (B, N, T)
         B, N, T = model.dag.node_values.shape

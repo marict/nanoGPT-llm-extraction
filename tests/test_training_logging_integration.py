@@ -1,25 +1,17 @@
-# tests/test_training_logging_integration.py
 import sys
 from pathlib import Path
 
 import pytest
 import torch
 
-# --------------------------------------------------------------------- #
-# import library code
-# --------------------------------------------------------------------- #
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dag_logger import DAGLogger
 from dag_model import GPT, GPTConfig, op_names
 
 
-# --------------------------------------------------------------------- #
-# Test integration with training loop functionality
-# --------------------------------------------------------------------- #
 def test_training_loop_text_generation_integration():
     """Test that the training loop evaluation behaves correctly with text generation."""
 
-    # Mock functions to simulate train.py environment
     def mock_encode(text):
         return [1, 2, 3, 4, 5]
 
@@ -40,14 +32,11 @@ def test_training_loop_text_generation_integration():
     model = GPT(cfg)
     model.eval()
 
-    # Mock the encoding/decoding
     encode = mock_encode
     decode = mock_decode
 
-    # Simulate the evaluation process
     dag_logger = DAGLogger()
 
-    # Text generation (as done in train.py evaluation)
     sample_prompt = "Two plus 5 is equal to: "
     encoded = encode(sample_prompt)
     prompt_ids = torch.tensor(encoded, dtype=torch.long).unsqueeze(0)
@@ -61,10 +50,8 @@ def test_training_loop_text_generation_integration():
         )
         generated_sample = decode(generated[0].cpu().tolist())
 
-    # DAG logging after generation (as done in train.py)
     dag_logger.format_console_logging(model)
 
-    # Verify the integration worked
     assert generated_sample is not None
     assert "decoded_" in generated_sample
 
