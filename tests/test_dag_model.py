@@ -301,8 +301,8 @@ def test_post_dag_block_called(monkeypatch):
 # ---------------------------------------------------------------------
 # step-embedding context test  (expect both +step)
 # ---------------------------------------------------------------------
-def test_step_contexts_added(monkeypatch):
-    """Test that DAG runs the correct number of steps and calls controller appropriately."""
+def test_batch_dag_plan_prediction(monkeypatch):
+    """Test that DAG batch plan predictor is called once per forward pass and executes correct number of steps."""
     H = 4
     monkeypatch.setattr(dag_model, "op_funcs", dag_model.op_funcs[:2])
     proj = nn.Linear(1, H, bias=False)
@@ -311,9 +311,6 @@ def test_step_contexts_added(monkeypatch):
         n_embd=H, dag_depth=3, n_head=1, n_layer=1, vocab_size=10, block_size=4
     )
     dag = DifferentiableDAG(config, proj)
-
-    step_vals = torch.stack([torch.full((H,), float(i)) for i in range(3)])
-    dag.step_emb = nn.Embedding.from_pretrained(step_vals, freeze=True)
 
     captured = []
 

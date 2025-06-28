@@ -337,9 +337,6 @@ class DifferentiableDAG(nn.Module):
         # Initialize plan predictor
         self.plan_predictor = DAGPlanPredictor(config, self.temperature)
 
-        # Step embeddings for each step in the DAG
-        self.step_emb = nn.Embedding(self.dag_depth, self.hidden_dim)
-
         # MLP to combine all inputs into final node embedding (updated for node_dim)
         input_dim = 4 * self.node_dim + len(
             op_funcs
