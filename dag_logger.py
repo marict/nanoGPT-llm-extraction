@@ -345,7 +345,8 @@ class DAGLogger:
                             ]  # operand2 probabilities over nodes
                             operand1_choice = int(operand1_probs.argmax())
                             operand2_choice = int(operand2_probs.argmax())
-                            max_nodes = operand1_probs.shape[0]
+                            # The actual number of nodes available (due to casual masking)
+                            max_nodes = model.dag.scratch_nodes * (t + 1)
                             print(
                                 f"  Token {t}, Step {step}: {operand1_choice}, {operand2_choice} (out of {max_nodes})"
                             )

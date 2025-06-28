@@ -736,36 +736,6 @@ class GPT(nn.Module):
             ignore_index=-1,
         )
 
-    def extract_logging_data(
-        self,
-        dag_logger,
-        original_hidden=None,
-        dag_hidden=None,
-        gate_values=None,
-        mixed_hidden=None,
-    ):
-        """
-        Extract all logging data using the DAGLogger.
-        This should be called after DAG processing in the forward pass.
-
-        Args:
-            dag_logger: DAGLogger instance to handle extraction
-            original_hidden: Original hidden states before DAG processing (B, T, H)
-            dag_hidden: DAG-processed hidden states (B, T, H)
-            gate_values: Gate values from DAG mixer
-            mixed_hidden: Final mixed hidden states after DAG mixer (B, T, H)
-        """
-        if self.config.dag_depth == 0:
-            return
-
-        dag_logger.extract_all_logging_data(
-            self,
-            original_hidden=original_hidden,
-            dag_hidden=dag_hidden,
-            gate_values=gate_values,
-            mixed_hidden=mixed_hidden,
-        )
-
     def forward(self, idx, targets=None):
         _, T = idx.shape
         device = idx.device
