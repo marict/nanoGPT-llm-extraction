@@ -739,101 +739,35 @@ class GPT(nn.Module):
             ignore_index=-1,
         )
 
-    def get_node_values_list(self) -> list[float]:
+    def extract_logging_data(
+        self,
+        dag_logger,
+        original_hidden=None,
+        dag_hidden=None,
+        gate_values=None,
+        mixed_hidden=None,
+    ):
         """
-        Get the node values from the last forward pass as a list of floats.
-        Used for logging during evaluation.
+        Extract all logging data using the DAGLogger.
+        This should be called after DAG processing in the forward pass.
 
-        Returns:
-            List of node values as floats, empty list if no forward pass or dag_depth=0.
-            For causal DAG with fixed scratch space, returns the final computed value for each token position.
-        """
-        if self.config.dag_depth == 0:
-            return []
-
-        if not hasattr(self, "last_values_list") or self.last_values_list is None:
-            return []
-
-        # Extract values from the stored tensor
-        if isinstance(self.last_values_list, torch.Tensor):
-            if self.last_values_list.dim() == 3:  # (B, scratch_nodes, T)
-                B, scratch_nodes, T = self.last_values_list.shape
-                # Get the final slot for each token (most recent computation)
-                final_slot = (
-                    (self.config.dag_depth - 1) % scratch_nodes
-                    if self.config.dag_depth > 0
-                    else 1
-                )
-                # Extract values from the final slot and average across batch
-                final_values = self.last_values_list[:, final_slot, :]  # (B, T)
-                return [val.mean().item() for val in final_values.transpose(0, 1)]
-            else:  # (B, T) format
-                return [
-                    val.mean().item() for val in self.last_values_list.transpose(0, 1)
-                ]
-
-        # Fallback for non-tensor case (shouldn't happen with new implementation)
-        result = []
-        for val in self.last_values_list:
-            if hasattr(val, "item"):
-                if val.numel() == 1:
-                    result.append(val.item())
-                else:
-                    result.append(val.mean().item())
-            else:
-                result.append(float(val))
-        return result
-
-    def get_detailed_node_values(self) -> dict:
-        """
-        Get detailed node values from the last forward pass showing all scratch nodes per token.
-
-        Returns:
-            Dictionary with detailed node information, empty dict if no forward pass or dag_depth=0.
-            Format: {
-                'values_per_token': List[List[float]],  # [token_idx][scratch_slot_idx] = value
-                'aggregated_per_token': List[float],    # aggregated value per token (mean)
-                'scratch_nodes': int,                   # number of scratch nodes per token
-                'sequence_length': int,                 # sequence length
-                'batch_size': int                       # batch size
-            }
+        Args:
+            dag_logger: DAGLogger instance to handle extraction
+            original_hidden: Original hidden states before DAG processing (B, T, H)
+            dag_hidden: DAG-processed hidden states (B, T, H)
+            gate_values: Gate values from DAG mixer
+            mixed_hidden: Final mixed hidden states after DAG mixer (B, T, H)
         """
         if self.config.dag_depth == 0:
-            return {}
+            return
 
-        if not hasattr(self, "last_values_list") or self.last_values_list is None:
-            return {}
-
-        if (
-            isinstance(self.last_values_list, torch.Tensor)
-            and self.last_values_list.dim() == 3
-        ):
-            B, scratch_nodes, T = self.last_values_list.shape
-
-            # Get values for all scratch nodes per token, averaged across batch
-            values_per_token = []
-            aggregated_per_token = []
-
-            for t in range(T):
-                token_values = []
-                for s in range(scratch_nodes):
-                    # Average across batch dimension
-                    value = self.last_values_list[:, s, t].mean().item()
-                    token_values.append(value)
-
-                values_per_token.append(token_values)
-                # Aggregate all scratch nodes for this token (mean)
-                aggregated_per_token.append(sum(token_values) / len(token_values))
-
-            return {
-                "values_per_token": values_per_token,
-                "aggregated_per_token": aggregated_per_token,
-                "scratch_nodes": scratch_nodes,
-                "sequence_length": T,
-                "batch_size": B,
-            }
-
-        return {}
+        dag_logger.extract_all_logging_data(
+            self,
+            original_hidden=original_hidden,
+            dag_hidden=dag_hidden,
+            gate_values=gate_values,
+            mixed_hidden=mixed_hidden,
+        )
 
     def forward(self, idx, targets=None):
         _, T = idx.shape
@@ -870,18 +804,8 @@ class GPT(nn.Module):
             final_values  # Store full tensor (B, scratch_nodes, T) or (B, T)
         )
 
-        self.last_dag_hidden = dag_hidden  # Store for gradient tracking
-
         # Mix original and DAG hidden states using the DAGMixer
         hidden, gate_values = self.dag_mixer(original_hidden, dag_hidden)
-
-        # Store gate and norm values for logging (use last token's values)
-        self.last_gate_values = gate_values[-1] if gate_values else None
-        self.last_norm_values = {
-            "hidden": original_hidden[:, -1].norm(dim=-1).mean().detach(),
-            "dag_sem": dag_hidden[:, -1].norm(dim=-1).mean().detach(),
-            "fused": hidden[:, -1].norm(dim=-1).mean().detach(),
-        }
 
         logits = self.lm_head(hidden)
         loss = None

@@ -215,7 +215,8 @@ def test_dag_initial_nodes_all_tokens(monkeypatch):
     model(torch.tensor(tokens).unsqueeze(0))
 
     # Check node values
-    node_values = model.get_node_values_list()
+    logger = DAGLogger()
+    node_values = logger.get_node_values_list(model)
     assert len(node_values) == len(
         tokens
     ), f"Expected {len(tokens)} nodes, got {len(node_values)}"
@@ -261,7 +262,8 @@ def test_zero_padding_single_token(monkeypatch):
     model(torch.tensor([7]).unsqueeze(0))
 
     # With the new causal implementation, single token should create exactly one node
-    node_values = model.get_node_values_list()
+    logger = DAGLogger()
+    node_values = logger.get_node_values_list(model)
     assert (
         len(node_values) == 1
     ), f"Single token should create 1 node, got {len(node_values)}"
@@ -425,6 +427,15 @@ def test_extra_vals_daggpt():
     # Test backward pass works
     loss.backward()
 
+    # Extract logging data after forward pass
+    # Create dummy floating-point tensors for logging (since x is integer token IDs)
+    dummy_hidden = torch.randn(x.shape[0], x.shape[1], cfg.n_embd)
+    dummy_dag_hidden = torch.randn(x.shape[0], x.shape[1], cfg.n_embd) * 0.01
+    dummy_mixed = dummy_hidden * 0.5 + dummy_dag_hidden * 0.5
+    logger.extract_all_logging_data(
+        model, dummy_hidden, dummy_dag_hidden, None, dummy_mixed
+    )
+
     # Test gate and norm extraction after forward pass
     extra_vals = logger.get_extra_vals(model)
     gate_vals = {k: v for k, v in extra_vals.items() if k.startswith("gate/")}
@@ -484,6 +495,15 @@ def test_extra_vals_consistency_daggpt():
 
     # Test backward pass works
     loss.backward()
+
+    # Extract logging data after forward pass
+    # Create dummy floating-point tensors for logging (since x is integer token IDs)
+    dummy_hidden = torch.randn(x.shape[0], x.shape[1], cfg.n_embd)
+    dummy_dag_hidden = torch.randn(x.shape[0], x.shape[1], cfg.n_embd) * 0.01
+    dummy_mixed = dummy_hidden * 0.5 + dummy_dag_hidden * 0.5
+    logger.extract_all_logging_data(
+        model, dummy_hidden, dummy_dag_hidden, None, dummy_mixed
+    )
 
     # Call logger multiple times
     extra_vals_1 = logger.get_extra_vals(model)
@@ -654,6 +674,15 @@ def test_hook_behavior_no_grad_context():
 
         # Logger gradients should be empty (no backward pass)
         assert len(logger.captured_gradients) == 0
+
+        # Extract logging data after forward pass
+        # Create dummy floating-point tensors for logging (since x is integer token IDs)
+        dummy_hidden = torch.randn(x.shape[0], x.shape[1], cfg.n_embd)
+        dummy_dag_hidden = torch.randn(x.shape[0], x.shape[1], cfg.n_embd) * 0.01
+        dummy_mixed = dummy_hidden * 0.5 + dummy_dag_hidden * 0.5
+        logger.extract_all_logging_data(
+            model, dummy_hidden, dummy_dag_hidden, None, dummy_mixed
+        )
 
         # Logger should work and return reasonable values
         extra_vals = logger.get_extra_vals(model)

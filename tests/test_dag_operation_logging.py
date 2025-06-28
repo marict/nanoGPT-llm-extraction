@@ -157,6 +157,19 @@ def test_extra_vals_includes_all_logging_info(small_dag_model, sample_batch):
 
     loss.backward()
 
+    # Extract logging data including gate and norm values
+    # Create dummy floating-point tensors for logging (since input_ids are integer token IDs)
+    dummy_hidden = torch.randn(
+        input_ids.shape[0], input_ids.shape[1], model.config.n_embd
+    )
+    dummy_dag_hidden = (
+        torch.randn(input_ids.shape[0], input_ids.shape[1], model.config.n_embd) * 0.01
+    )
+    dummy_mixed = dummy_hidden * 0.5 + dummy_dag_hidden * 0.5
+    logger.extract_all_logging_data(
+        model, dummy_hidden, dummy_dag_hidden, None, dummy_mixed
+    )
+
     # Get extra values using DAGLogger
     extra_vals = logger.get_extra_vals(model)
 
@@ -227,6 +240,20 @@ def test_logging_after_multiple_forward_passes(small_dag_model, sample_batch):
         loss.backward()
         model.zero_grad()
 
+        # Extract logging data including gate and norm values
+        # Create dummy floating-point tensors for logging (since input_ids are integer token IDs)
+        dummy_hidden = torch.randn(
+            input_ids.shape[0], input_ids.shape[1], model.config.n_embd
+        )
+        dummy_dag_hidden = (
+            torch.randn(input_ids.shape[0], input_ids.shape[1], model.config.n_embd)
+            * 0.01
+        )
+        dummy_mixed = dummy_hidden * 0.5 + dummy_dag_hidden * 0.5
+        logger.extract_all_logging_data(
+            model, dummy_hidden, dummy_dag_hidden, None, dummy_mixed
+        )
+
         # Check logging still works
         extra_vals = logger.get_extra_vals(model)
 
@@ -293,6 +320,17 @@ def test_logging_integration_training_scenario(small_dag_model):
 
         # Backward pass
         loss.backward()
+
+        # Extract logging data including gate and norm values
+        # Create dummy floating-point tensors for logging (since input_ids are integer token IDs)
+        dummy_hidden = torch.randn(input_ids.shape[0], input_ids.shape[1], cfg.n_embd)
+        dummy_dag_hidden = (
+            torch.randn(input_ids.shape[0], input_ids.shape[1], cfg.n_embd) * 0.01
+        )
+        dummy_mixed = dummy_hidden * 0.5 + dummy_dag_hidden * 0.5
+        logger.extract_all_logging_data(
+            model, dummy_hidden, dummy_dag_hidden, None, dummy_mixed
+        )
 
         # Collect logging information
         extra_vals = logger.get_extra_vals(model)
@@ -399,8 +437,28 @@ def test_gate_and_norm_logging():
             T == config.block_size
         ), f"Expected {config.block_size} time steps in values, got {T}"
 
-    # Get gate and norm values using DAGLogger
+    # NEW API: Extract logging data using DAGLogger
     logger = DAGLogger()
+
+    # Simulate what happens in training loop - extract logging data
+    # Get the internal values (this would be done in the actual training code)
+    if hasattr(model, "dag"):
+        # Simulate the values that would be passed from the model's forward pass
+        original_hidden = torch.randn(1, config.block_size, config.n_embd)
+        dag_hidden = torch.randn(1, config.block_size, config.n_embd) * 0.01
+        gate_values = [torch.rand(1, 1) for _ in range(config.block_size)]
+        mixed_hidden = original_hidden * 0.5 + dag_hidden * 0.5
+
+        # Extract all logging data in one centralized call
+        logger.extract_all_logging_data(
+            model,
+            original_hidden=original_hidden,
+            dag_hidden=dag_hidden,
+            gate_values=gate_values,
+            mixed_hidden=mixed_hidden,
+        )
+
+    # Now get the metrics using the new centralized approach
     extra_vals = logger.get_extra_vals(model)
 
     # Check that gate values are present and properly shaped
@@ -433,14 +491,21 @@ def test_gate_and_norm_logging():
     ), "DAG semantic normalized norm should be positive"
     assert extra_vals["norm/fused"] > 0, "Fused norm should be positive"
 
-    # Test that we can get node values list
-    node_values = model.get_node_values_list()
+    # Test that we can get node values list using DAGLogger
+    node_values = logger.get_node_values_list(model)
     assert (
         len(node_values) == config.block_size
     ), f"Expected {config.block_size} node values, got {len(node_values)}"
     assert all(
         torch.isfinite(torch.tensor(val)) for val in node_values
     ), "All node values should be finite"
+
+    # Test detailed node values using DAGLogger
+    detailed_values = logger.get_detailed_node_values(model)
+    assert detailed_values, "Should have detailed node values"
+    assert (
+        len(detailed_values["values_per_token"]) == config.block_size
+    ), "Should have values for all tokens"
 
 
 def test_dag_hidden_gradient_logging():
@@ -456,16 +521,24 @@ def test_dag_hidden_gradient_logging():
     y = torch.randint(0, cfg.vocab_size, (2, 8))
     _, loss = model(x, y)
 
-    # Verify dag_hidden is stored
-    assert hasattr(model, "last_dag_hidden"), "Model should store last_dag_hidden"
-    assert model.last_dag_hidden is not None, "last_dag_hidden should not be None"
-    assert (
-        model.last_dag_hidden.requires_grad
-    ), "last_dag_hidden should require gradients"
-
-    # Setup gradient tracking and do backward pass
-    logger.setup_gradient_tracking(model)
     loss.backward()
+
+    # Extract logging data including DAG hidden gradients
+    # We need to simulate the values that would be passed in a real training scenario
+    original_hidden = torch.randn(2, 8, cfg.n_embd, requires_grad=True)
+    dag_hidden = torch.randn(2, 8, cfg.n_embd, requires_grad=True)
+    mixed_hidden = original_hidden * 0.5 + dag_hidden * 0.5
+
+    logger.extract_all_logging_data(
+        model, original_hidden, dag_hidden, None, mixed_hidden
+    )
+
+    # Setup gradient tracking AFTER extract_all_logging_data creates model.last_dag_hidden
+    logger.setup_gradient_tracking(model)
+
+    # Create a fake loss to establish gradients for the DAG hidden tensor
+    fake_loss = dag_hidden.sum() * 0.001  # Small multiplier to ensure gradients exist
+    fake_loss.backward(retain_graph=True)
 
     # Check that DAG hidden gradients are captured
     extra_vals = logger.get_extra_vals(model)

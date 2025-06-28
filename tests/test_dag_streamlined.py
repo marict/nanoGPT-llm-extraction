@@ -21,6 +21,7 @@ import torch.nn as nn
 torch.manual_seed(42)
 
 import dag_model
+from dag_logger import DAGLogger
 from dag_model import (GPT, DAGPlanPredictor, DifferentiableDAG, GPTConfig,
                        divide, multiply, subtract)
 
@@ -90,7 +91,8 @@ class TestDAGCore:
 
         with torch.no_grad():
             model(x)
-            node_values = model.get_node_values_list()
+            logger = DAGLogger()
+            node_values = logger.get_node_values_list(model)
 
             assert len(node_values) == 4  # One per token
             for val in node_values:
@@ -434,7 +436,8 @@ def test_comprehensive_dag_functionality():
             assert torch.isfinite(loss)
 
             # Check node values
-            node_values = model.get_node_values_list()
+            logger = DAGLogger()
+            node_values = logger.get_node_values_list(model)
             assert len(node_values) == seq_len
             for val in node_values:
                 assert torch.isfinite(torch.tensor(val))

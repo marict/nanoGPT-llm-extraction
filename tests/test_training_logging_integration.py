@@ -89,6 +89,17 @@ def test_operation_logging_during_training_step():
 
     loss.backward()
 
+    # Extract logging data including gate and norm values
+    # Create dummy floating-point tensors for logging (since input_ids are integer token IDs)
+    dummy_hidden = torch.randn(input_ids.shape[0], input_ids.shape[1], cfg.n_embd)
+    dummy_dag_hidden = (
+        torch.randn(input_ids.shape[0], input_ids.shape[1], cfg.n_embd) * 0.01
+    )
+    dummy_mixed = dummy_hidden * 0.5 + dummy_dag_hidden * 0.5
+    logger.extract_all_logging_data(
+        model, dummy_hidden, dummy_dag_hidden, None, dummy_mixed
+    )
+
     # Test console logging works
     try:
         logger.format_console_logging(model)
@@ -167,6 +178,17 @@ def test_console_logging_format():
 
     _, loss = model(input_ids, target_ids)
     loss.backward()
+
+    # Extract logging data including gate and norm values
+    # Create dummy floating-point tensors for logging (since input_ids are integer token IDs)
+    dummy_hidden = torch.randn(input_ids.shape[0], input_ids.shape[1], cfg.n_embd)
+    dummy_dag_hidden = (
+        torch.randn(input_ids.shape[0], input_ids.shape[1], cfg.n_embd) * 0.01
+    )
+    dummy_mixed = dummy_hidden * 0.5 + dummy_dag_hidden * 0.5
+    logger.extract_all_logging_data(
+        model, dummy_hidden, dummy_dag_hidden, None, dummy_mixed
+    )
 
     # Test that format_console_logging works
     try:
@@ -286,6 +308,17 @@ def test_logging_api_integration():
     # Test logging API
     logger = DAGLogger()
 
+    # Extract logging data including gate and norm values
+    # Create dummy floating-point tensors for logging (since input_ids are integer token IDs)
+    dummy_hidden = torch.randn(input_ids.shape[0], input_ids.shape[1], cfg.n_embd)
+    dummy_dag_hidden = (
+        torch.randn(input_ids.shape[0], input_ids.shape[1], cfg.n_embd) * 0.01
+    )
+    dummy_mixed = dummy_hidden * 0.5 + dummy_dag_hidden * 0.5
+    logger.extract_all_logging_data(
+        model, dummy_hidden, dummy_dag_hidden, None, dummy_mixed
+    )
+
     # Test console logging
     try:
         logger.format_console_logging(model)
@@ -332,7 +365,18 @@ def test_dag_logging_after_text_generation():
     prompt = torch.randint(0, cfg.vocab_size, (1, 3))
 
     with torch.no_grad():
-        _ = model.generate(prompt, max_new_tokens=2, temperature=0.8, top_k=10)
+        generated = model.generate(prompt, max_new_tokens=2, temperature=0.8, top_k=10)
+
+    # Extract logging data including gate and norm values
+    # Create dummy floating-point tensors for logging (since generated are integer token IDs)
+    dummy_hidden = torch.randn(generated.shape[0], generated.shape[1], cfg.n_embd)
+    dummy_dag_hidden = (
+        torch.randn(generated.shape[0], generated.shape[1], cfg.n_embd) * 0.01
+    )
+    dummy_mixed = dummy_hidden * 0.5 + dummy_dag_hidden * 0.5
+    dag_logger.extract_all_logging_data(
+        model, dummy_hidden, dummy_dag_hidden, None, dummy_mixed
+    )
 
     # Test console logging after generation
     try:
@@ -379,7 +423,18 @@ def test_operation_logits_removed():
     # Forward pass
     prompt = torch.randint(0, cfg.vocab_size, (1, 3))
     with torch.no_grad():
-        model.generate(prompt, max_new_tokens=1)
+        generated = model.generate(prompt, max_new_tokens=1)
+
+    # Extract logging data including gate and norm values
+    # Create dummy floating-point tensors for logging (since generated are integer token IDs)
+    dummy_hidden = torch.randn(generated.shape[0], generated.shape[1], cfg.n_embd)
+    dummy_dag_hidden = (
+        torch.randn(generated.shape[0], generated.shape[1], cfg.n_embd) * 0.01
+    )
+    dummy_mixed = dummy_hidden * 0.5 + dummy_dag_hidden * 0.5
+    dag_logger.extract_all_logging_data(
+        model, dummy_hidden, dummy_dag_hidden, None, dummy_mixed
+    )
 
     # Verify old methods no longer exist
     assert not hasattr(

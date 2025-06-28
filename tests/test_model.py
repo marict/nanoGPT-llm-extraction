@@ -128,6 +128,10 @@ def test_extra_vals_functionality():
     model_dag = GPT(config_dag)
     model_dag(x)
 
-    node_values = model_dag.get_node_values_list()
+    # Use DAGLogger to get node values
+    from dag_logger import DAGLogger
+
+    logger = DAGLogger()
+    node_values = logger.get_node_values_list(model_dag)
     assert isinstance(node_values, list)
     assert len(node_values) > 0

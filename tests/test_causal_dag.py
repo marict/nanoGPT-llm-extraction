@@ -9,6 +9,7 @@ maintains causality and proper gradient flow.
 import pytest
 import torch
 
+from dag_logger import DAGLogger
 from dag_model import GPT, GPTConfig
 
 
@@ -49,7 +50,8 @@ def test_causal_dag_forward_pass(causal_dag_model):
         assert logits.shape == (2, seq_len, config.vocab_size)
 
         # Check that we have the right number of nodes
-        node_values = model.get_node_values_list()
+        logger = DAGLogger()
+        node_values = logger.get_node_values_list(model)
         assert (
             len(node_values) == seq_len
         ), f"Expected {seq_len} nodes, got {len(node_values)}"
@@ -157,7 +159,8 @@ def test_causal_dag_node_growth(causal_dag_model):
         with torch.no_grad():
             logits, loss = model(x)
 
-        node_values = model.get_node_values_list()
+        logger = DAGLogger()
+        node_values = logger.get_node_values_list(model)
 
         # Should have exactly seq_len nodes
         assert (
@@ -243,7 +246,8 @@ def test_causal_dag_node_values_access(causal_dag_model):
         logits, loss = model(x)
 
     # Check that we can access node values through the model method
-    node_values = model.get_node_values_list()
+    logger = DAGLogger()
+    node_values = logger.get_node_values_list(model)
 
     # Values should have the right length
     assert len(node_values) == 3, "Should have 3 node values"
