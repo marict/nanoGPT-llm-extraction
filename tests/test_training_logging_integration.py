@@ -78,11 +78,14 @@ def test_operation_logging_during_training_step():
     input_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
     target_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
 
-    _, loss = model(input_ids, target_ids)
-
-    # Set up gradient tracking before backward pass
+    # Set up gradient tracking before forward pass
     logger = DAGLogger()
     logger.setup_gradient_tracking(model)
+
+    _, loss = model(input_ids, target_ids)
+
+    # Update gradient tracking after forward pass to capture operation gradients
+    logger.update_gradient_tracking(model)
 
     loss.backward()
 
@@ -158,12 +161,11 @@ def test_console_logging_format():
     input_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
     target_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
 
-    _, loss = model(input_ids, target_ids)
-
-    # Set up gradient tracking before backward pass
+    # Set up gradient tracking before forward pass
     logger = DAGLogger()
     logger.setup_gradient_tracking(model)
 
+    _, loss = model(input_ids, target_ids)
     loss.backward()
 
     # Test that format_console_logging works
@@ -451,11 +453,14 @@ def test_gradient_capture_after_text_generation():
     input_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
     target_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
 
+    # Set up gradient tracking BEFORE forward pass
+    dag_logger.setup_gradient_tracking(model)
+
     # Forward pass first to create last_activations
     _, loss = model(input_ids, target_ids)
 
-    # Set up gradient tracking AFTER forward pass but BEFORE backward pass
-    dag_logger.setup_gradient_tracking(model)
+    # Update gradient tracking after forward pass to capture operation gradients
+    dag_logger.update_gradient_tracking(model)
 
     # Backward pass
     loss.backward()

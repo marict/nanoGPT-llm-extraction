@@ -21,7 +21,7 @@ import torch.nn as nn
 torch.manual_seed(42)
 
 import dag_model
-from dag_model import (GPT, DAGController, DifferentiableDAG, GPTConfig,
+from dag_model import (GPT, DAGPlanPredictor, DifferentiableDAG, GPTConfig,
                        divide, multiply, subtract)
 
 
@@ -212,27 +212,50 @@ class TestDAGScratchSpace:
             ), f"Memory scaling may be quadratic (ratio={avg_ratio:.2f})"
 
 
-class TestDAGController:
-    """Test DAG controller behavior."""
+class TestDAGPlanPredictor:
+    """Test DAG plan predictor behavior."""
 
-    def test_dummy_controller_behavior(self):
-        """Test DAG with dummy controller to verify scratch space behavior."""
+    def test_dummy_plan_predictor_behavior(self):
+        """Test DAG with dummy plan predictor to verify scratch space behavior."""
         H, node_dim = 16, 8
 
-        class DummyController(DAGController):
-            def forward(self, embeds, operand_ctx, op_ctx):
-                B, N, node_dim = embeds.shape
-                device = embeds.device
+        class DummyPlanPredictor(DAGPlanPredictor):
+            def __init__(self, config, temperature=1.0):
+                super().__init__(config, temperature)
 
-                # Select last node for both operands
-                att_last = torch.zeros(B, N, device=device)
-                att_last[:, -1] = 1.0
+            def forward(self, hidden_states):
+                B, T, H = hidden_states.shape
 
-                # Use 'add' operation
-                op_weights = torch.zeros(B, len(dag_model.op_funcs), device=device)
-                op_weights[:, 0] = 1.0  # add operation
+                # Create dummy plans that always select last available node and add operation
+                operand1_probs = torch.zeros(
+                    B,
+                    T,
+                    self.dag_depth,
+                    self.max_nodes_per_token,
+                    device=hidden_states.device,
+                )
+                operand2_probs = torch.zeros(
+                    B,
+                    T,
+                    self.dag_depth,
+                    self.max_nodes_per_token,
+                    device=hidden_states.device,
+                )
+                operation_probs = torch.zeros(
+                    B, T, self.dag_depth, self.n_ops, device=hidden_states.device
+                )
 
-                return att_last, att_last, op_weights
+                for t in range(T):
+                    for step in range(self.dag_depth):
+                        available_nodes = (t + 1) * self.scratch_nodes
+                        if available_nodes > 0:
+                            # Select last available node for both operands
+                            operand1_probs[:, t, step, available_nodes - 1] = 1.0
+                            operand2_probs[:, t, step, available_nodes - 1] = 1.0
+                        # Select add operation (index 0)
+                        operation_probs[:, t, step, 0] = 1.0
+
+                return operand1_probs, operand2_probs, operation_probs
 
         config = GPTConfig(
             n_embd=H,
@@ -246,7 +269,7 @@ class TestDAGController:
         )
 
         model = GPT(config)
-        model.dag.controller = DummyController(node_dim, len(dag_model.op_funcs))
+        model.dag.plan_predictor = DummyPlanPredictor(config)
         model.eval()
 
         x = torch.ones(1, 1, dtype=torch.long)

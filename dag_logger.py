@@ -36,25 +36,11 @@ class DAGLogger:
         self.clear_gradient_hooks()
         self.captured_gradients = {}
 
-        if (
-            hasattr(model, "dag")
-            and hasattr(model.dag, "controller")
-            and hasattr(model.dag.controller, "last_op_logits_with_grad")
-            and model.dag.controller.last_op_logits_with_grad is not None
-            and model.dag.controller.last_op_logits_with_grad.requires_grad
-        ):
+        # For operation gradients, we'll set up a hook to capture them
+        # during the forward pass when they're actually used
+        self._setup_op_grad_tracking(model)
 
-            def save_op_grad(grad):
-                self.captured_gradients["op_logits_mean"] = grad.detach().mean().item()
-                op_grads = grad.detach().mean(dim=0).cpu().numpy()
-                for i, op_name in enumerate(op_names):
-                    self.captured_gradients[f"op_grad/{op_name}"] = float(op_grads[i])
-
-            hook = model.dag.controller.last_op_logits_with_grad.register_hook(
-                save_op_grad
-            )
-            self.gradient_hooks.append(hook)
-
+        # Set up DAG hidden gradient tracking (works if called after forward pass)
         if (
             hasattr(model, "last_dag_hidden")
             and model.last_dag_hidden is not None
@@ -76,6 +62,11 @@ class DAGLogger:
 
             hook = model.last_dag_hidden.register_hook(save_dag_hidden_grad)
             self.gradient_hooks.append(hook)
+
+    def update_gradient_tracking(self, model):
+        """Update gradient tracking after forward pass when tensors are available."""
+        # Set up operation gradient tracking now that tensors exist
+        self._setup_op_grad_tracking(model)
 
     def clear_gradient_hooks(self) -> None:
         """Remove all registered gradient hooks."""
@@ -136,13 +127,13 @@ class DAGLogger:
         """
         if (
             hasattr(model, "dag")
-            and hasattr(model.dag, "controller")
-            and hasattr(model.dag.controller, "last_op_logits")
-            and model.dag.controller.last_op_logits is not None
+            and hasattr(model.dag, "plan_predictor")
+            and hasattr(model.dag.plan_predictor, "last_op_logits")
+            and model.dag.plan_predictor.last_op_logits is not None
         ):
             with torch.no_grad():
-                op_logits = model.dag.controller.last_op_logits
-                probs = F.softmax(op_logits, dim=-1)[0].detach().cpu().numpy()
+                op_logits = model.dag.plan_predictor.last_op_logits
+                probs = F.softmax(op_logits, dim=-1).detach().cpu().numpy()
 
                 print("Operation probabilities:")
                 for op_name, prob in zip(op_names, probs):
@@ -150,20 +141,34 @@ class DAGLogger:
 
         if (
             hasattr(model, "dag")
-            and hasattr(model.dag, "controller")
-            and hasattr(model.dag.controller, "last_attn")
-            and model.dag.controller.last_attn is not None
+            and hasattr(model.dag, "plan_predictor")
+            and hasattr(model.dag.plan_predictor, "last_attn")
+            and model.dag.plan_predictor.last_attn is not None
         ):
             with torch.no_grad():
-                attn_probs = model.dag.controller.last_attn[0]
+                attn_probs = model.dag.plan_predictor.last_attn[0]
 
                 print("Operands chosen:")
-                for o in range(attn_probs.shape[0]):
-                    operand1_choice = int(attn_probs[o, 0].argmax())
-                    operand2_choice = int(attn_probs[o, 1].argmax())
-                    max_nodes = attn_probs.shape[-1]
+                # attn_probs shape: (T, dag_depth, max_nodes, 2)
+                # where the last dimension is [operand1_probs, operand2_probs]
+                if attn_probs.dim() >= 3 and attn_probs.shape[-1] == 2:
+                    for t in range(attn_probs.shape[0]):  # time steps
+                        for step in range(attn_probs.shape[1]):  # dag steps
+                            operand1_probs = attn_probs[
+                                t, step, :, 0
+                            ]  # operand1 probabilities over nodes
+                            operand2_probs = attn_probs[
+                                t, step, :, 1
+                            ]  # operand2 probabilities over nodes
+                            operand1_choice = int(operand1_probs.argmax())
+                            operand2_choice = int(operand2_probs.argmax())
+                            max_nodes = operand1_probs.shape[0]
+                            print(
+                                f"  Token {t}, Step {step}: {operand1_choice}, {operand2_choice} (out of {max_nodes})"
+                            )
+                else:
                     print(
-                        f"  Operand {o}: {operand1_choice}, {operand2_choice} (out of {max_nodes})"
+                        "  [Attention probabilities format not supported for display]"
                     )
 
         node_values = self.get_node_values_list(model)
@@ -218,3 +223,47 @@ class DAGLogger:
         log_dict.update(self.get_extra_vals(model))
 
         return log_dict
+
+    def _setup_op_grad_tracking(self, model):
+        """Set up operation gradient tracking using the saved tensor from forward pass."""
+        # Try to hook into the full operation probabilities tensor which should be connected to the computation graph
+        if (
+            hasattr(model, "dag")
+            and hasattr(model.dag, "plan_predictor")
+            and hasattr(model.dag.plan_predictor, "last_operation_probs_full")
+            and model.dag.plan_predictor.last_operation_probs_full is not None
+            and model.dag.plan_predictor.last_operation_probs_full.requires_grad
+        ):
+
+            def save_op_grad(grad):
+                # grad shape: (B, T, dag_depth, n_ops)
+                self.captured_gradients["op_logits_mean"] = grad.detach().mean().item()
+                # Average over batch, time, and steps to get per-operation gradients
+                op_grads = grad.detach().mean(dim=(0, 1, 2)).cpu().numpy()  # (n_ops,)
+                for i, op_name in enumerate(op_names):
+                    self.captured_gradients[f"op_grad/{op_name}"] = float(op_grads[i])
+
+            hook = model.dag.plan_predictor.last_operation_probs_full.register_hook(
+                save_op_grad
+            )
+            self.gradient_hooks.append(hook)
+
+        # Fallback to the mean version if full version not available
+        elif (
+            hasattr(model, "dag")
+            and hasattr(model.dag, "plan_predictor")
+            and hasattr(model.dag.plan_predictor, "last_op_logits_with_grad")
+            and model.dag.plan_predictor.last_op_logits_with_grad is not None
+            and model.dag.plan_predictor.last_op_logits_with_grad.requires_grad
+        ):
+
+            def save_op_grad(grad):
+                self.captured_gradients["op_logits_mean"] = grad.detach().mean().item()
+                op_grads = grad.detach().cpu().numpy()
+                for i, op_name in enumerate(op_names):
+                    self.captured_gradients[f"op_grad/{op_name}"] = float(op_grads[i])
+
+            hook = model.dag.plan_predictor.last_op_logits_with_grad.register_hook(
+                save_op_grad
+            )
+            self.gradient_hooks.append(hook)

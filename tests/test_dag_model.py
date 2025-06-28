@@ -19,8 +19,8 @@ np.random.seed(42)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import dag_model  # noqa: E402
 from dag_logger import DAGLogger
-from dag_model import (GPT, DAGController, DifferentiableDAG, GPTConfig,
-                       divide, multiply, subtract)
+from dag_model import (GPT, DAGPlanPredictor, DifferentiableDAG, GPTConfig,
+                       ValueExtractor, divide, multiply, subtract)
 
 
 # --------------------------------------------------------------------- #
@@ -93,7 +93,7 @@ def test_dag_backward_flow(small_dag_gpt):
 
     # Verify DAG structure exists
     assert hasattr(model, "dag"), "Model should have DAG"
-    assert hasattr(model.dag, "controller"), "DAG should have controller"
+    assert hasattr(model.dag, "plan_predictor"), "DAG should have plan_predictor"
 
 
 # --------------------------------------------------------------------- #
@@ -119,23 +119,44 @@ def test_dag_node_growth_regression(monkeypatch):
     # overwrite op_funcs with just [add, identity] for brevity
     monkeypatch.setattr(dag_model, "op_funcs", dag_model.op_funcs[:2])
 
-    class DummyController(DAGController):
-        def __init__(self, hidden_dim, n_ops, temperature=1.0):
-            super().__init__(hidden_dim, n_ops, temperature)
+    class DummyController(DAGPlanPredictor):
+        def __init__(self, config, temperature=1.0):
+            super().__init__(config, temperature)
 
-        def forward(self, embeds, operand_ctx, op_ctx):  # new signature
-            B, N, node_dim = embeds.shape  # embeds shape
-            device = embeds.device
+        def forward(self, hidden_states):
+            B, T, H = hidden_states.shape
 
-            # Create attention weights that select the last node
-            att_last = torch.zeros(B, N, device=device)
-            att_last[:, -1] = 1.0  # pick last node
+            # Create dummy plans that always select the last available node for operands
+            # and the first operation (add)
+            operand1_probs = torch.zeros(
+                B,
+                T,
+                self.dag_depth,
+                self.max_nodes_per_token,
+                device=hidden_states.device,
+            )
+            operand2_probs = torch.zeros(
+                B,
+                T,
+                self.dag_depth,
+                self.max_nodes_per_token,
+                device=hidden_states.device,
+            )
+            operation_probs = torch.zeros(
+                B, T, self.dag_depth, self.n_ops, device=hidden_states.device
+            )
 
-            # Use 'add' operation
-            op_weights = torch.zeros(B, 2, device=device)
-            op_weights[:, 0] = 1.0  # use 'add'
+            for t in range(T):
+                for step in range(self.dag_depth):
+                    available_nodes = (t + 1) * self.scratch_nodes
+                    if available_nodes > 0:
+                        # Select last available node for both operands
+                        operand1_probs[:, t, step, available_nodes - 1] = 1.0
+                        operand2_probs[:, t, step, available_nodes - 1] = 1.0
+                    # Select add operation (index 0)
+                    operation_probs[:, t, step, 0] = 1.0
 
-            return att_last, att_last, op_weights
+            return operand1_probs, operand2_probs, operation_probs
 
     # Create a minimal config for the DAG with fixed scratch space
     config = GPTConfig(
@@ -149,7 +170,7 @@ def test_dag_node_growth_regression(monkeypatch):
         block_size=4,
     )
     dag = DifferentiableDAG(config, proj)
-    dag.controller = DummyController(node_dim, len(dag_model.op_funcs))
+    dag.plan_predictor = DummyController(config)
 
     # Create original hidden state for the new interface
     B, T = 1, 1  # batch size 1, sequence length 1
@@ -294,53 +315,73 @@ def test_step_contexts_added(monkeypatch):
 
     captured = []
 
-    class RecController(DAGController):
-        def __init__(self, hidden_dim, n_ops, temperature=1.0):
-            super().__init__(hidden_dim, n_ops, temperature)
+    class RecController(DAGPlanPredictor):
+        def __init__(self, config, temperature=1.0):
+            super().__init__(config, temperature)
 
-        def forward(self, embeds, operand_ctx, op_ctx):
-            captured.append((operand_ctx.clone(), op_ctx.clone()))
-            B, N, _ = embeds.shape
-            att = torch.zeros(B, N, device=embeds.device)
-            att[:, 0] = 1
-            op_weights = torch.tensor([[1.0, 0.0]], device=embeds.device)
-            return att, att, op_weights
+        def forward(self, hidden_states):
+            captured.append(hidden_states.clone())
+            # Return simple plans that select first available node and add operation
+            B, T, H = hidden_states.shape
+            operand1_probs = torch.zeros(
+                B,
+                T,
+                self.dag_depth,
+                self.max_nodes_per_token,
+                device=hidden_states.device,
+            )
+            operand2_probs = torch.zeros(
+                B,
+                T,
+                self.dag_depth,
+                self.max_nodes_per_token,
+                device=hidden_states.device,
+            )
+            operation_probs = torch.zeros(
+                B, T, self.dag_depth, self.n_ops, device=hidden_states.device
+            )
 
-    dag.controller = RecController(H, len(dag_model.op_funcs))
+            for t in range(T):
+                for step in range(self.dag_depth):
+                    available_nodes = (t + 1) * self.scratch_nodes
+                    if available_nodes > 0:
+                        operand1_probs[:, t, step, 0] = 1.0  # First node
+                        operand2_probs[:, t, step, 0] = 1.0  # First node
+                    operation_probs[:, t, step, 0] = 1.0  # Add operation
+
+            return operand1_probs, operand2_probs, operation_probs
+
+    dag.plan_predictor = RecController(config)
 
     # Create original hidden state for the new interface
     original_hidden = torch.zeros(1, 2, H)  # (B=1, T=2, H)
     original_hidden[0, 1] = 1  # Second token is ones
     dag(original_hidden)
 
-    # With T=2 tokens and dag_depth=3 steps, we expect 2*3=6 controller calls
-    assert len(captured) == 6, "Expected 6 calls (2 tokens × 3 steps), got %d" % len(
+    # With the new batch architecture, plan predictor is called once per forward pass
+    assert len(captured) == 1, "Expected 1 call (batch prediction), got %d" % len(
         captured
     )
 
-    # Check that contexts are captured and have the right shape
-    for call_idx, (oc1, oc2) in enumerate(captured):
-        # With fixed scratch space, context shapes may differ
+    # Check that hidden states are captured and have the right shape
+    for call_idx, hidden_states in enumerate(captured):
         assert (
-            len(oc1.shape) >= 2
-        ), f"Operand context {call_idx} should have at least 2 dims: {oc1.shape}"
+            len(hidden_states.shape) == 3
+        ), f"Hidden states {call_idx} should have 3 dims: {hidden_states.shape}"
         assert (
-            len(oc2.shape) >= 2
-        ), f"Op context {call_idx} should have at least 2 dims: {oc2.shape}"
+            hidden_states.shape[0] == 1
+        ), f"Hidden states {call_idx} batch size should be 1: {hidden_states.shape}"
         assert (
-            oc1.shape[0] == 1
-        ), f"Operand context {call_idx} batch size should be 1: {oc1.shape}"
+            hidden_states.shape[1] == 2
+        ), f"Hidden states {call_idx} sequence length should be 2: {hidden_states.shape}"
         assert (
-            oc2.shape[0] == 1
-        ), f"Op context {call_idx} batch size should be 1: {oc2.shape}"
+            hidden_states.shape[2] == H
+        ), f"Hidden states {call_idx} hidden dim should be {H}: {hidden_states.shape}"
 
-        # Check that contexts are finite
+        # Check that hidden states are finite
         assert torch.isfinite(
-            oc1
-        ).all(), f"Operand context {call_idx} contains non-finite values"
-        assert torch.isfinite(
-            oc2
-        ).all(), f"Op context {call_idx} contains non-finite values"
+            hidden_states
+        ).all(), f"Hidden states {call_idx} contains non-finite values"
 
 
 # --------------------------------------------------------------------- #
@@ -489,7 +530,7 @@ def test_hook_behavior():
 
     # Check that DAG components are working
     assert hasattr(model, "dag"), "Model should have DAG"
-    assert hasattr(model.dag, "controller"), "DAG should have controller"
+    assert hasattr(model.dag, "plan_predictor"), "DAG should have plan_predictor"
     assert hasattr(model.dag, "node_embeds"), "DAG should have node_embeds"
     assert hasattr(model.dag, "node_values"), "DAG should have node_values"
 
@@ -609,7 +650,7 @@ def test_hook_behavior_no_grad_context():
 
         # Should still have DAG components
         assert hasattr(model, "dag")
-        assert hasattr(model.dag, "controller")
+        assert hasattr(model.dag, "plan_predictor")
 
         # Logger gradients should be empty (no backward pass)
         assert len(logger.captured_gradients) == 0
@@ -652,18 +693,15 @@ def test_dag_gradient_health():
     loss.backward()
 
     # Check DAG controller gradients
-    controller = model.dag.controller
+    plan_predictor = model.dag.plan_predictor
 
     # Check critical weight parameters (not bias terms which can be small)
     critical_params = [
-        "query_proj1.weight",
-        "query_proj2.weight",
-        "op_query_proj.weight",
-        "key_proj.weight",
-        "op_selector.weight",
+        "predictor.0.weight",  # First linear layer
+        "predictor.2.weight",  # Second linear layer
     ]
 
-    for name, param in controller.named_parameters():
+    for name, param in plan_predictor.named_parameters():
         if param.grad is not None:
             grad_norm = param.grad.norm().item()
 
@@ -685,8 +723,8 @@ def test_dag_gradient_health():
                 assert grad_norm >= 0, f"Gradient for {name} is negative: {grad_norm}"
                 assert grad_norm < 1e3, f"Gradient for {name} is too large: {grad_norm}"
 
-    # Check that op_selector specifically has gradients (this was problematic before)
-    op_selector_grad = controller.op_selector.weight.grad
+    # Check that predictor specifically has gradients (this was problematic before)
+    op_selector_grad = plan_predictor.predictor[-1].weight.grad
     assert op_selector_grad is not None, "op_selector should have gradients"
     op_grad_norm = op_selector_grad.norm().item()
     assert op_grad_norm > 1e-8, f"op_selector gradient is too small: {op_grad_norm}"
@@ -723,7 +761,7 @@ def test_dag_gradient_flow_vs_temperature():
         loss.backward()
 
         # Measure gradient norm for op_selector (previously problematic)
-        op_grad = model.dag.controller.op_selector.weight.grad
+        op_grad = model.dag.plan_predictor.predictor[-1].weight.grad
         if op_grad is not None:
             grad_norm = op_grad.norm().item()
             gradient_norms.append(grad_norm)
@@ -778,45 +816,66 @@ def test_dag_gumbel_outputs_are_discrete():
     with torch.no_grad():
         model(x)
 
-    # Check last attention from controller
-    last_attn = model.dag.controller.last_attn
-    last_op_weights = model.dag.controller.last_op_weights
+    # Check last attention from plan predictor
+    last_attn = model.dag.plan_predictor.last_attn
+    last_op_weights = model.dag.plan_predictor.last_op_weights
 
     assert last_attn is not None, "Should have attention weights"
     assert last_op_weights is not None, "Should have operation weights"
 
-    # Check that each attention head (att1, att2) is approximately one-hot
-    # last_attn has shape (batch, 2, seq_len) where 2 represents att1 and att2
-    for batch_idx in range(last_attn.shape[0]):
-        for head_idx in range(last_attn.shape[1]):  # 2 heads: att1 and att2
-            attn_head = last_attn[batch_idx, head_idx, :]
-            attn_sum = attn_head.sum()
+    # Check that each attention distribution is approximately one-hot
+    # last_attn has shape (B, T, dag_depth, max_nodes, 2) where last dim has operand1 and operand2 probs
+    B, T, dag_depth, max_nodes, _ = last_attn.shape
 
-            # Each attention head should sum to approximately 1
-            assert torch.allclose(
-                attn_sum, torch.tensor(1.0), atol=1e-9
-            ), f"Attention head {head_idx} in batch {batch_idx} should sum to ~1, got {attn_sum}"
+    for batch_idx in range(B):
+        for token_idx in range(T):
+            for step_idx in range(dag_depth):
+                for operand_idx in range(2):  # operand1 and operand2
+                    attn_head = last_attn[
+                        batch_idx, token_idx, step_idx, :, operand_idx
+                    ]
 
-            # Each attention head should have one dominant element
-            max_val = torch.max(attn_head)
-            dominant_count = torch.sum(attn_head > max_val * 0.5).item()
-            assert (
-                dominant_count >= 1
-            ), f"Attention head {head_idx} in batch {batch_idx} should have at least one dominant element, got {dominant_count}"
+                    # Filter to only available nodes for this token
+                    available_nodes = (token_idx + 1) * cfg.dag_scratch_nodes
+                    if available_nodes > 0:
+                        relevant_attn = attn_head[:available_nodes]
+                        attn_sum = relevant_attn.sum()
+
+                        # Each attention head should sum to approximately 1
+                        assert torch.allclose(
+                            attn_sum, torch.tensor(1.0), atol=1e-8
+                        ), f"Attention operand {operand_idx} for token {token_idx} step {step_idx} batch {batch_idx} should sum to ~1, got {attn_sum}"
+
+                        # Each attention head should have one dominant element
+                        max_val = torch.max(relevant_attn)
+                        dominant_count = torch.sum(relevant_attn > max_val * 0.5).item()
+                        assert (
+                            dominant_count >= 1
+                        ), f"Attention operand {operand_idx} for token {token_idx} step {step_idx} batch {batch_idx} should have at least one dominant element, got {dominant_count}"
 
     # Check operation weights are approximately one-hot
-    op_sums = last_op_weights.sum(dim=1)
-    assert torch.allclose(
-        op_sums, torch.ones_like(op_sums), atol=1e-9
-    ), f"Op weights should sum to ~1, got sums: {op_sums}"
+    # last_op_weights is averaged across batch, tokens, and steps, so it's a 1D tensor of size n_ops
+    assert (
+        last_op_weights.dim() == 1
+    ), f"Op weights should be 1D (averaged), got shape {last_op_weights.shape}"
+    assert last_op_weights.shape[0] == len(
+        dag_model.op_funcs
+    ), f"Op weights should have {len(dag_model.op_funcs)} operations"
 
-    for i in range(last_op_weights.shape[0]):
-        # Allow for numerical precision issues - check for one clearly dominant element
-        max_val = torch.max(last_op_weights[i])
-        dominant_count = torch.sum(last_op_weights[i] > max_val * 0.5).item()
-        assert (
-            dominant_count >= 1
-        ), f"Row {i} should have at least one dominant operation, got {dominant_count}"
+    # The sum should be approximately 1 (averaged probabilities)
+    op_sum = last_op_weights.sum()
+    assert torch.allclose(
+        op_sum, torch.tensor(1.0), atol=1e-8
+    ), f"Op weights should sum to ~1, got sum: {op_sum}"
+
+    # There should be one clearly dominant operation (allowing for averaging effects)
+    max_val = torch.max(last_op_weights)
+    dominant_count = torch.sum(
+        last_op_weights > max_val * 0.3
+    ).item()  # More lenient due to averaging
+    assert (
+        dominant_count >= 1
+    ), f"Should have at least one dominant operation, got {dominant_count}"
 
 
 def test_dag_gradients_multiple_backward_passes():
@@ -846,7 +905,7 @@ def test_dag_gradients_multiple_backward_passes():
         loss.backward()
 
         # Check op_selector gradients specifically
-        op_grad = model.dag.controller.op_selector.weight.grad
+        op_grad = model.dag.plan_predictor.predictor[-1].weight.grad
         assert op_grad is not None, f"Step {i}: op_selector should have gradients"
 
         grad_norm = op_grad.norm().item()
@@ -918,3 +977,195 @@ def test_dag_value_gradients():
     grad_norm = scalar_embed_grad.norm().item()
     assert grad_norm > 1e-8, f"scalar_to_embed gradient too small: {grad_norm}"
     assert grad_norm < 1e2, f"scalar_to_embed gradient too large: {grad_norm}"
+
+
+def test_value_extractor_l2_norm_vs_attention():
+    """Test ValueExtractor behavior with both L2 norm and attention modes."""
+    torch.manual_seed(42)  # For reproducibility
+
+    # Test dimensions
+    B, T, H = 2, 4, 16
+
+    # Create test embedding data
+    node_embeds = torch.randn(B, T, H, requires_grad=True)
+
+    # Test 1: Attention-based ValueExtractor (default mode)
+    config_attention = GPTConfig(n_embd=H, n_head=2, value_extractor_l2_norm=False)
+    value_extractor_attention = ValueExtractor(config_attention)
+
+    # Test 2: L2 norm ValueExtractor
+    config_l2 = GPTConfig(n_embd=H, n_head=2, value_extractor_l2_norm=True)
+    value_extractor_l2 = ValueExtractor(config_l2)
+
+    # Forward pass with both extractors
+    values_attention = value_extractor_attention(node_embeds)
+    values_l2 = value_extractor_l2(node_embeds)
+
+    # Basic shape tests
+    assert values_attention.shape == (
+        B,
+        T,
+    ), f"Attention values shape should be (B, T), got {values_attention.shape}"
+    assert values_l2.shape == (
+        B,
+        T,
+    ), f"L2 values shape should be (B, T), got {values_l2.shape}"
+
+    # Values should be finite
+    assert torch.isfinite(values_attention).all(), "Attention values should be finite"
+    assert torch.isfinite(values_l2).all(), "L2 values should be finite"
+
+    # L2 norm values should be non-negative (L2 norm is always >= 0)
+    assert (values_l2 >= 0).all(), "L2 norm values should be non-negative"
+
+    # Values should be different (unless by chance they're identical)
+    # Use a tolerance since random chance could make them similar
+    assert not torch.allclose(
+        values_attention, values_l2, atol=1e-6
+    ), "Attention and L2 values should be different"
+
+    # Test parameter count difference
+    attention_params = sum(p.numel() for p in value_extractor_attention.parameters())
+    l2_params = sum(p.numel() for p in value_extractor_l2.parameters())
+
+    assert (
+        attention_params > 0
+    ), "Attention-based extractor should have learnable parameters"
+    assert l2_params == 0, "L2 norm extractor should have no learnable parameters"
+
+    # Test gradient flow for attention-based extractor
+    loss_attention = values_attention.sum()
+    loss_attention.backward(retain_graph=True)
+
+    # Check that attention-based extractor has gradients
+    attention_has_grads = any(
+        p.grad is not None and p.grad.norm().item() > 0
+        for p in value_extractor_attention.parameters()
+    )
+    assert attention_has_grads, "Attention-based extractor should have gradients"
+
+    # Reset gradients and test L2 norm (should not accumulate any parameter gradients)
+    node_embeds.grad = None
+    if hasattr(node_embeds, "grad") and node_embeds.grad is not None:
+        node_embeds.grad.zero_()
+
+    loss_l2 = values_l2.sum()
+    loss_l2.backward()
+
+    # L2 norm extractor should have no parameter gradients (no parameters to update)
+    l2_has_grads = any(
+        p.grad is not None and p.grad.norm().item() > 0
+        for p in value_extractor_l2.parameters()
+    )
+    assert not l2_has_grads, "L2 norm extractor should have no parameter gradients"
+
+    # But input should still have gradients for L2 norm case
+    assert (
+        node_embeds.grad is not None
+    ), "Input should have gradients from L2 norm computation"
+    assert torch.isfinite(node_embeds.grad).all(), "Input gradients should be finite"
+
+    # Test L2 norm computation correctness
+    expected_l2 = torch.linalg.norm(node_embeds.detach(), dim=-1)
+    assert torch.allclose(
+        values_l2, expected_l2, atol=1e-6
+    ), "L2 norm values should match manual computation"
+
+    # Test that attention-based results are reasonable
+    # They should vary across the sequence (attention should create variation)
+    attention_var = values_attention.var(dim=1).mean()  # Variance across sequence
+    assert (
+        attention_var > 1e-8
+    ), "Attention-based values should show variation across sequence"
+
+    print("✓ ValueExtractor L2 norm vs attention test passed")
+
+
+def test_value_extractor_in_dag_model():
+    """Test ValueExtractor modes work correctly within the full DAG model."""
+    torch.manual_seed(42)
+
+    # Test with L2 norm extractor
+    config_l2 = GPTConfig(
+        vocab_size=20,
+        block_size=4,
+        n_layer=1,
+        n_head=1,
+        n_embd=8,
+        dag_depth=2,
+        dag_scratch_nodes=2,
+        value_extractor_l2_norm=True,
+    )
+    model_l2 = GPT(config_l2)
+
+    # Test with attention-based extractor
+    config_attention = GPTConfig(
+        vocab_size=20,
+        block_size=4,
+        n_layer=1,
+        n_head=1,
+        n_embd=8,
+        dag_depth=2,
+        dag_scratch_nodes=2,
+        value_extractor_l2_norm=False,
+    )
+    model_attention = GPT(config_attention)
+
+    # Test data
+    x = torch.randint(0, 20, (2, 4))
+    y = torch.randint(0, 20, (2, 4))
+
+    # Forward pass with both models
+    logits_l2, loss_l2 = model_l2(x, y)
+    logits_attention, loss_attention = model_attention(x, y)
+
+    # Basic functionality tests
+    assert (
+        logits_l2.shape == logits_attention.shape
+    ), "Both models should produce same output shape"
+    assert (
+        loss_l2 is not None and loss_attention is not None
+    ), "Both models should compute loss"
+    assert torch.isfinite(loss_l2) and torch.isfinite(
+        loss_attention
+    ), "Losses should be finite"
+
+    # Models should produce different outputs (different value extraction methods)
+    assert not torch.allclose(
+        logits_l2, logits_attention, atol=1e-6
+    ), "Models with different value extractors should produce different outputs"
+
+    # Test backward pass for both
+    loss_l2.backward()
+    loss_attention.backward()
+
+    # Both should have healthy gradients
+    l2_grad_norm = sum(
+        p.grad.norm().item() for p in model_l2.parameters() if p.grad is not None
+    )
+    attention_grad_norm = sum(
+        p.grad.norm().item() for p in model_attention.parameters() if p.grad is not None
+    )
+
+    assert l2_grad_norm > 0, "L2 model should have gradients"
+    assert attention_grad_norm > 0, "Attention model should have gradients"
+    assert (
+        l2_grad_norm < attention_grad_norm
+    ), "L2 model should have fewer parameters with gradients"
+
+    # Check specific parameter counts
+    l2_value_extractor_params = sum(
+        p.numel() for p in model_l2.dag.value_extractor.parameters()
+    )
+    attention_value_extractor_params = sum(
+        p.numel() for p in model_attention.dag.value_extractor.parameters()
+    )
+
+    assert (
+        l2_value_extractor_params == 0
+    ), "L2 value extractor should have no parameters"
+    assert (
+        attention_value_extractor_params > 0
+    ), "Attention value extractor should have parameters"
+
+    print("✓ ValueExtractor in DAG model test passed")

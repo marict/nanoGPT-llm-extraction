@@ -78,10 +78,14 @@ def test_operation_gradient_capture(small_dag_model, sample_batch):
     model, _ = small_dag_model
     input_ids, target_ids = sample_batch
 
-    logits, loss = model(input_ids, target_ids)
-
     logger = DAGLogger()
     logger.setup_gradient_tracking(model)
+
+    logits, loss = model(input_ids, target_ids)
+
+    # Update gradient tracking after forward pass when tensors are available
+    logger.update_gradient_tracking(model)
+
     loss.backward()
 
     extra_vals = logger.get_extra_vals(model)
@@ -108,16 +112,16 @@ def test_gradient_computation_consistency(small_dag_model, sample_batch):
 
     logger = DAGLogger()
 
-    logits1, loss1 = model(input_ids, target_ids)
     logger.setup_gradient_tracking(model)
+    logits1, loss1 = model(input_ids, target_ids)
     loss1.backward()
     extra_vals1 = logger.get_extra_vals(model)
     gradients_run1 = [extra_vals1.get(f"op_grad/{op}", 0.0) for op in op_names]
 
     model.zero_grad()
 
-    logits2, loss2 = model(input_ids, target_ids)
     logger.setup_gradient_tracking(model)
+    logits2, loss2 = model(input_ids, target_ids)
     loss2.backward()
     extra_vals2 = logger.get_extra_vals(model)
     gradients_run2 = [extra_vals2.get(f"op_grad/{op}", 0.0) for op in op_names]
@@ -141,12 +145,15 @@ def test_extra_vals_includes_all_logging_info(small_dag_model, sample_batch):
     model, _ = small_dag_model
     input_ids, target_ids = sample_batch
 
+    # Set up gradient tracking before forward pass
+    logger = DAGLogger()
+    logger.setup_gradient_tracking(model)
+
     # Forward and backward pass
     logits, loss = model(input_ids, target_ids)
 
-    # Set up gradient tracking before backward pass
-    logger = DAGLogger()
-    logger.setup_gradient_tracking(model)
+    # Update gradient tracking after forward pass when tensors are available
+    logger.update_gradient_tracking(model)
 
     loss.backward()
 
@@ -211,8 +218,12 @@ def test_logging_after_multiple_forward_passes(small_dag_model, sample_batch):
 
     # Multiple forward passes
     for i in range(3):
-        logits, loss = model(input_ids, target_ids)
         logger.setup_gradient_tracking(model)
+        logits, loss = model(input_ids, target_ids)
+
+        # Update gradient tracking after forward pass when tensors are available
+        logger.update_gradient_tracking(model)
+
         loss.backward()
         model.zero_grad()
 
@@ -271,11 +282,14 @@ def test_logging_integration_training_scenario(small_dag_model):
         input_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
         target_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
 
+        # Set up gradient tracking before forward pass
+        logger.setup_gradient_tracking(model)
+
         # Forward pass
         logits, loss = model(input_ids, target_ids)
 
-        # Set up gradient tracking before backward pass
-        logger.setup_gradient_tracking(model)
+        # Update gradient tracking after forward pass when tensors are available
+        logger.update_gradient_tracking(model)
 
         # Backward pass
         loss.backward()

@@ -8,42 +8,50 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import dag_model
-from dag_model import GPT, DAGController, GPTConfig, op_funcs
+from dag_model import GPT, DAGPlanPredictor, GPTConfig, op_funcs
 
 
 # ---------------------------------------------------------------------------
-# Controller behaviour
+# Plan predictor behaviour
 # ---------------------------------------------------------------------------
-def test_controller_selects_distinct_inputs():
-    torch.manual_seed(42)  # Use a different seed that produces more distinct values
-    controller = DAGController(
-        hidden_dim=4, n_ops=len(op_funcs), temperature=1.0
-    )  # Use lower temperature for more distinct selection
+def test_plan_predictor_valid_outputs():
+    torch.manual_seed(42)
+    config = GPTConfig(
+        vocab_size=20,
+        block_size=4,
+        n_layer=1,
+        n_head=1,
+        n_embd=8,
+        dag_depth=2,
+        dag_scratch_nodes=2,
+        dag_node_dim=4,
+    )
 
-    nodes = torch.randn(1, 3, 4)  # (B, N, H)
-    ctx = torch.zeros(1, 4)  # (B, H)
+    plan_predictor = DAGPlanPredictor(config, temperature=1.0)
 
-    att1, att2, _ = controller(nodes, ctx, ctx)
+    # Test batch of hidden states
+    hidden_states = torch.randn(1, 3, 8)  # (B, T, H)
 
-    # With Gumbel softmax, both att1 and att2 should sum to 1
-    assert torch.allclose(att1.sum(dim=1), torch.ones(1))  # Should sum to 1
-    assert torch.allclose(att2.sum(dim=1), torch.ones(1))  # Should sum to 1
+    op1_probs, op2_probs, op_probs = plan_predictor(hidden_states)
 
-    # Check that the distributions are valid (non-negative, finite)
-    assert torch.all(att1 >= 0), "att1 should be non-negative"
-    assert torch.all(att2 >= 0), "att2 should be non-negative"
-    assert torch.all(torch.isfinite(att1)), "att1 should be finite"
-    assert torch.all(torch.isfinite(att2)), "att2 should be finite"
+    # Check shapes
+    B, T, depth, max_nodes = op1_probs.shape
+    assert op1_probs.shape == (1, 3, 2, 8)  # B, T, dag_depth, max_nodes_per_token
+    assert op2_probs.shape == (1, 3, 2, 8)  # B, T, dag_depth, max_nodes_per_token
+    assert op_probs.shape == (1, 3, 2, len(op_funcs))  # B, T, dag_depth, n_ops
 
-    # With Gumbel softmax, there should be some differentiation between values
-    # Check that the max value is larger than the mean (indicating some selection)
-    max_val1 = att1.max(dim=1).values
-    max_val2 = att2.max(dim=1).values
-    mean_val1 = att1.mean(dim=1)
-    mean_val2 = att2.mean(dim=1)
+    # Check that probabilities sum to 1 across appropriate dimensions
+    assert torch.allclose(op1_probs.sum(dim=-1), torch.ones(1, 3, 2))
+    assert torch.allclose(op2_probs.sum(dim=-1), torch.ones(1, 3, 2))
+    assert torch.allclose(op_probs.sum(dim=-1), torch.ones(1, 3, 2))
 
-    assert torch.all(max_val1 > mean_val1), "att1 max should be greater than mean"
-    assert torch.all(max_val2 > mean_val2), "att2 max should be greater than mean"
+    # Check that all probabilities are non-negative and finite
+    assert torch.all(op1_probs >= 0), "op1_probs should be non-negative"
+    assert torch.all(op2_probs >= 0), "op2_probs should be non-negative"
+    assert torch.all(op_probs >= 0), "op_probs should be non-negative"
+    assert torch.all(torch.isfinite(op1_probs)), "op1_probs should be finite"
+    assert torch.all(torch.isfinite(op2_probs)), "op2_probs should be finite"
+    assert torch.all(torch.isfinite(op_probs)), "op_probs should be finite"
 
 
 # ---------------------------------------------------------------------------
