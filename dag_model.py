@@ -754,9 +754,7 @@ class GPT(nn.Module):
         if not hasattr(self, "last_values_list") or self.last_values_list is None:
             return []
 
-        # For fixed scratch space DAG, last_values_list is a tensor of shape (B, scratch_nodes, T)
-        # where B is batch size, scratch_nodes is the fixed scratch size, and T is sequence length
-        # We want to return the final computed value for each token position
+        # Extract values from the stored tensor
         if isinstance(self.last_values_list, torch.Tensor):
             if self.last_values_list.dim() == 3:  # (B, scratch_nodes, T)
                 B, scratch_nodes, T = self.last_values_list.shape
@@ -769,7 +767,7 @@ class GPT(nn.Module):
                 # Extract values from the final slot and average across batch
                 final_values = self.last_values_list[:, final_slot, :]  # (B, T)
                 return [val.mean().item() for val in final_values.transpose(0, 1)]
-            else:  # Fallback for old format (B, T)
+            else:  # (B, T) format
                 return [
                     val.mean().item() for val in self.last_values_list.transpose(0, 1)
                 ]
@@ -785,6 +783,57 @@ class GPT(nn.Module):
             else:
                 result.append(float(val))
         return result
+
+    def get_detailed_node_values(self) -> dict:
+        """
+        Get detailed node values from the last forward pass showing all scratch nodes per token.
+
+        Returns:
+            Dictionary with detailed node information, empty dict if no forward pass or dag_depth=0.
+            Format: {
+                'values_per_token': List[List[float]],  # [token_idx][scratch_slot_idx] = value
+                'aggregated_per_token': List[float],    # aggregated value per token (mean)
+                'scratch_nodes': int,                   # number of scratch nodes per token
+                'sequence_length': int,                 # sequence length
+                'batch_size': int                       # batch size
+            }
+        """
+        if self.config.dag_depth == 0:
+            return {}
+
+        if not hasattr(self, "last_values_list") or self.last_values_list is None:
+            return {}
+
+        if (
+            isinstance(self.last_values_list, torch.Tensor)
+            and self.last_values_list.dim() == 3
+        ):
+            B, scratch_nodes, T = self.last_values_list.shape
+
+            # Get values for all scratch nodes per token, averaged across batch
+            values_per_token = []
+            aggregated_per_token = []
+
+            for t in range(T):
+                token_values = []
+                for s in range(scratch_nodes):
+                    # Average across batch dimension
+                    value = self.last_values_list[:, s, t].mean().item()
+                    token_values.append(value)
+
+                values_per_token.append(token_values)
+                # Aggregate all scratch nodes for this token (mean)
+                aggregated_per_token.append(sum(token_values) / len(token_values))
+
+            return {
+                "values_per_token": values_per_token,
+                "aggregated_per_token": aggregated_per_token,
+                "scratch_nodes": scratch_nodes,
+                "sequence_length": T,
+                "batch_size": B,
+            }
+
+        return {}
 
     def forward(self, idx, targets=None):
         _, T = idx.shape
@@ -816,19 +865,10 @@ class GPT(nn.Module):
         # Run DAG processing (handles everything internally)
         dag_hidden, final_embeds, final_values = self.dag(original_hidden)
 
-        # Store for logging - extract from final slot in scratch space
-        if final_values.dim() == 3:  # (B, scratch_nodes, T)
-            B, scratch_nodes, T = final_values.shape
-            final_slot = (
-                (self.config.dag_depth - 1) % scratch_nodes
-                if self.config.dag_depth > 0
-                else 1
-            )
-            self.last_values_list = final_values[
-                :, final_slot, :
-            ]  # (B, T) - final computed values
-        else:
-            self.last_values_list = final_values  # Fallback
+        # Store complete tensor for detailed analysis
+        self.last_values_list = (
+            final_values  # Store full tensor (B, scratch_nodes, T) or (B, T)
+        )
 
         self.last_dag_hidden = dag_hidden  # Store for gradient tracking
 

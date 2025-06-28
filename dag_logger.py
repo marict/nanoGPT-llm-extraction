@@ -118,6 +118,20 @@ class DAGLogger:
         """
         return model.get_node_values_list()
 
+    def get_detailed_node_values(self, model) -> dict:
+        """
+        Get detailed node values from the model showing all scratch nodes per token.
+
+        Args:
+            model: GPT model instance
+
+        Returns:
+            Dictionary with detailed node information
+        """
+        if hasattr(model, "get_detailed_node_values"):
+            return model.get_detailed_node_values()
+        return {}
+
     def format_console_logging(self, model) -> None:
         """
         Print formatted logging information to console.
@@ -171,11 +185,27 @@ class DAGLogger:
                         "  [Attention probabilities format not supported for display]"
                     )
 
-        node_values = self.get_node_values_list(model)
-        if node_values:
+        # Show detailed node values if available
+        detailed_values = self.get_detailed_node_values(model)
+        if detailed_values and detailed_values.get("values_per_token"):
             print("Node values per token position:")
-            for t, val in enumerate(node_values):
-                print(f"  Token {t}: {val:.4f}")
+            scratch_nodes = detailed_values["scratch_nodes"]
+            for t, token_values in enumerate(detailed_values["values_per_token"]):
+                if scratch_nodes > 1:
+                    values_str = ", ".join(
+                        [f"slot{s}: {val:.4f}" for s, val in enumerate(token_values)]
+                    )
+                    aggregated = detailed_values["aggregated_per_token"][t]
+                    print(f"  Token {t}: [{values_str}] (avg: {aggregated:.4f})")
+                else:
+                    print(f"  Token {t}: {token_values[0]:.4f}")
+        else:
+            # Fallback to simple values
+            node_values = self.get_node_values_list(model)
+            if node_values:
+                print("Node values per token position:")
+                for t, val in enumerate(node_values):
+                    print(f"  Token {t}: {val:.4f}")
 
         if hasattr(model, "last_gate_values") and model.last_gate_values is not None:
             gate_values = model.last_gate_values
