@@ -332,33 +332,17 @@ class DifferentiableDAG(nn.Module):
 
         # New parameters for fixed scratch space
         self.scratch_nodes = config.dag_scratch_nodes
-        self.node_dim = config.dag_node_dim or (config.n_embd // 2)
 
         # Initialize plan predictor
         self.plan_predictor = DAGPlanPredictor(config, self.temperature)
 
-        # MLP to combine all inputs into final node embedding (updated for node_dim)
-        input_dim = 4 * self.node_dim + len(
-            op_funcs
-        )  # 4 embeds (e1, e2, v1_emb, v2_emb) + op logits
-        self.embed_mlp = nn.Linear(input_dim, self.node_dim)
-        self.node_embed_block = Block(config)
-
         # Value extractor
         self.value_extractor = ValueExtractor(config)
 
-        # Projection layer to convert full embeddings to node embeddings
-        self.to_node_embed = nn.Linear(config.n_embd, self.node_dim)
-        # Projection layer to convert node embeddings back to full embeddings
-        self.from_node_embed = nn.Linear(self.node_dim, config.n_embd)
-
-        # Initialize node storage
-        self.node_embeds = None  # Will be set in forward pass
-        self.node_values = None  # Will be set in forward pass
-
-        # Post-DAG block and normalization
-        self.post_dag_block = Block(config)
-        self.dag_norm = LayerNorm(config.n_embd, bias=config.bias)
+        # Final layer to convert values back to embedding space
+        self.final_layer = nn.Sequential(
+            nn.Linear(1, config.n_embd), LayerNorm(config.n_embd, bias=config.bias)
+        )
 
     def forward(
         self,
@@ -367,63 +351,32 @@ class DifferentiableDAG(nn.Module):
         B, T, H = original_hidden.shape
         device = original_hidden.device
 
-        # Process original hidden states to get node embeddings and values
-        node_embeds = self.node_embed_block(original_hidden)  # (B, T, H)
+        # Step 1: Extract values from original hidden states
+        initial_values = self.value_extractor(original_hidden)  # (B, T)
 
-        # Convert to node dimension and initialize fixed scratch space
-        # Shape: (B, scratch_nodes, T, node_dim) for embeddings, (B, scratch_nodes, T) for values
-        initial_node_embeds = self.to_node_embed(node_embeds)  # (B, T, node_dim)
-        initial_values = self.value_extractor(node_embeds)  # (B, T)
-
-        # Initialize fixed-size scratch space
-        scratch_embeds = torch.zeros(
-            B, self.scratch_nodes, T, self.node_dim, device=device
-        )
+        # Initialize fixed-size scratch space for values only
         scratch_values = torch.zeros(B, self.scratch_nodes, T, device=device)
+        scratch_values[:, 0, :] = initial_values
 
-        # Initialize first node in scratch space - avoid in-place operations
-        scratch_embeds = scratch_embeds.clone()
-        scratch_values = scratch_values.clone()
-        scratch_embeds[:, 0, :, :] = initial_node_embeds  # (B, T, node_dim)
-        scratch_values[:, 0, :] = initial_values  # (B, T)
-
-        # Store the current node state
-        self.node_embeds = scratch_embeds
-        self.node_values = scratch_values
-
-        # Generate complete DAG plan for all tokens in batch
+        # Step 2: Generate complete DAG plan for all tokens in batch
         operand1_probs, operand2_probs, operation_probs = self.plan_predictor(
             original_hidden
         )
-        # operand1_probs: (B, T, dag_depth, max_nodes)
-        # operand2_probs: (B, T, dag_depth, max_nodes)
-        # operation_probs: (B, T, dag_depth, n_ops)
 
-        # Execute DAG plan in batch
+        # Step 3: Execute DAG plan in batch
         for step in range(self.dag_depth):
-            # Per-token FIFO: each token cycles through its own scratch space
             target_node = step % self.scratch_nodes
 
             for t in range(T):
-                # Get available nodes for this token (causal)
                 available_nodes = (t + 1) * self.scratch_nodes
-                flat_embeds = scratch_embeds[:, :, : t + 1].reshape(
-                    B, -1, self.node_dim
-                )
                 flat_values = scratch_values[:, :, : t + 1].reshape(B, -1)
 
-                # Extract pre-computed probabilities for this token and step
-                att1 = operand1_probs[
-                    :, t, step, :available_nodes
-                ]  # (B, available_nodes)
-                att2 = operand2_probs[
-                    :, t, step, :available_nodes
-                ]  # (B, available_nodes)
-                op_w = operation_probs[:, t, step]  # (B, n_ops)
+                # Extract pre-computed probabilities
+                att1 = operand1_probs[:, t, step, :available_nodes]
+                att2 = operand2_probs[:, t, step, :available_nodes]
+                op_w = operation_probs[:, t, step]
 
-                # Select operands using pre-computed probabilities
-                e1 = (att1.unsqueeze(-1) * flat_embeds).sum(1)
-                e2 = (att2.unsqueeze(-1) * flat_embeds).sum(1)
+                # Select operands using only values
                 v1 = (att1 * flat_values).sum(1)
                 v2 = (att2 * flat_values).sum(1)
 
@@ -431,51 +384,28 @@ class DifferentiableDAG(nn.Module):
                 outs = torch.stack([op(v1, v2) for op in op_funcs], dim=1)
                 new_val = (op_w * outs).sum(1)
 
-                # Compute new embedding using the same logic
-                v1_emb = self.to_node_embed(self.scalar_to_embed(v1.unsqueeze(-1)))
-                v2_emb = self.to_node_embed(self.scalar_to_embed(v2.unsqueeze(-1)))
-
-                concat = torch.cat([e1, e2, v1_emb, v2_emb, op_w], dim=-1)
-                delta = self.embed_mlp(concat)
-                new_emb = 0.5 * (e1 + e2) + delta
-
-                # Write to per-token FIFO position (maintains causality)
-                new_scratch_embeds = scratch_embeds.clone()
+                # Update only values in scratch space
                 new_scratch_values = scratch_values.clone()
-                new_scratch_embeds[:, target_node, t] = new_emb
                 new_scratch_values[:, target_node, t] = new_val
-                scratch_embeds = new_scratch_embeds
                 scratch_values = new_scratch_values
 
-        # Process each token position to create final hidden states
+        # Step 4: Process each token position to create final hidden states
         new_hidden_list = []
         for t in range(T):
-            # Get all computed values from token's scratch space
             if self.dag_depth > 0:
-                all_node_values = scratch_values[
-                    :, :, t
-                ]  # (B, scratch_nodes) - all computed values
-                # Aggregate all values (could be mean, sum, or learned combination)
-                aggregated_value = all_node_values.mean(
-                    dim=1
-                )  # (B,) - mean of all values
+                all_node_values = scratch_values[:, :, t]
+                aggregated_value = all_node_values.mean(dim=1)
             else:
-                aggregated_value = scratch_values[:, 1, t]  # Fallback
+                aggregated_value = scratch_values[:, 1, t]
 
-            # Convert scalar value back to full embedding dimension
-            final_full_embed = self.scalar_to_embed(
-                aggregated_value.unsqueeze(-1)
-            )  # (B, H)
-
-            # Process final embedding through post-DAG block and normalization
-            dag_sem = self.post_dag_block(final_full_embed.unsqueeze(1)).squeeze(1)
-            dag_sem = self.dag_norm(dag_sem)
-            new_hidden_list.append(dag_sem)
+            # Convert scalar value back to embedding space with layernorm
+            final_full_embed = self.final_layer(aggregated_value.unsqueeze(-1))
+            new_hidden_list.append(final_full_embed)
 
         # Reconstruct hidden tensor from list
         final_hidden = torch.stack(new_hidden_list, dim=1)  # (B, T, H)
 
-        return final_hidden, scratch_embeds, scratch_values
+        return final_hidden, None, scratch_values
 
 
 # ---------------------------------------------------------------------------
@@ -484,36 +414,27 @@ class DifferentiableDAG(nn.Module):
 class ValueExtractor(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.use_l2_norm = getattr(config, "value_extractor_l2_norm", False)
-
-        if not self.use_l2_norm:
-            self.attn = nn.MultiheadAttention(
-                config.n_embd, config.n_head, batch_first=True
-            )
-            self.proj = nn.Linear(config.n_embd, 1)
+        self.attn = nn.MultiheadAttention(
+            config.n_embd, config.n_head, batch_first=True
+        )
+        self.proj = nn.Linear(config.n_embd, 1)
 
     def forward(self, node_embeds):
         # node_embeds: (B, T, H)
-        if self.use_l2_norm:
-            # Simple L2 norm approach - just compute magnitude
-            values = torch.linalg.norm(node_embeds, dim=-1)  # (B, T)
-            return values
-        else:
-            # Original attention-based approach
-            B, T, H = node_embeds.shape
-            device = node_embeds.device
+        B, T, H = node_embeds.shape
+        device = node_embeds.device
 
-            # Create causal attention mask so position N can only attend to positions 0 through N-1
-            # For PyTorch MultiheadAttention, mask shape is (T, T) where True means "ignore"
-            causal_mask = torch.triu(
-                torch.ones(T, T, device=device, dtype=torch.bool), diagonal=1
-            )
+        # Create causal attention mask so position N can only attend to positions 0 through N-1
+        # For PyTorch MultiheadAttention, mask shape is (T, T) where True means "ignore"
+        causal_mask = torch.triu(
+            torch.ones(T, T, device=device, dtype=torch.bool), diagonal=1
+        )
 
-            attn_out, _ = self.attn(
-                node_embeds, node_embeds, node_embeds, attn_mask=causal_mask
-            )
-            values = self.proj(attn_out).squeeze(-1)
-            return values
+        attn_out, _ = self.attn(
+            node_embeds, node_embeds, node_embeds, attn_mask=causal_mask
+        )
+        values = self.proj(attn_out).squeeze(-1)
+        return values
 
 
 # ---------------------------------------------------------------------------
@@ -629,10 +550,6 @@ class GPTConfig:
     gumbel_temperature: float = 2.0
     # New parameters for fixed scratch space optimization
     dag_scratch_nodes: int = 2  # Fixed number of nodes per token (FIFO queue)
-    dag_node_dim: int = None  # Node embedding dimension (defaults to n_embd // 2)
-    value_extractor_l2_norm: bool = (
-        False  # Use L2 norm instead of attention for value extraction
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -671,10 +588,6 @@ class GPT(nn.Module):
 
         # DAG-specific components (only if dag_depth > 0)
         if config.dag_depth > 0:
-            # Set default node dimension if not specified
-            if config.dag_node_dim is None:
-                config.dag_node_dim = config.n_embd // 2
-
             self.scalar_to_embed = nn.Linear(
                 1, config.n_embd
             )  # Still projects to full embedding

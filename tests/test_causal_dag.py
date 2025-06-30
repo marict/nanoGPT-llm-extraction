@@ -56,24 +56,25 @@ def test_causal_dag_forward_pass(causal_dag_model):
             len(node_values) == seq_len
         ), f"Expected {seq_len} nodes, got {len(node_values)}"
 
-        # Check that node storage tensors have correct shape
+        # Check that node storage is working through detailed values
         if hasattr(model, "dag"):
-            # Check that node storage tensors have correct shape
-            B, N, T, H = model.dag.node_embeds.shape
-            assert T == seq_len, f"Expected {seq_len} time steps, got {T}"
-            assert (
-                N == config.dag_scratch_nodes
-            ), f"Expected {config.dag_scratch_nodes} nodes, got {N}"
-            assert (
-                H == config.dag_node_dim
-            ), f"Expected {config.dag_node_dim} hidden dim, got {H}"
+            detailed_values = logger.get_detailed_node_values(model)
+            assert detailed_values, "Should have detailed node values"
 
-            # Check node values tensor shape
-            B, N, T = model.dag.node_values.shape
-            assert T == seq_len, f"Expected {seq_len} time steps, got {T}"
+            # Check sequence length
             assert (
-                N == config.dag_scratch_nodes
-            ), f"Expected {config.dag_scratch_nodes} nodes, got {N}"
+                len(detailed_values["values_per_token"]) == seq_len
+            ), f"Expected {seq_len} time steps, got {len(detailed_values['values_per_token'])}"
+
+            # Check scratch nodes
+            assert (
+                detailed_values["scratch_nodes"] == config.dag_scratch_nodes
+            ), f"Expected {config.dag_scratch_nodes} nodes, got {detailed_values['scratch_nodes']}"
+
+            # Check batch size
+            assert (
+                detailed_values["batch_size"] == 2
+            ), f"Expected batch size 2, got {detailed_values['batch_size']}"
 
 
 def test_causal_dag_gradient_flow(causal_dag_model):
@@ -167,18 +168,25 @@ def test_causal_dag_node_growth(causal_dag_model):
             len(node_values) == seq_len
         ), f"Seq len {seq_len}: expected {seq_len} nodes, got {len(node_values)}"
 
-        # Check node storage tensors
+        # Check node storage through detailed values
         if hasattr(model, "dag"):
-            # Node embeddings should be (B, N, T, H)
-            B, N, T, H = model.dag.node_embeds.shape
-            assert T == seq_len, f"Expected {seq_len} time steps, got {T}"
-            assert (
-                N == config.dag_scratch_nodes
-            ), f"Expected {config.dag_scratch_nodes} nodes, got {N}"
+            detailed_values = logger.get_detailed_node_values(model)
+            assert detailed_values, "Should have detailed node values"
 
-            # Node values should be (B, N, T)
-            B, N, T = model.dag.node_values.shape
-            assert T == seq_len, f"Expected {seq_len} time steps in values, got {T}"
+            # Check sequence length
+            assert (
+                len(detailed_values["values_per_token"]) == seq_len
+            ), f"Expected {seq_len} time steps, got {len(detailed_values['values_per_token'])}"
+
+            # Check scratch nodes
+            assert (
+                detailed_values["scratch_nodes"] == config.dag_scratch_nodes
+            ), f"Expected {config.dag_scratch_nodes} nodes, got {detailed_values['scratch_nodes']}"
+
+            # Check batch size
+            assert (
+                detailed_values["batch_size"] == 1
+            ), f"Expected batch size 1, got {detailed_values['batch_size']}"
 
         # All node values should be finite
         for i, val in enumerate(node_values):
@@ -345,23 +353,22 @@ def test_dag_node_causality_forward(causal_dag_model):
     seq1 = torch.tensor([[1, 2, 3, 4]])
     seq2 = torch.tensor([[1, 2, 3, 7]])  # Only last token differs
 
+    logger = DAGLogger()
+
     with torch.no_grad():
         logits1, _ = model(seq1)
-        logits2, _ = model(seq2)
-
-        # Access internal DAG state
-        dag_values1 = model.dag.node_values.clone()  # (B, N, T)
+        detailed_values1 = logger.get_detailed_node_values(model)
 
         # Run second sequence
         logits2, _ = model(seq2)
-        dag_values2 = model.dag.node_values.clone()
+        detailed_values2 = logger.get_detailed_node_values(model)
 
     # Check that DAG node values for positions 0, 1, 2 are identical
     for pos in range(seq_len - 1):  # Positions 0, 1, 2
-        for node_idx in range(dag_values1.shape[1]):  # All nodes
-            diff = torch.abs(
-                dag_values1[0, node_idx, pos] - dag_values2[0, node_idx, pos]
-            )
+        values1 = detailed_values1["values_per_token"][pos]
+        values2 = detailed_values2["values_per_token"][pos]
+        for node_idx in range(len(values1)):  # All nodes
+            diff = abs(values1[node_idx] - values2[node_idx])
             assert (
                 diff < 1e-6
             ), f"DAG node {node_idx} at position {pos} affected by future token: diff={diff:.2e}"

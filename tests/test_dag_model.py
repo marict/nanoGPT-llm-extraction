@@ -44,7 +44,6 @@ def small_dag_gpt():
         n_embd=8,
         dag_depth=2,
         dag_scratch_nodes=2,  # Fixed scratch space
-        dag_node_dim=4,  # Half of n_embd
     )
     return GPT(cfg), cfg
 
@@ -113,9 +112,6 @@ def test_op_functions():
 def test_dag_node_growth_regression(monkeypatch):
     """Two-step DAG with dummy controller: should use fixed scratch space."""
     H = 4
-    node_dim = H // 2  # Half dimension for nodes
-    proj = make_dummy_proj(H)
-
     # overwrite op_funcs with just [add, identity] for brevity
     monkeypatch.setattr(dag_model, "op_funcs", dag_model.op_funcs[:2])
 
@@ -163,23 +159,21 @@ def test_dag_node_growth_regression(monkeypatch):
         n_embd=H,
         dag_depth=2,
         dag_scratch_nodes=2,  # Fixed scratch space
-        dag_node_dim=node_dim,  # Half dimension
         n_head=1,
         n_layer=1,
         vocab_size=10,
         block_size=4,
     )
-    dag = DifferentiableDAG(config, proj)
-    dag.plan_predictor = DummyController(config)
+    model = GPT(config)
+    model.dag.plan_predictor = DummyController(config)
 
     # Create original hidden state for the new interface
     B, T = 1, 1  # batch size 1, sequence length 1
     original_hidden = torch.ones(B, T, H)  # (B, T, H)
 
-    final_hidden, final_embeds, final_vals = dag(original_hidden)
+    final_hidden, _, final_vals = model.dag(original_hidden)
 
     # Check shapes - with fixed scratch space, should have exactly 2 nodes
-    assert final_embeds.shape == (B, 2, T, node_dim)  # Fixed scratch space: 2 nodes
     assert final_vals.shape == (B, 2, T)  # Fixed scratch space: 2 nodes
 
     # Check values - with the dummy controller doing add operations,
@@ -229,25 +223,6 @@ def test_dag_initial_nodes_all_tokens(monkeypatch):
         # Values should be positive and reasonable (not too extreme)
         assert val > 0 and val < 100, f"Token {i} value {val} is unreasonable"
 
-    # Check matrix shapes if DAG is present
-    if hasattr(model, "dag"):
-        # Node embeddings should be (B, scratch_nodes, T, node_dim) with fixed scratch space
-        B, scratch_nodes, T, node_dim = model.dag.node_embeds.shape
-        assert T == len(tokens), f"Expected {len(tokens)} time steps, got {T}"
-        assert (
-            scratch_nodes == cfg.dag_scratch_nodes
-        ), f"Expected {cfg.dag_scratch_nodes} scratch nodes, got {scratch_nodes}"
-        assert (
-            node_dim == cfg.dag_node_dim
-        ), f"Expected {cfg.dag_node_dim} node dim, got {node_dim}"
-
-        # Node values should be (B, scratch_nodes, T)
-        B, scratch_nodes_vals, T = model.dag.node_values.shape
-        assert T == len(tokens), f"Expected {len(tokens)} time steps in values, got {T}"
-        assert (
-            scratch_nodes_vals == scratch_nodes
-        ), f"Expected same scratch_nodes in values"
-
 
 # ---------------------------------------------------------------------
 # single-token zero-padding        (fixed recursion)
@@ -272,30 +247,6 @@ def test_zero_padding_single_token(monkeypatch):
     assert torch.isfinite(
         torch.tensor(node_values[0])
     ), f"Node value {node_values[0]} is not finite"
-
-
-# --------------------------------------------------------------------- #
-# post-DAG block is called
-# --------------------------------------------------------------------- #
-def test_post_dag_block_called(monkeypatch):
-    cfg = GPTConfig(
-        vocab_size=10, block_size=2, n_layer=1, n_head=1, n_embd=8, dag_depth=1
-    )
-    model = GPT(cfg)
-
-    called = {}
-
-    def mark(_, x):
-        called["hit"] = True
-        return x
-
-    monkeypatch.setattr(
-        model.dag.post_dag_block,
-        "forward",
-        mark.__get__(model.dag.post_dag_block, type(model.dag.post_dag_block)),
-    )
-    model(torch.randint(0, 10, (1, 2)))
-    assert called.get("hit", False)
 
 
 # ---------------------------------------------------------------------
@@ -548,20 +499,12 @@ def test_hook_behavior():
     # Check that DAG components are working
     assert hasattr(model, "dag"), "Model should have DAG"
     assert hasattr(model.dag, "plan_predictor"), "DAG should have plan_predictor"
-    assert hasattr(model.dag, "node_embeds"), "DAG should have node_embeds"
-    assert hasattr(model.dag, "node_values"), "DAG should have node_values"
+    assert hasattr(model.dag, "value_extractor"), "DAG should have value_extractor"
 
     # Verify forward pass worked correctly
     assert logits.shape == (2, 8, cfg.vocab_size), "Logits shape incorrect"
     assert loss > 0, "Loss should be positive"
     assert torch.isfinite(loss), "Loss should be finite"
-
-    # Check DAG shapes with fixed scratch space
-    B, N, T, H = model.dag.node_embeds.shape
-    assert (
-        N == cfg.dag_scratch_nodes
-    ), f"Expected {cfg.dag_scratch_nodes} scratch nodes, got {N}"
-    assert T == 8, f"Expected 8 time steps, got {T}"
 
     # Verify gradient values are reasonable
     for name, grad_val in logger.captured_gradients.items():
@@ -996,202 +939,3 @@ def test_dag_value_gradients():
             assert torch.isfinite(
                 param.grad
             ).all(), f"ValueExtractor {name} has inf/nan gradients"
-
-    # Check scalar_to_embed gradients
-    scalar_embed_grad = model.scalar_to_embed.weight.grad
-    assert scalar_embed_grad is not None, "scalar_to_embed should have gradients"
-    grad_norm = scalar_embed_grad.norm().item()
-    assert grad_norm > 1e-8, f"scalar_to_embed gradient too small: {grad_norm}"
-    assert grad_norm < 1e2, f"scalar_to_embed gradient too large: {grad_norm}"
-
-
-def test_value_extractor_l2_norm_vs_attention():
-    """Test ValueExtractor behavior with both L2 norm and attention modes."""
-    torch.manual_seed(42)  # For reproducibility
-
-    # Test dimensions
-    B, T, H = 2, 4, 16
-
-    # Create test embedding data
-    node_embeds = torch.randn(B, T, H, requires_grad=True)
-
-    # Test 1: Attention-based ValueExtractor (default mode)
-    config_attention = GPTConfig(n_embd=H, n_head=2, value_extractor_l2_norm=False)
-    value_extractor_attention = ValueExtractor(config_attention)
-
-    # Test 2: L2 norm ValueExtractor
-    config_l2 = GPTConfig(n_embd=H, n_head=2, value_extractor_l2_norm=True)
-    value_extractor_l2 = ValueExtractor(config_l2)
-
-    # Forward pass with both extractors
-    values_attention = value_extractor_attention(node_embeds)
-    values_l2 = value_extractor_l2(node_embeds)
-
-    # Basic shape tests
-    assert values_attention.shape == (
-        B,
-        T,
-    ), f"Attention values shape should be (B, T), got {values_attention.shape}"
-    assert values_l2.shape == (
-        B,
-        T,
-    ), f"L2 values shape should be (B, T), got {values_l2.shape}"
-
-    # Values should be finite
-    assert torch.isfinite(values_attention).all(), "Attention values should be finite"
-    assert torch.isfinite(values_l2).all(), "L2 values should be finite"
-
-    # L2 norm values should be non-negative (L2 norm is always >= 0)
-    assert (values_l2 >= 0).all(), "L2 norm values should be non-negative"
-
-    # Values should be different (unless by chance they're identical)
-    # Use a tolerance since random chance could make them similar
-    assert not torch.allclose(
-        values_attention, values_l2, atol=1e-6
-    ), "Attention and L2 values should be different"
-
-    # Test parameter count difference
-    attention_params = sum(p.numel() for p in value_extractor_attention.parameters())
-    l2_params = sum(p.numel() for p in value_extractor_l2.parameters())
-
-    assert (
-        attention_params > 0
-    ), "Attention-based extractor should have learnable parameters"
-    assert l2_params == 0, "L2 norm extractor should have no learnable parameters"
-
-    # Test gradient flow for attention-based extractor
-    loss_attention = values_attention.sum()
-    loss_attention.backward(retain_graph=True)
-
-    # Check that attention-based extractor has gradients
-    attention_has_grads = any(
-        p.grad is not None and p.grad.norm().item() > 0
-        for p in value_extractor_attention.parameters()
-    )
-    assert attention_has_grads, "Attention-based extractor should have gradients"
-
-    # Reset gradients and test L2 norm (should not accumulate any parameter gradients)
-    node_embeds.grad = None
-    if hasattr(node_embeds, "grad") and node_embeds.grad is not None:
-        node_embeds.grad.zero_()
-
-    loss_l2 = values_l2.sum()
-    loss_l2.backward()
-
-    # L2 norm extractor should have no parameter gradients (no parameters to update)
-    l2_has_grads = any(
-        p.grad is not None and p.grad.norm().item() > 0
-        for p in value_extractor_l2.parameters()
-    )
-    assert not l2_has_grads, "L2 norm extractor should have no parameter gradients"
-
-    # But input should still have gradients for L2 norm case
-    assert (
-        node_embeds.grad is not None
-    ), "Input should have gradients from L2 norm computation"
-    assert torch.isfinite(node_embeds.grad).all(), "Input gradients should be finite"
-
-    # Test L2 norm computation correctness
-    expected_l2 = torch.linalg.norm(node_embeds.detach(), dim=-1)
-    assert torch.allclose(
-        values_l2, expected_l2, atol=1e-6
-    ), "L2 norm values should match manual computation"
-
-    # Test that attention-based results are reasonable
-    # They should vary across the sequence (attention should create variation)
-    attention_var = values_attention.var(dim=1).mean()  # Variance across sequence
-    assert (
-        attention_var > 1e-8
-    ), "Attention-based values should show variation across sequence"
-
-    print("✓ ValueExtractor L2 norm vs attention test passed")
-
-
-def test_value_extractor_in_dag_model():
-    """Test ValueExtractor modes work correctly within the full DAG model."""
-    torch.manual_seed(42)
-
-    # Test with L2 norm extractor
-    config_l2 = GPTConfig(
-        vocab_size=20,
-        block_size=4,
-        n_layer=1,
-        n_head=1,
-        n_embd=8,
-        dag_depth=2,
-        dag_scratch_nodes=2,
-        value_extractor_l2_norm=True,
-    )
-    model_l2 = GPT(config_l2)
-
-    # Test with attention-based extractor
-    config_attention = GPTConfig(
-        vocab_size=20,
-        block_size=4,
-        n_layer=1,
-        n_head=1,
-        n_embd=8,
-        dag_depth=2,
-        dag_scratch_nodes=2,
-        value_extractor_l2_norm=False,
-    )
-    model_attention = GPT(config_attention)
-
-    # Test data
-    x = torch.randint(0, 20, (2, 4))
-    y = torch.randint(0, 20, (2, 4))
-
-    # Forward pass with both models
-    logits_l2, loss_l2 = model_l2(x, y)
-    logits_attention, loss_attention = model_attention(x, y)
-
-    # Basic functionality tests
-    assert (
-        logits_l2.shape == logits_attention.shape
-    ), "Both models should produce same output shape"
-    assert (
-        loss_l2 is not None and loss_attention is not None
-    ), "Both models should compute loss"
-    assert torch.isfinite(loss_l2) and torch.isfinite(
-        loss_attention
-    ), "Losses should be finite"
-
-    # Models should produce different outputs (different value extraction methods)
-    assert not torch.allclose(
-        logits_l2, logits_attention, atol=1e-6
-    ), "Models with different value extractors should produce different outputs"
-
-    # Test backward pass for both
-    loss_l2.backward()
-    loss_attention.backward()
-
-    # Both should have healthy gradients
-    l2_grad_norm = sum(
-        p.grad.norm().item() for p in model_l2.parameters() if p.grad is not None
-    )
-    attention_grad_norm = sum(
-        p.grad.norm().item() for p in model_attention.parameters() if p.grad is not None
-    )
-
-    assert l2_grad_norm > 0, "L2 model should have gradients"
-    assert attention_grad_norm > 0, "Attention model should have gradients"
-    assert (
-        l2_grad_norm < attention_grad_norm
-    ), "L2 model should have fewer parameters with gradients"
-
-    # Check specific parameter counts
-    l2_value_extractor_params = sum(
-        p.numel() for p in model_l2.dag.value_extractor.parameters()
-    )
-    attention_value_extractor_params = sum(
-        p.numel() for p in model_attention.dag.value_extractor.parameters()
-    )
-
-    assert (
-        l2_value_extractor_params == 0
-    ), "L2 value extractor should have no parameters"
-    assert (
-        attention_value_extractor_params > 0
-    ), "Attention value extractor should have parameters"
-
-    print("✓ ValueExtractor in DAG model test passed")

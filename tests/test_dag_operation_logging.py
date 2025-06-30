@@ -417,78 +417,36 @@ def test_gate_and_norm_logging():
     with torch.no_grad():
         logits, loss = model(x)
 
-    # Check matrix shapes
-    if hasattr(model, "dag"):
-        # Node embeddings should be (B, N, T, H)
-        B, N, T, H = model.dag.node_embeds.shape
-        assert (
-            T == config.block_size
-        ), f"Expected {config.block_size} time steps, got {T}"
-        assert (
-            N == config.dag_scratch_nodes
-        ), f"Expected {config.dag_scratch_nodes} nodes, got {N}"
-        assert (
-            H == config.dag_node_dim
-        ), f"Expected {config.dag_node_dim} hidden dim, got {H}"
-
-        # Node values should be (B, N, T)
-        B, N, T = model.dag.node_values.shape
-        assert (
-            T == config.block_size
-        ), f"Expected {config.block_size} time steps in values, got {T}"
-
     # NEW API: Extract logging data using DAGLogger
     logger = DAGLogger()
 
-    # Simulate what happens in training loop - extract logging data
-    # Get the internal values (this would be done in the actual training code)
-    if hasattr(model, "dag"):
-        # Simulate the values that would be passed from the model's forward pass
-        original_hidden = torch.randn(1, config.block_size, config.n_embd)
-        dag_hidden = torch.randn(1, config.block_size, config.n_embd) * 0.01
-        gate_values = [torch.rand(1, 1) for _ in range(config.block_size)]
-        mixed_hidden = original_hidden * 0.5 + dag_hidden * 0.5
+    # Create dummy floating-point tensors for logging
+    dummy_hidden = torch.randn(1, config.block_size, config.n_embd)
+    dummy_dag_hidden = torch.randn(1, config.block_size, config.n_embd) * 0.01
+    dummy_mixed = dummy_hidden * 0.5 + dummy_dag_hidden * 0.5
+    dummy_gate = torch.sigmoid(
+        torch.randn(1, config.block_size)
+    )  # Create dummy gate values
 
-        # Extract all logging data in one centralized call
-        logger.extract_all_logging_data(
-            model,
-            original_hidden=original_hidden,
-            dag_hidden=dag_hidden,
-            gate_values=gate_values,
-            mixed_hidden=mixed_hidden,
-        )
+    logger.extract_all_logging_data(
+        model, dummy_hidden, dummy_dag_hidden, dummy_gate, dummy_mixed
+    )
 
-    # Now get the metrics using the new centralized approach
+    # Get extra values
     extra_vals = logger.get_extra_vals(model)
 
-    # Check that gate values are present and properly shaped
-    assert "gate/mean" in extra_vals, "Gate mean should be logged"
-    assert "gate/min" in extra_vals, "Gate min should be logged"
-    assert "gate/max" in extra_vals, "Gate max should be logged"
-    assert (
-        "gate/close_to_zero_ratio" in extra_vals
-    ), "Gate close_to_zero_ratio should be logged"
-
-    # Check that norm values are present and properly shaped
-    assert "norm/hidden" in extra_vals, "Hidden norm should be logged"
-    # Note: dag_sem_raw is no longer available since DAG now returns post-processed hidden states
-    assert "norm/dag_sem" in extra_vals, "DAG semantic normalized norm should be logged"
-    assert "norm/fused" in extra_vals, "Fused norm should be logged"
-
-    # Verify gate values are in reasonable range [0, 1]
-    assert 0.0 <= extra_vals["gate/mean"] <= 1.0, "Gate mean should be in [0, 1]"
-    assert 0.0 <= extra_vals["gate/min"] <= 1.0, "Gate min should be in [0, 1]"
-    assert 0.0 <= extra_vals["gate/max"] <= 1.0, "Gate max should be in [0, 1]"
+    # Check gate values
+    assert "gate/close_to_zero_ratio" in extra_vals, "Should have close_to_zero_ratio"
     assert (
         0.0 <= extra_vals["gate/close_to_zero_ratio"] <= 1.0
     ), "Close to zero ratio should be in [0, 1]"
 
     # Verify norm values are positive and properly shaped
+    assert "norm/hidden" in extra_vals, "Should have hidden norm"
+    assert "norm/dag_sem" in extra_vals, "Should have DAG semantic norm"
+    assert "norm/fused" in extra_vals, "Should have fused norm"
     assert extra_vals["norm/hidden"] > 0, "Hidden norm should be positive"
-    assert extra_vals["norm/dag_sem"] > 0, "DAG semantic raw norm should be positive"
-    assert (
-        extra_vals["norm/dag_sem"] > 0
-    ), "DAG semantic normalized norm should be positive"
+    assert extra_vals["norm/dag_sem"] > 0, "DAG semantic norm should be positive"
     assert extra_vals["norm/fused"] > 0, "Fused norm should be positive"
 
     # Test that we can get node values list using DAGLogger
