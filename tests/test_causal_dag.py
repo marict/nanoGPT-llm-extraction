@@ -71,9 +71,13 @@ def test_basic_dag_functionality(causal_dag_model):
             if hasattr(model, "dag"):
                 detailed_values = logger.get_detailed_node_values(model)
                 assert detailed_values, "Should have detailed node values"
-                assert len(detailed_values["values_per_token"]) == seq_len
-                assert detailed_values["scratch_nodes"] == config.dag_scratch_nodes
-                assert detailed_values["batch_size"] == 2
+                assert (
+                    len(detailed_values["values_per_token"]) == seq_len
+                ), "Incorrect number of token values"
+                assert (
+                    detailed_values["scratch_nodes"] == config.dag_scratch_nodes
+                ), "Incorrect number of scratch nodes"
+                assert detailed_values["batch_size"] == 2, "Incorrect batch size"
 
 
 def test_comprehensive_causality(causal_dag_model):
