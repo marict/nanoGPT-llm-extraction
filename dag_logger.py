@@ -19,6 +19,8 @@ class DAGLogger:
 
     This class extracts logging information from DAG models without
     polluting the core model code with logging-specific logic.
+
+    NOTE: When making additions/modifications to logging functionality, logging comes first. If a state is invalid for logging, we should stop training and throw an error.
     """
 
     def __init__(self):
@@ -80,6 +82,27 @@ class DAGLogger:
         hook = model.dag.final_values.register_hook(save_dag_scratch_grad)
         self.gradient_hooks.append(hook)
 
+        # Capture gradients of original (pre-DAG) hidden states (mandatory)
+        if (
+            not hasattr(model, "last_original_hidden")
+            or model.last_original_hidden is None
+        ):
+            raise RuntimeError(
+                "Model missing 'last_original_hidden'; cannot log. Halting training."
+            )
+
+        assert (
+            model.last_original_hidden.requires_grad
+        ), "last_original_hidden does not require gradients"
+
+        def save_orig_hidden_grad(grad):
+            self.captured_gradients["orig_hidden_grad_mean"] = (
+                grad.detach().mean().item()
+            )
+
+        hook = model.last_original_hidden.register_hook(save_orig_hidden_grad)
+        self.gradient_hooks.append(hook)
+
     def update_gradient_tracking(self, model):
         """Update gradient tracking after forward pass when tensors are available."""
         # Set up operation gradient tracking now that tensors exist
@@ -98,6 +121,20 @@ class DAGLogger:
 
         if model.config.dag_depth == 0:
             return
+
+        # Logging is mandatory: ensure plan_predictor and probability tensor are available
+        if not hasattr(model.dag, "plan_predictor"):
+            raise RuntimeError("DAG model missing 'plan_predictor'; cannot log.")
+
+        if not hasattr(model.dag.plan_predictor, "last_operation_probs_full"):
+            raise RuntimeError(
+                "plan_predictor missing 'last_operation_probs_full'; cannot log gradients/probs."
+            )
+
+        if model.dag.plan_predictor.last_operation_probs_full is None:
+            raise RuntimeError(
+                "'last_operation_probs_full' is None – logging disabled. Aborting to avoid waste."
+            )
 
         # Extract node values (both traditional and detailed)
         self.logging_data["node_values"] = self.get_node_values_list(model)
@@ -118,6 +155,15 @@ class DAGLogger:
                 "fused": mixed_hidden[:, -1].norm(dim=-1).mean().detach().item(),
             }
             self.logging_data["norm_values"] = norm_values
+
+        # Operation probability statistics (average over batch, time and DAG steps)
+        with torch.no_grad():
+            probs = model.dag.plan_predictor.last_operation_probs_full.detach()
+            mean_probs = probs.mean(dim=(0, 1, 2))  # (n_ops,)
+            self.logging_data["op_probs"] = {
+                op_name: float(mean_probs[i].item())
+                for i, op_name in enumerate(op_names)
+            }
 
     def clear_gradient_hooks(self) -> None:
         """Remove all registered gradient hooks."""
@@ -150,6 +196,10 @@ class DAGLogger:
             norm_data = self.logging_data["norm_values"]
             for norm_name, norm_val in norm_data.items():
                 metrics[f"norm/{norm_name}"] = norm_val
+
+        if "op_probs" in self.logging_data:
+            for op_name, p_val in self.logging_data["op_probs"].items():
+                metrics[f"op_prob/{op_name}"] = p_val
 
         return metrics
 

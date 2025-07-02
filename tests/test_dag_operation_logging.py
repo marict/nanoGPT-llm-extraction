@@ -204,5 +204,22 @@ def test_logging_after_multiple_passes(small_model, sample_batch_small):
         assert isinstance(extra_vals, dict), "Should return a dictionary"
 
 
+def test_operation_probability_logging(small_model, sample_batch_small):
+    """Ensure operation probabilities are logged."""
+    model, _ = small_model
+    input_ids, target_ids = sample_batch_small
+
+    logger = DAGLogger()
+    logits, loss = model(input_ids, target_ids)
+    logger.compute_log_statistics(model)
+    extra_vals = logger.get_extra_vals(model)
+
+    prob_keys = [k for k in extra_vals if k.startswith("op_prob/")]
+    assert len(prob_keys) == len(op_names)
+    for k in prob_keys:
+        val = extra_vals[k]
+        assert 0.0 <= val <= 1.0, "Probability out of range"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
