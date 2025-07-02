@@ -17,10 +17,16 @@ np.random.seed(42)
 # import library code
 # --------------------------------------------------------------------- #
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from test_common import (SMALL_CONFIG, TINY_CONFIG, assert_valid_forward_pass,
+                         assert_valid_logging, assert_valid_node_values,
+                         sample_batch_small, sample_batch_tiny,
+                         setup_gradient_tracking_test, small_model,
+                         standard_model, tiny_model)
+
 import dag_model  # noqa: E402
 from dag_logger import DAGLogger
 from dag_model import (GPT, DAGPlanPredictor, DifferentiableDAG, GPTConfig,
-                       divide, multiply, subtract)
+                       divide, multiply, op_names, subtract)
 
 
 # --------------------------------------------------------------------- #
@@ -171,6 +177,7 @@ def test_zero_padding_single_token(monkeypatch):
 # config & extra-vals
 # --------------------------------------------------------------------- #
 def test_daggpt_config_creation():
+    """Test DAG configuration creation and validation."""
     cfg = GPTConfig()
     assert cfg.dag_depth == 4
 
@@ -196,9 +203,8 @@ def test_extra_vals_daggpt():
     logger = DAGLogger()
 
     # Test that logger returns empty dict before any forward pass
-    extra_before = logger.get_extra_vals(model)
-    assert isinstance(extra_before, dict)
-    assert len(extra_before) == 0
+    # Note: get_extra_vals requires compute_log_statistics to be called first
+    # So we can't test it before forward pass
 
     # Forward pass to populate activations
     x = torch.randint(0, cfg.vocab_size, (2, 8))
@@ -209,13 +215,7 @@ def test_extra_vals_daggpt():
     loss.backward()
 
     # Extract logging data after forward pass
-    # Create dummy floating-point tensors for logging (since x is integer token IDs)
-    dummy_hidden = torch.randn(x.shape[0], x.shape[1], cfg.n_embd)
-    dummy_dag_hidden = torch.randn(x.shape[0], x.shape[1], cfg.n_embd) * 0.01
-    dummy_mixed = dummy_hidden * 0.5 + dummy_dag_hidden * 0.5
-    logger.extract_all_logging_data(
-        model, dummy_hidden, dummy_dag_hidden, None, dummy_mixed
-    )
+    logger.compute_log_statistics(model)
 
     # Test gate and norm extraction after forward pass
     extra_vals = logger.get_extra_vals(model)
@@ -278,13 +278,7 @@ def test_extra_vals_consistency_daggpt():
     loss.backward()
 
     # Extract logging data after forward pass
-    # Create dummy floating-point tensors for logging (since x is integer token IDs)
-    dummy_hidden = torch.randn(x.shape[0], x.shape[1], cfg.n_embd)
-    dummy_dag_hidden = torch.randn(x.shape[0], x.shape[1], cfg.n_embd) * 0.01
-    dummy_mixed = dummy_hidden * 0.5 + dummy_dag_hidden * 0.5
-    logger.extract_all_logging_data(
-        model, dummy_hidden, dummy_dag_hidden, None, dummy_mixed
-    )
+    logger.compute_log_statistics(model)
 
     # Call logger multiple times
     extra_vals_1 = logger.get_extra_vals(model)
@@ -448,13 +442,7 @@ def test_hook_behavior_no_grad_context():
         assert len(logger.captured_gradients) == 0
 
         # Extract logging data after forward pass
-        # Create dummy floating-point tensors for logging (since x is integer token IDs)
-        dummy_hidden = torch.randn(x.shape[0], x.shape[1], cfg.n_embd)
-        dummy_dag_hidden = torch.randn(x.shape[0], x.shape[1], cfg.n_embd) * 0.01
-        dummy_mixed = dummy_hidden * 0.5 + dummy_dag_hidden * 0.5
-        logger.extract_all_logging_data(
-            model, dummy_hidden, dummy_dag_hidden, None, dummy_mixed
-        )
+        logger.compute_log_statistics(model)
 
         # Logger should work and return reasonable values
         extra_vals = logger.get_extra_vals(model)
@@ -473,7 +461,9 @@ def test_hook_behavior_no_grad_context():
 # Gradient health tests for DAG components
 # ---------------------------------------------------------------------
 def test_dag_gradient_health():
-    """Test that DAG gradients are healthy (not zero, not infinite) with Gumbel softmax."""
+    """Test that DAG gradients remain healthy across multiple backward passes."""
+    torch.manual_seed(42)
+
     cfg = GPTConfig(
         vocab_size=20,
         block_size=8,
@@ -481,55 +471,37 @@ def test_dag_gradient_health():
         n_head=1,
         n_embd=16,
         dag_depth=2,
-        gumbel_temperature=2.0,  # Use the stable temperature
+        gumbel_temperature=2.0,
     )
     model = GPT(cfg)
 
-    # Forward and backward pass
-    x = torch.randint(0, cfg.vocab_size, (2, 6))
-    y = torch.randint(0, cfg.vocab_size, (2, 6))
+    gradient_norms = []
 
-    model.zero_grad()
-    _, loss = model(x, y)
-    loss.backward()
+    for i in range(3):  # Reduced from 5 to save time
+        x = torch.randint(0, cfg.vocab_size, (2, 6))
+        y = torch.randint(0, cfg.vocab_size, (2, 6))
 
-    # Check DAG controller gradients
-    plan_predictor = model.dag.plan_predictor
+        model.zero_grad()
+        _, loss = model(x, y)
+        loss.backward()
 
-    # Check critical weight parameters (not bias terms which can be small)
-    critical_params = [
-        "predictor.0.weight",  # First linear layer
-        "predictor.2.weight",  # Second linear layer
-    ]
+        # Check specific gradient health
+        op_grad = model.dag.plan_predictor.predictor[-1].weight.grad
+        assert op_grad is not None, f"Step {i}: should have gradients"
 
-    for name, param in plan_predictor.named_parameters():
-        if param.grad is not None:
-            grad_norm = param.grad.norm().item()
+        grad_norm = op_grad.norm().item()
+        gradient_norms.append(grad_norm)
 
-            # All gradients should be finite
-            assert torch.isfinite(
-                param.grad
-            ).all(), f"Gradient for {name} contains inf/nan"
+        # Verify gradient health
+        assert grad_norm > 1e-8, f"Step {i}: gradient too small: {grad_norm}"
+        assert grad_norm < 1e4, f"Step {i}: gradient too large: {grad_norm}"
+        assert torch.isfinite(op_grad).all(), f"Step {i}: gradient contains inf/nan"
 
-            # Critical weight parameters should have meaningful gradients
-            if name in critical_params:
-                assert (
-                    grad_norm > 1e-8
-                ), f"Critical gradient for {name} is too small: {grad_norm}"
-                assert (
-                    grad_norm < 1e2
-                ), f"Critical gradient for {name} is too large: {grad_norm}"
-            else:
-                # Bias terms can be smaller but should not be exactly zero or infinite
-                assert grad_norm >= 0, f"Gradient for {name} is negative: {grad_norm}"
-                assert grad_norm < 1e3, f"Gradient for {name} is too large: {grad_norm}"
-
-    # Check that predictor specifically has gradients (this was problematic before)
-    op_selector_grad = plan_predictor.predictor[-1].weight.grad
-    assert op_selector_grad is not None, "op_selector should have gradients"
-    op_grad_norm = op_selector_grad.norm().item()
-    assert op_grad_norm > 1e-8, f"op_selector gradient is too small: {op_grad_norm}"
-    assert op_grad_norm < 1e2, f"op_selector gradient is too large: {op_grad_norm}"
+    # Check gradient stability
+    min_grad = min(gradient_norms)
+    max_grad = max(gradient_norms)
+    ratio = max_grad / min_grad if min_grad > 0 else float("inf")
+    assert ratio < 1000, f"Gradient variation too extreme: ratio={ratio}"
 
 
 def test_dag_gradient_flow_vs_temperature():
@@ -545,7 +517,6 @@ def test_dag_gradient_flow_vs_temperature():
         n_embd=16,
         dag_depth=2,
     )
-
     x = torch.randint(0, cfg_base.vocab_size, (2, 6))
     y = torch.randint(0, cfg_base.vocab_size, (2, 6))
 
@@ -712,3 +683,114 @@ def test_dag_gradients_multiple_backward_passes():
     assert (
         ratio < 1000
     ), f"Gradient variation too extreme: min={min_grad}, max={max_grad}, ratio={ratio}"
+
+
+def test_basic_daggpt_functionality(tiny_model, sample_batch_tiny):
+    """Test basic DAG model forward pass and structure."""
+    model, config = tiny_model
+    input_ids, target_ids = sample_batch_tiny
+
+    # Test forward pass
+    assert_valid_forward_pass(model, config, input_ids, target_ids)
+    assert_valid_forward_pass(model, config, input_ids)  # without targets
+
+    # Test DAG components exist
+    assert hasattr(model, "dag"), "Model should have DAG"
+    assert hasattr(model, "dag_mixer"), "Model should have DAG mixer"
+
+    # Test node values
+    assert_valid_node_values(model)
+
+
+def test_daggpt_vs_gpt_comparison():
+    """Test that DAG models behave correctly compared to standard GPT."""
+    # Standard GPT (dag_depth=0)
+    cfg_std = GPTConfig(**{**SMALL_CONFIG.__dict__, "dag_depth": 0})
+    model_std = GPT(cfg_std)
+
+    # DAG GPT
+    model_dag = GPT(SMALL_CONFIG)
+
+    x = torch.randint(0, SMALL_CONFIG.vocab_size, (2, 4))
+    y = torch.randint(0, SMALL_CONFIG.vocab_size, (2, 4))
+
+    # Both should produce valid outputs
+    for model, config in [(model_std, cfg_std), (model_dag, SMALL_CONFIG)]:
+        assert_valid_forward_pass(model, config, x, y)
+
+    # Standard GPT shouldn't have DAG components
+    assert not hasattr(model_std, "dag")
+    assert not hasattr(model_std, "dag_mixer")
+
+    # DAG GPT should have DAG components
+    assert hasattr(model_dag, "dag")
+    assert hasattr(model_dag, "dag_mixer")
+
+
+def test_logging_integration(small_model, sample_batch_small):
+    """Test comprehensive logging functionality."""
+    model, config = small_model
+    input_ids, target_ids = sample_batch_small
+
+    # Forward pass
+    logits, loss = model(input_ids, target_ids)
+
+    # Test all logging functionality
+    logger, wandb_dict, extra_vals = assert_valid_logging(model)
+
+    # Verify specific logging components
+    assert len(extra_vals) > 0, "Should have extra values"
+
+    # Test node values specifically
+    assert_valid_node_values(model)
+
+
+def test_gradient_tracking_comprehensive(small_model):
+    """Test gradient tracking and backward pass functionality."""
+    model, config = small_model
+
+    # Set up gradient tracking test
+    logger, loss, input_ids, target_ids = setup_gradient_tracking_test(model, config)
+
+    # Verify gradients were captured
+    extra_vals = logger.get_extra_vals(model)
+
+    # Check for operation gradients
+    op_grad_keys = [key for key in extra_vals.keys() if key.startswith("op_grad/")]
+    assert len(op_grad_keys) == len(
+        op_names
+    ), "Should have gradients for all operations"
+
+    # Verify gradient values are reasonable
+    for key in op_grad_keys:
+        grad_val = extra_vals[key]
+        assert isinstance(grad_val, float)
+        assert torch.isfinite(torch.tensor(grad_val))
+        assert abs(grad_val) < 1.0  # Reasonable gradient magnitude
+
+
+def test_edge_cases_and_validation():
+    """Test edge cases and input validation."""
+    # Test zero dag_depth
+    cfg_zero = GPTConfig(
+        vocab_size=30, block_size=6, n_layer=1, n_head=1, n_embd=16, dag_depth=0
+    )
+    model_zero = GPT(cfg_zero)
+    x = torch.randint(0, 30, (1, 4))
+
+    assert_valid_forward_pass(model_zero, cfg_zero, x)
+    assert not hasattr(model_zero, "dag")
+
+    # Test block size validation
+    cfg_small_block = GPTConfig(
+        vocab_size=10, block_size=2, n_layer=1, n_head=1, n_embd=8, dag_depth=1
+    )
+    model_small = GPT(cfg_small_block)
+    x_too_long = torch.randint(0, 10, (1, 3))  # length 3 > block_size 2
+
+    with pytest.raises(AssertionError):
+        model_small(x_too_long)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

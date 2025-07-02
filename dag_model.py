@@ -488,6 +488,7 @@ class DAGMixer(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.mix_gate = nn.Linear(config.n_embd * 2, 1)
+        self.last_gate_values = None  # Store gate values for logging
 
     def forward(self, original_hidden, dag_hidden):
         """
@@ -520,6 +521,9 @@ class DAGMixer(nn.Module):
 
         # Reconstruct hidden tensor from list
         mixed_hidden = torch.stack(new_hidden_list, dim=1)
+
+        # Store gate values for logging
+        self.last_gate_values = gate_values
 
         return mixed_hidden, gate_values
 
@@ -670,6 +674,9 @@ class GPT(nn.Module):
         # DAG augmentation mode - simplified interface
         original_hidden = hidden.clone()  # Keep original for mixing
 
+        # Store original hidden states for logging
+        self.last_original_hidden = original_hidden
+
         # Run DAG processing (handles everything internally)
         dag_hidden, final_embeds, final_values = self.dag(original_hidden)
 
@@ -680,6 +687,9 @@ class GPT(nn.Module):
 
         # Mix original and DAG hidden states using the DAGMixer
         hidden, gate_values = self.dag_mixer(original_hidden, dag_hidden)
+
+        # Store mixed hidden states for logging
+        self.last_mixed_hidden = hidden
 
         logits = self.lm_head(hidden)
         loss = None

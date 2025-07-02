@@ -85,23 +85,13 @@ class DAGLogger:
         # Set up operation gradient tracking now that tensors exist
         self._setup_op_grad_tracking(model)
 
-    def compute_log_statistics(
-        self,
-        model,
-        original_hidden=None,
-        dag_hidden=None,
-        gate_values=None,
-        mixed_hidden=None,
-    ):
+    def compute_log_statistics(self, model):
         """
         Compute and store ALL logging statistics from model forward pass into a single dictionary.
+        Extracts values directly from the model's stored state.
 
         Args:
-            model: The GPT model
-            original_hidden: Original hidden states before DAG processing (B, T, H)
-            dag_hidden: DAG-processed hidden states (B, T, H)
-            gate_values: Gate values from DAG mixer (B, T)
-            mixed_hidden: Final mixed hidden states after DAG mixer (B, T, H)
+            model: The GPT model that has completed a forward pass
         """
         # Clear previous logging data
         self.logging_data = {}
@@ -113,15 +103,12 @@ class DAGLogger:
         self.logging_data["node_values"] = self.get_node_values_list(model)
         self.logging_data["detailed_node_values"] = self.get_detailed_node_values(model)
 
-        # Extract and store gate values
-        if gate_values is not None:
-            if isinstance(gate_values, list) and len(gate_values) > 0:
-                gate_tensor = gate_values[-1]  # Last token's gate values
-            elif hasattr(gate_values, "numel") and gate_values.numel() > 0:
-                gate_tensor = gate_values[-1]  # If it's a tensor
-            else:
-                gate_tensor = None
-
+        # Extract gate values from the model's DAG mixer
+        gate_values = model.dag_mixer.last_gate_values
+        if gate_values is not None and len(gate_values) > 0:
+            gate_tensor = (
+                gate_values[-1] if isinstance(gate_values, list) else gate_values[-1]
+            )
             if gate_tensor is not None:
                 self.logging_data["gate_values"] = {
                     "mean": gate_tensor.mean().item(),
@@ -130,7 +117,10 @@ class DAGLogger:
                     "close_to_zero_ratio": (gate_tensor < 0.1).float().mean().item(),
                 }
 
-        # Extract and store norm values
+        # Extract norm values from the model's stored hidden states
+        original_hidden = model.last_original_hidden
+        dag_hidden = model.dag.final_hidden
+        mixed_hidden = model.last_mixed_hidden
         if (
             original_hidden is not None
             and dag_hidden is not None
