@@ -235,92 +235,82 @@ class DAGPlanPredictor(nn.Module):
             operation_probs: (B, T, dag_depth, n_ops) - probabilities for operations
             output_probs: (B, T, max_nodes) - probabilities for final output selection
         """
+        # Vectorised forward pass (no explicit Python loop over tokens)
         B, T, H = hidden_states.shape
+        device = hidden_states.device
 
-        # Initialize output tensors
-        operand1_probs = torch.zeros(
-            B, T, self.dag_depth, self.max_nodes_per_token, device=hidden_states.device
+        # Run predictor across batch and time in one pass
+        hidden_flat = hidden_states.reshape(B * T, H)  # (B*T, H)
+        raw_plan = self.predictor(hidden_flat)  # (B*T, total_plan_dim)
+        total_plan_dim = raw_plan.shape[-1]
+        raw_plan = raw_plan.view(B, T, total_plan_dim)
+
+        # Split raw predictor output into DAG plan and output-selection logits
+        dag_plan_dim = self.dag_depth * (2 * self.max_nodes_per_token + self.n_ops)
+        dag_plan_logits = raw_plan[:, :, :dag_plan_dim]  # (B, T, dag_depth*plan_dim)
+        output_logits = raw_plan[:, :, dag_plan_dim:]  # (B, T, max_nodes)
+
+        # Reshape DAG plan to (B, T, dag_depth, plan_dim)
+        plan_dim = 2 * self.max_nodes_per_token + self.n_ops
+        dag_plan_logits = dag_plan_logits.view(B, T, self.dag_depth, plan_dim)
+
+        # Split into operand and operation logits
+        operand1_logits = dag_plan_logits[..., : self.max_nodes_per_token]
+        operand2_logits = dag_plan_logits[
+            ..., self.max_nodes_per_token : 2 * self.max_nodes_per_token
+        ]
+        operation_logits = dag_plan_logits[
+            ...,
+            2 * self.max_nodes_per_token : 2 * self.max_nodes_per_token + self.n_ops,
+        ]
+
+        # Build causal masks so token t can only access nodes up to position t
+        nodes = torch.arange(self.max_nodes_per_token, device=device)  # (max_nodes)
+        available_nodes_per_token = (
+            torch.arange(T, device=device) + 1
+        ) * self.scratch_nodes  # (T)
+        mask_valid = nodes.unsqueeze(0) < available_nodes_per_token.unsqueeze(
+            1
+        )  # (T, max_nodes)
+        # Invert for masked_fill (True means "mask this position")
+        mask_invalid = ~mask_valid  # (T, max_nodes)
+
+        # Expand masks to match logits shapes
+        # operand mask: (1, T, 1, max_nodes)
+        operand_mask = mask_invalid.unsqueeze(0).unsqueeze(2)
+        # output mask: (1, T, max_nodes)
+        output_mask = mask_invalid.unsqueeze(0)
+
+        # Apply causal masking by setting invalid logits to large negative value
+        operand1_logits = operand1_logits.masked_fill(operand_mask, -1e9)
+        operand2_logits = operand2_logits.masked_fill(operand_mask, -1e9)
+        output_logits = output_logits.masked_fill(output_mask, -1e9)
+
+        # Clamp logits before Gumbel-Softmax for numerical stability
+        operand1_logits = safe_clamp(operand1_logits)
+        operand2_logits = safe_clamp(operand2_logits)
+        operation_logits = safe_clamp(operation_logits)
+        output_logits = safe_clamp(output_logits)
+
+        # Gumbel-Softmax (hard=True, straight-through)
+        operand1_probs = F.gumbel_softmax(
+            operand1_logits, tau=self.temperature, hard=True, dim=-1
         )
-        operand2_probs = torch.zeros(
-            B, T, self.dag_depth, self.max_nodes_per_token, device=hidden_states.device
+        operand2_probs = F.gumbel_softmax(
+            operand2_logits, tau=self.temperature, hard=True, dim=-1
         )
-        operation_probs = torch.zeros(
-            B, T, self.dag_depth, self.n_ops, device=hidden_states.device
+        operation_probs = F.gumbel_softmax(
+            operation_logits, tau=self.temperature, hard=True, dim=-1
         )
-        output_probs = torch.zeros(
-            B, T, self.max_nodes_per_token, device=hidden_states.device
+        output_probs = F.gumbel_softmax(
+            output_logits, tau=self.temperature, hard=True, dim=-1
         )
 
-        # Predict plans causally: token t can only use context up to position t
-        for t in range(T):
-            # Get causal context for token t (positions 0 to t inclusive)
-            causal_context = hidden_states[
-                :, t : t + 1, :
-            ]  # (B, 1, H) - only current token
-
-            # Predict plan for token t using only its own context
-            raw_plan = self.predictor(causal_context)  # (B, 1, total_plan_dim)
-
-            # Split into DAG plan and output selection
-            dag_plan_dim = self.dag_depth * (2 * self.max_nodes_per_token + self.n_ops)
-            dag_plan = raw_plan[:, :, :dag_plan_dim]
-            output_logits = raw_plan[:, :, dag_plan_dim:]
-
-            dag_plan = dag_plan.view(B, self.dag_depth, -1)  # (B, dag_depth, plan_dim)
-
-            # Split DAG plan into operand and operation components
-            operand1_logits = dag_plan[:, :, : self.max_nodes_per_token]
-            operand2_logits = dag_plan[
-                :, :, self.max_nodes_per_token : 2 * self.max_nodes_per_token
-            ]
-            operation_logits = dag_plan[
-                :,
-                :,
-                2 * self.max_nodes_per_token : 2 * self.max_nodes_per_token
-                + self.n_ops,
-            ]
-
-            # Apply causal masking: token t can only access nodes from tokens 0 to t
-            available_nodes = (t + 1) * self.scratch_nodes
-            if available_nodes < self.max_nodes_per_token:
-                # Mask out unavailable nodes
-                operand1_logits[:, :, available_nodes:] = -1e9
-                operand2_logits[:, :, available_nodes:] = -1e9
-                output_logits[:, :, available_nodes:] = -1e9
-
-            # Safe clamp before Gumbel softmax
-            operand1_logits = safe_clamp(operand1_logits)
-            operand2_logits = safe_clamp(operand2_logits)
-            operation_logits = safe_clamp(operation_logits)
-            output_logits = safe_clamp(
-                output_logits.squeeze(1)
-            )  # Remove singleton dimension
-
-            # Apply Gumbel softmax
-            operand1_probs[:, t] = F.gumbel_softmax(
-                operand1_logits,
-                tau=self.temperature,
-                hard=True,
-                dim=-1,
-            )
-            operand2_probs[:, t] = F.gumbel_softmax(
-                operand2_logits,
-                tau=self.temperature,
-                hard=True,
-                dim=-1,
-            )
-            operation_probs[:, t] = F.gumbel_softmax(
-                operation_logits, tau=self.temperature, hard=True, dim=-1
-            )
-            output_probs[:, t] = F.gumbel_softmax(
-                output_logits, tau=self.temperature, hard=True, dim=-1
-            )
-
-        # Store the full operation_probs for gradient tracking
-        self.last_operation_probs_full = operation_probs  # (B, T, dag_depth, n_ops) since we need to run the dag for each token.
-        self.last_operand1_probs = operand1_probs  # (B, T, dag_depth, max_nodes)
-        self.last_operand2_probs = operand2_probs  # (B, T, dag_depth, max_nodes)
-        self.last_output_probs = output_probs  # (B, T, max_nodes)
+        # Cache tensors for external logging/debugging
+        self.last_operation_probs_full = operation_probs
+        self.last_operand1_probs = operand1_probs
+        self.last_operand2_probs = operand2_probs
+        self.last_output_probs = output_probs
 
         return operand1_probs, operand2_probs, operation_probs, output_probs
 
@@ -363,68 +353,76 @@ class DifferentiableDAG(nn.Module):
         B, T, H = original_hidden.shape
         device = original_hidden.device
 
-        # Step 0: Pre-process hidden states, so values can be extracted more easily.
+        # Pre-process hidden states before value extraction
         incoming_hidden = self.pre_dag(original_hidden)
 
-        # Step 1: Extract values from pre-processed hidden states
-        initial_values = self.embed_to_value(incoming_hidden)  # (B, T)
+        # Extract scalar values from hidden states
+        initial_values = self.embed_to_value(incoming_hidden)  # (B, T, 1)
+        initial_values = initial_values.squeeze(-1)  # (B, T)
 
-        # Scratch values is (B x scratch_nodes x T)
-        # Values are initialized by copying the initial value of the respective token.
-        scratch_values = torch.stack(
-            [initial_values] * self.scratch_nodes, dim=1
-        ).squeeze(-1)
+        # Initialise scratch space (B, scratch_nodes, T)
+        scratch_values = initial_values.unsqueeze(1).repeat(1, self.scratch_nodes, 1)
 
-        # Step 2: Generate complete DAG plan for all tokens in batch
+        # Generate DAG plan for all tokens (vectorised)
         operand1_probs, operand2_probs, operation_probs, output_probs = (
             self.plan_predictor(incoming_hidden)
-        )
+        )  # shapes documented in predictor
 
-        # Step 3: Execute DAG plan in batch
+        # For flattening scratch space later on
+        max_nodes = self.scratch_nodes * T  # == self.plan_predictor.max_nodes_per_token
+
+        # Helper: flatten scratch space to fixed length (B, max_nodes_total)
+        max_nodes_total = self.plan_predictor.max_nodes_per_token
+
+        def flatten_scratch(vals: torch.Tensor):
+            """Flatten scratch tensor to (B, max_nodes_total), padding with zeros if needed."""
+            flat = vals.reshape(B, -1)  # (B, scratch_nodes * current_T)
+            if flat.size(1) < max_nodes_total:
+                pad_size = max_nodes_total - flat.size(1)
+                flat = torch.cat(
+                    [flat, torch.zeros(B, pad_size, device=device, dtype=flat.dtype)],
+                    dim=1,
+                )
+            return flat  # (B, max_nodes_total)
+
+        # Execute DAG across dag_depth steps (vectorised)
         for step in range(self.dag_depth):
-            target_node = step % self.scratch_nodes
+            target_node = step % self.scratch_nodes  # node index to overwrite this step
 
-            for t in range(T):
-                available_nodes = (t + 1) * self.scratch_nodes
-                flat_values = scratch_values[:, :, : t + 1].reshape(B, -1)
+            # Flatten current scratch values
+            flat_vals = flatten_scratch(scratch_values)  # (B, max_nodes_total)
 
-                # Extract pre-computed probabilities
-                att1 = operand1_probs[:, t, step, :available_nodes]
-                att2 = operand2_probs[:, t, step, :available_nodes]
-                op_w = operation_probs[:, t, step]
+            # Pre-computed attention weights for this step
+            att1 = operand1_probs[:, :, step, :]  # (B, T, max_nodes_total)
+            att2 = operand2_probs[:, :, step, :]  # (B, T, max_nodes_total)
+            op_w = operation_probs[:, :, step, :]  # (B, T, n_ops)
 
-                # Select operands using only values
-                v1 = (att1 * flat_values).sum(1)
-                v2 = (att2 * flat_values).sum(1)
+            # Broadcast flat_vals for element-wise multiply
+            flat_vals_exp = flat_vals.unsqueeze(1)  # (B, 1, max_nodes_total)
 
-                # Compute operation outputs
-                outs = torch.stack([op(v1, v2) for op in op_funcs], dim=1)
-                new_val = (op_w * outs).sum(1)
+            # Select operands
+            v1 = (att1 * flat_vals_exp).sum(-1)
+            v2 = (att2 * flat_vals_exp).sum(-1)
 
-                # Update only values in scratch space
-                new_scratch_values = scratch_values.clone()
-                new_scratch_values[:, target_node, t] = new_val
-                scratch_values = new_scratch_values
+            # Weighted sum across operations gives new value
+            outs = torch.stack([op(v1, v2) for op in op_funcs], dim=-1)
 
-        # Step 4: Process each token position to create final hidden states using output selection
-        new_hidden_list = []
-        for t in range(T):
-            # Use output probabilities to select final value
-            available_nodes = (t + 1) * self.scratch_nodes
-            flat_values = scratch_values[:, :, : t + 1].reshape(B, -1)
+            # Weighted sum across operations → new value (B, T)
+            new_val = (op_w * outs).sum(-1)
 
-            # Output selection: select the final value from the scratch space
-            output_att = output_probs[:, t, :available_nodes]
-            selected_value = (output_att * flat_values).sum(1)
+            # Update designated scratch node in a gradient-safe manner
+            new_scratch = scratch_values.clone()
+            new_scratch[:, target_node, :] = new_val
+            scratch_values = new_scratch
 
-            # Convert scalar value back to embedding space
-            final_full_embed = self.value_to_embed(selected_value.unsqueeze(-1))
-            new_hidden_list.append(final_full_embed)
+        # Select final value for each token using output probabilities
+        flat_vals_final = flatten_scratch(scratch_values)  # (B, max_nodes_total)
+        selected_value = (output_probs * flat_vals_final.unsqueeze(1)).sum(-1)  # (B, T)
 
-        # Reconstruct hidden tensor from list
-        final_hidden = torch.stack(new_hidden_list, dim=1)  # (B, T, H)
+        # Map scalar values back to embedding space
+        final_hidden = self.value_to_embed(selected_value.unsqueeze(-1))  # (B, T, H)
 
-        # Store the final values for logging
+        # Cache for logging
         self.final_hidden = final_hidden
         self.final_values = scratch_values
 
@@ -528,10 +526,7 @@ class GPT(nn.Module):
             )
         )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
+        # Weight tying
         self.transformer.wte.weight = (
             self.lm_head.weight
         )  # https://paperswithcode.com/method/weight-tying

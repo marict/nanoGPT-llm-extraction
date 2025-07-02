@@ -1,14 +1,11 @@
 name = "daggpt"
 
 batch_size = 16
-block_size = 1024
-gradient_accumulation_steps = 4
+block_size = 512
+gradient_accumulation_steps = 2
 
-max_iters = 1500000
-lr_decay_iters = 1500000
-
-# max_iters = 10000
-# lr_decay_iters = 10000
+max_iters = 100_000
+lr_decay_iters = 100_000
 
 eval_interval = 1000
 eval_iters = 20
@@ -19,9 +16,9 @@ weight_decay = 1e-1
 dag_depth = 8
 
 # n_embed must be divisible by n_head
-n_layer = 24
-n_head = 16
-n_embd = 1024
+n_layer = 12
+n_head = 12
+n_embd = 768
 dropout = 0.1
 bias = True
 
