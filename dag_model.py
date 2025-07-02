@@ -203,20 +203,24 @@ class DAGPlanPredictor(nn.Module):
         self.n_ops = len(op_funcs)  # Number of operations
 
         # Total plan dimensions per token per step: [operand1, operand2, operation]
+        # Plus final output selection: [output_operand]
         plan_dim = 2 * self.max_nodes_per_token + self.n_ops
+        output_selection_dim = self.max_nodes_per_token
 
-        # Predictor: hidden_state -> full DAG plan
+        # Predictor: hidden_state -> full DAG plan + output selection
         self.predictor = nn.Sequential(
             nn.Linear(config.n_embd, config.n_embd),
             nn.GELU(),
-            nn.Linear(config.n_embd, config.dag_depth * plan_dim),
+            nn.Linear(
+                config.n_embd, config.dag_depth * plan_dim + output_selection_dim
+            ),
         )
 
-        # Store last predictions for logging (compatible with old interface)
-        self.last_attn: torch.Tensor | None = None
-        self.last_op_weights: torch.Tensor | None = None
-        self.last_op_logits: torch.Tensor | None = None
-        self.last_op_logits_with_grad: torch.Tensor | None = None
+        # Store last predictions for logging
+        self.last_operation_probs_full: torch.Tensor | None = None
+        self.last_operand1_probs: torch.Tensor | None = None
+        self.last_operand2_probs: torch.Tensor | None = None
+        self.last_output_probs: torch.Tensor | None = None
 
     def forward(self, hidden_states: torch.Tensor):
         """
@@ -229,6 +233,7 @@ class DAGPlanPredictor(nn.Module):
             operand1_probs: (B, T, dag_depth, max_nodes) - probabilities for operand 1
             operand2_probs: (B, T, dag_depth, max_nodes) - probabilities for operand 2
             operation_probs: (B, T, dag_depth, n_ops) - probabilities for operations
+            output_probs: (B, T, max_nodes) - probabilities for final output selection
         """
         B, T, H = hidden_states.shape
 
@@ -242,6 +247,9 @@ class DAGPlanPredictor(nn.Module):
         operation_probs = torch.zeros(
             B, T, self.dag_depth, self.n_ops, device=hidden_states.device
         )
+        output_probs = torch.zeros(
+            B, T, self.max_nodes_per_token, device=hidden_states.device
+        )
 
         # Predict plans causally: token t can only use context up to position t
         for t in range(T):
@@ -251,15 +259,21 @@ class DAGPlanPredictor(nn.Module):
             ]  # (B, 1, H) - only current token
 
             # Predict plan for token t using only its own context
-            raw_plan = self.predictor(causal_context)  # (B, 1, dag_depth * plan_dim)
-            raw_plan = raw_plan.view(B, self.dag_depth, -1)  # (B, dag_depth, plan_dim)
+            raw_plan = self.predictor(causal_context)  # (B, 1, total_plan_dim)
 
-            # Split into operand and operation components
-            operand1_logits = raw_plan[:, :, : self.max_nodes_per_token]
-            operand2_logits = raw_plan[
+            # Split into DAG plan and output selection
+            dag_plan_dim = self.dag_depth * (2 * self.max_nodes_per_token + self.n_ops)
+            dag_plan = raw_plan[:, :, :dag_plan_dim]
+            output_logits = raw_plan[:, :, dag_plan_dim:]
+
+            dag_plan = dag_plan.view(B, self.dag_depth, -1)  # (B, dag_depth, plan_dim)
+
+            # Split DAG plan into operand and operation components
+            operand1_logits = dag_plan[:, :, : self.max_nodes_per_token]
+            operand2_logits = dag_plan[
                 :, :, self.max_nodes_per_token : 2 * self.max_nodes_per_token
             ]
-            operation_logits = raw_plan[
+            operation_logits = dag_plan[
                 :,
                 :,
                 2 * self.max_nodes_per_token : 2 * self.max_nodes_per_token
@@ -272,47 +286,43 @@ class DAGPlanPredictor(nn.Module):
                 # Mask out unavailable nodes
                 operand1_logits[:, :, available_nodes:] = -1e9
                 operand2_logits[:, :, available_nodes:] = -1e9
+                output_logits[:, :, available_nodes:] = -1e9
 
             # Safe clamp before Gumbel softmax
             operand1_logits = safe_clamp(operand1_logits)
             operand2_logits = safe_clamp(operand2_logits)
             operation_logits = safe_clamp(operation_logits)
+            output_logits = safe_clamp(
+                output_logits.squeeze(1)
+            )  # Remove singleton dimension
 
-            # Apply Gumbel softmax with deterministic seeds
-            operand1_probs[:, t] = self._deterministic_gumbel_softmax(
-                operand1_logits, dim=-1
+            # Apply Gumbel softmax
+            operand1_probs[:, t] = F.gumbel_softmax(
+                operand1_logits,
+                tau=self.temperature,
+                hard=True,
+                dim=-1,
             )
-            operand2_probs[:, t] = self._deterministic_gumbel_softmax(
-                operand2_logits, dim=-1
+            operand2_probs[:, t] = F.gumbel_softmax(
+                operand2_logits,
+                tau=self.temperature,
+                hard=True,
+                dim=-1,
             )
-            operation_probs[:, t] = self._deterministic_gumbel_softmax(
-                operation_logits, dim=-1
+            operation_probs[:, t] = F.gumbel_softmax(
+                operation_logits, tau=self.temperature, hard=True, dim=-1
+            )
+            output_probs[:, t] = F.gumbel_softmax(
+                output_logits, tau=self.temperature, hard=True, dim=-1
             )
 
-        # Store for logging
-        self.last_op_logits = operation_probs.detach().mean(dim=(0, 1, 2))
-        self.last_op_logits_with_grad = operation_probs.mean(dim=(0, 1, 2))
-        # Also store the full operation_probs for gradient tracking
-        self.last_operation_probs_full = operation_probs  # Keep gradients
+        # Store the full operation_probs for gradient tracking
+        self.last_operation_probs_full = operation_probs  # (B, T, dag_depth, n_ops) since we need to run the dag for each token.
+        self.last_operand1_probs = operand1_probs  # (B, T, dag_depth, max_nodes)
+        self.last_operand2_probs = operand2_probs  # (B, T, dag_depth, max_nodes)
+        self.last_output_probs = output_probs  # (B, T, max_nodes)
 
-        # Store attention-like information for logging compatibility
-        self.last_attn = torch.stack(
-            [operand1_probs.detach(), operand2_probs.detach()], dim=-1
-        )
-        self.last_op_weights = operation_probs.detach().mean(dim=(0, 1, 2))
-
-        return operand1_probs, operand2_probs, operation_probs
-
-    def _deterministic_gumbel_softmax(
-        self, logits: torch.Tensor, dim: int
-    ) -> torch.Tensor:
-        """Apply deterministic Gumbel softmax."""
-        rng_state = torch.get_rng_state()
-        seed = int(torch.sum(logits * 1000).item()) % 2**31
-        torch.manual_seed(seed)
-        result = F.gumbel_softmax(logits, tau=self.temperature, hard=False, dim=dim)
-        torch.set_rng_state(rng_state)
-        return result
+        return operand1_probs, operand2_probs, operation_probs, output_probs
 
 
 # ---------------------------------------------------------------------------
@@ -330,19 +340,21 @@ class DifferentiableDAG(nn.Module):
         self.scalar_to_embed = scalar_to_embed
         self.temperature = config.gumbel_temperature
 
+        self.pre_dag = Block(config)
+
         # New parameters for fixed scratch space
         self.scratch_nodes = config.dag_scratch_nodes
 
         # Initialize plan predictor
         self.plan_predictor = DAGPlanPredictor(config, self.temperature)
 
-        # Value extractor
-        self.value_extractor = ValueExtractor(config)
-
-        # Final layer to convert values back to embedding space
-        self.final_layer = nn.Sequential(
-            nn.Linear(1, config.n_embd), LayerNorm(config.n_embd, bias=config.bias)
+        # Tie value and embedding layers to improv reversability
+        self.value_to_embed_layer = nn.Linear(1, config.n_embd)
+        self.value_to_embed = nn.Sequential(
+            self.value_to_embed_layer, LayerNorm(config.n_embd, bias=config.bias)
         )
+        self.embed_to_value = nn.Linear(config.n_embd, 1)
+        self.embed_to_value.weight = nn.Parameter(self.value_to_embed_layer.weight.T)
 
     def forward(
         self,
@@ -351,16 +363,21 @@ class DifferentiableDAG(nn.Module):
         B, T, H = original_hidden.shape
         device = original_hidden.device
 
-        # Step 1: Extract values from original hidden states
-        initial_values = self.value_extractor(original_hidden)  # (B, T)
+        # Step 0: Pre-process hidden states, so values can be extracted more easily.
+        incoming_hidden = self.pre_dag(original_hidden)
 
-        # Initialize fixed-size scratch space for values only
-        scratch_values = torch.zeros(B, self.scratch_nodes, T, device=device)
-        scratch_values[:, 0, :] = initial_values
+        # Step 1: Extract values from pre-processed hidden states
+        initial_values = self.embed_to_value(incoming_hidden)  # (B, T)
+
+        # Scratch values is (B x scratch_nodes x T)
+        # Values are initialized by copying the initial value of the respective token.
+        scratch_values = torch.stack(
+            [initial_values] * self.scratch_nodes, dim=1
+        ).squeeze(-1)
 
         # Step 2: Generate complete DAG plan for all tokens in batch
-        operand1_probs, operand2_probs, operation_probs = self.plan_predictor(
-            original_hidden
+        operand1_probs, operand2_probs, operation_probs, output_probs = (
+            self.plan_predictor(incoming_hidden)
         )
 
         # Step 3: Execute DAG plan in batch
@@ -389,52 +406,25 @@ class DifferentiableDAG(nn.Module):
                 new_scratch_values[:, target_node, t] = new_val
                 scratch_values = new_scratch_values
 
-        # Step 4: Process each token position to create final hidden states
+        # Step 4: Process each token position to create final hidden states using output selection
         new_hidden_list = []
         for t in range(T):
-            if self.dag_depth > 0:
-                all_node_values = scratch_values[:, :, t]
-                aggregated_value = all_node_values.mean(dim=1)
-            else:
-                aggregated_value = scratch_values[:, 1, t]
+            # Use output probabilities to select final value
+            available_nodes = (t + 1) * self.scratch_nodes
+            flat_values = scratch_values[:, :, : t + 1].reshape(B, -1)
 
-            # Convert scalar value back to embedding space with layernorm
-            final_full_embed = self.final_layer(aggregated_value.unsqueeze(-1))
+            # Output selection: select the final value from the scratch space
+            output_att = output_probs[:, t, :available_nodes]
+            aggregated_value = (output_att * flat_values).sum(1)
+
+            # Convert scalar value back to embedding space
+            final_full_embed = self.value_to_embed(aggregated_value.unsqueeze(-1))
             new_hidden_list.append(final_full_embed)
 
         # Reconstruct hidden tensor from list
         final_hidden = torch.stack(new_hidden_list, dim=1)  # (B, T, H)
 
         return final_hidden, None, scratch_values
-
-
-# ---------------------------------------------------------------------------
-# Learned transformer -> MLP process for converting initial embeddings into values.
-# ---------------------------------------------------------------------------
-class ValueExtractor(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.attn = nn.MultiheadAttention(
-            config.n_embd, config.n_head, batch_first=True
-        )
-        self.proj = nn.Linear(config.n_embd, 1)
-
-    def forward(self, node_embeds):
-        # node_embeds: (B, T, H)
-        B, T, H = node_embeds.shape
-        device = node_embeds.device
-
-        # Create causal attention mask so position N can only attend to positions 0 through N-1
-        # For PyTorch MultiheadAttention, mask shape is (T, T) where True means "ignore"
-        causal_mask = torch.triu(
-            torch.ones(T, T, device=device, dtype=torch.bool), diagonal=1
-        )
-
-        attn_out, _ = self.attn(
-            node_embeds, node_embeds, node_embeds, attn_mask=causal_mask
-        )
-        values = self.proj(attn_out).squeeze(-1)
-        return values
 
 
 # ---------------------------------------------------------------------------

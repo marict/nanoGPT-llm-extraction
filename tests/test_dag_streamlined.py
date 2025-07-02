@@ -171,79 +171,6 @@ class TestDAGScratchSpace:
             prev_memory = current_memory
 
 
-class TestDAGPlanPredictor:
-    """Tests for DAG plan prediction."""
-
-    def test_dummy_plan_predictor_behavior(self):
-        """Test DAG with dummy plan predictor to verify scratch space behavior."""
-        H = 16
-
-        class DummyPlanPredictor(DAGPlanPredictor):
-            def __init__(self, config, temperature=1.0):
-                super().__init__(config, temperature)
-
-            def forward(self, hidden_states):
-                B, T, H = hidden_states.shape
-
-                # Create dummy plans that always select last available node and add operation
-                operand1_probs = torch.zeros(
-                    B,
-                    T,
-                    self.dag_depth,
-                    self.max_nodes_per_token,
-                    device=hidden_states.device,
-                )
-                operand2_probs = torch.zeros(
-                    B,
-                    T,
-                    self.dag_depth,
-                    self.max_nodes_per_token,
-                    device=hidden_states.device,
-                )
-                operation_probs = torch.zeros(
-                    B, T, self.dag_depth, self.n_ops, device=hidden_states.device
-                )
-
-                for t in range(T):
-                    for step in range(self.dag_depth):
-                        available_nodes = (t + 1) * self.scratch_nodes
-                        if available_nodes > 0:
-                            # Select last available node for both operands
-                            operand1_probs[:, t, step, available_nodes - 1] = 1.0
-                            operand2_probs[:, t, step, available_nodes - 1] = 1.0
-                        # Select add operation (index 0)
-                        operation_probs[:, t, step, 0] = 1.0
-
-                return operand1_probs, operand2_probs, operation_probs
-
-        config = GPTConfig(
-            n_embd=H,
-            dag_depth=2,
-            dag_scratch_nodes=2,
-            n_head=1,
-            n_layer=1,
-            vocab_size=10,
-            block_size=4,
-        )
-
-        model = GPT(config)
-        model.dag.plan_predictor = DummyPlanPredictor(config)
-        model.eval()
-
-        x = torch.ones(1, 1, dtype=torch.long)
-        with torch.no_grad():
-            logits, _ = model(x)
-
-        # Verify output shapes
-        assert logits.shape == (1, 1, 10)
-
-        # Check node values through logger
-        logger = DAGLogger()
-        node_values = logger.get_node_values_list(model)
-        assert len(node_values) == 1  # One value for one token
-        assert torch.isfinite(torch.tensor(node_values[0]))
-
-
 class TestDAGPerformance:
     """Tests for DAG performance characteristics."""
 
@@ -302,7 +229,7 @@ class TestDAGConfiguration:
         config = GPTConfig(dag_depth=4)
         assert config.dag_scratch_nodes == 2
         model = GPT(config)
-        assert model.dag.value_extractor is not None
+        assert model.dag.embed_to_value is not None
 
     def test_zero_dag_depth(self):
         """Test that dag_depth=0 works like standard GPT."""

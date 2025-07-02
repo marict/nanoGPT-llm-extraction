@@ -81,18 +81,16 @@ def test_gpt_dag_depth_variations():
     model_zero = GPT(config_zero)
 
     # Should not have DAG-specific components
-    assert not hasattr(model_zero, "dag")  # No DAG components when dag_depth=0
-    assert not hasattr(model_zero, "dag")
-    assert not hasattr(model_zero, "dag_mixer")  # No DAG mixer when dag_depth=0
+    assert not hasattr(model_zero, "dag"), "No DAG components when dag_depth=0"
+    assert not hasattr(model_zero, "dag_mixer"), "No DAG mixer when dag_depth=0"
 
     # Test DAG depth > 0 (DAG-enabled GPT)
     config_dag = GPTConfig(**{**base_config.__dict__, "dag_depth": 2})
     model_dag = GPT(config_dag)
 
     # Should have DAG-specific components
-    assert hasattr(model_dag.dag, "value_extractor")  # Value extractor now in DAG
-    assert hasattr(model_dag, "dag")
-    assert hasattr(model_dag, "dag_mixer")  # DAG mixer present when dag_depth>0
+    assert hasattr(model_dag, "dag"), "DAG present when dag_depth>0"
+    assert hasattr(model_dag, "dag_mixer"), "DAG mixer present when dag_depth>0"
 
     # Test forward pass works for both
     x = torch.randint(0, 100, (2, 8))
