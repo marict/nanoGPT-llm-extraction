@@ -643,39 +643,35 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
 
                     # Generate a sample sentence to track generation quality
                     generated_sample = ""
-                    if encode is not None and decode is not None:
-                        try:
-                            # Simple prompt for generation
-                            sample_prompt = "Two plus 5 is equal to: "
-                            encoded = encode(sample_prompt)
-                            prompt_ids = torch.tensor(
-                                encoded, dtype=torch.long, device=device
-                            ).unsqueeze(0)
+                    if encode is None or decode is None:
+                        raise ValueError("No tokenizer available")
+                    try:
+                        # Simple prompt for generation
+                        sample_prompt = "Two plus 5 is equal to: "
+                        encoded = encode(sample_prompt)
+                        prompt_ids = torch.tensor(
+                            encoded, dtype=torch.long, device=device
+                        ).unsqueeze(0)
 
-                            with torch.no_grad():
-                                generated = raw_model.generate(
-                                    prompt_ids,
-                                    max_new_tokens=20,
-                                    temperature=0.8,
-                                    top_k=40,
-                                )
-                                generated_sample = decode(generated[0].cpu().tolist())
-                                print(f"Generated sample: {generated_sample}")
-                        except Exception as e:
-                            print(f"Warning: Failed to generate sample text: {e}")
-                            generated_sample = f"Error: {str(e)}"
-                    else:
-                        print("Skipping text generation (no tokenizer available)")
-                        generated_sample = "No tokenizer available"
+                        with torch.no_grad():
+                            generated = raw_model.generate(
+                                prompt_ids,
+                                max_new_tokens=20,
+                                temperature=0.8,
+                                top_k=40,
+                            )
+                            generated_sample = decode(generated[0].cpu().tolist())
+                            print(f"Generated sample: {generated_sample}")
+                    except Exception as e:
+                        print(f"Warning: Failed to generate sample text: {e}")
+                        generated_sample = f"Error: {str(e)}"
+                        raise e
 
-                    # Get non-gradient extra values for evaluation logging
-                    eval_extra = (
-                        {}
-                    )  # Initialize empty dict instead of calling model.extra_vals()
-                    if dag_logger is not None:
-                        # Get non-gradient DAG values (gradients are logged during training)
-                        eval_extra.update(dag_logger.get_extra_vals(raw_model))
-                        dag_logger.format_console_logging(raw_model)
+                    # Compute logging statistics and collect non-gradient extra values
+                    eval_extra = {}
+                    dag_logger.compute_log_statistics(raw_model)
+                    eval_extra.update(dag_logger.get_extra_vals(raw_model))
+                    dag_logger.format_console_logging(raw_model)
 
                     # Run math evaluation if enabled
                     math_scores = {}
@@ -700,41 +696,39 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                         print(f"math eval: {math_str}")
 
                     # Log everything to wandb if available
-                    if run is not None:
-                        try:
-                            base_log_dict = {
-                                "iter": iter_num,
-                                "train/loss": losses["train"],
-                                "val/loss": losses["val"],
-                                "lr": lr,
-                                "mfu": running_mfu * 100,
-                                **eval_extra,
-                            }
+                    if run is None:
+                        raise ValueError("Run is not available")
+                    try:
+                        base_log_dict = {
+                            "iter": iter_num,
+                            "train/loss": losses["train"],
+                            "val/loss": losses["val"],
+                            "lr": lr,
+                            "mfu": running_mfu * 100,
+                            **eval_extra,
+                        }
 
-                            # Add math evaluation scores
-                            for task, score in math_scores.items():
-                                base_log_dict[f"math_eval/{task}"] = score
+                        # Add math evaluation scores
+                        for task, score in math_scores.items():
+                            base_log_dict[f"math_eval/{task}"] = score
 
-                            # Get comprehensive logging dict
-                            log_dict = (
-                                dag_logger.get_wandb_logging_dict(
-                                    raw_model, base_log_dict
-                                )
-                                if dag_logger
-                                else base_log_dict
-                            )
+                        # Get comprehensive logging dict
+                        log_dict = (
+                            dag_logger.get_wandb_logging_dict(raw_model, base_log_dict)
+                            if dag_logger
+                            else base_log_dict
+                        )
 
-                            # Note: Gradient logging happens during training steps, not evaluation
-                            # Evaluation logs non-gradient metrics only
+                        # Note: Gradient logging happens during training steps, not evaluation
+                        # Evaluation logs non-gradient metrics only
 
-                            wandb.log(log_dict, step=iter_num, commit=False)
-                        except Exception as e:
-                            print(
-                                f"ERROR: Failed to log evaluation data to wandb at iter {iter_num}: {e}"
-                            )
-                            import traceback
-
-                            traceback.print_exc()
+                        wandb.log(log_dict, step=iter_num, commit=False)
+                    except Exception as e:
+                        print(
+                            f"ERROR: Failed to log evaluation data to wandb at iter {iter_num}: {e}"
+                        )
+                        traceback.print_exc()
+                        raise e
 
                     if losses["val"] < best_val_loss or cfg.always_save_checkpoint:
                         best_val_loss = losses["val"]
@@ -769,16 +763,17 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                         loss = loss / cfg.gradient_accumulation_steps
 
                     # Set up gradient tracking AFTER forward pass but BEFORE backward pass
-                    if dag_logger is not None and micro_step == 0:  # Only set up once
+                    if micro_step == 0:  # Only set up once
                         dag_logger.setup_gradient_tracking(raw_model)
 
                     X, Y = get_batch("train")
                     scaler.scale(loss).backward()
 
-                # Get extra values after backward pass (for gradients)
-                extra_vals = {}
-                if dag_logger is not None:
-                    extra_vals.update(dag_logger.get_extra_vals(raw_model))
+                # Compute logging statistics (populates non-gradient metrics)
+                dag_logger.compute_log_statistics(raw_model)
+
+                # Get extra values after backward pass (includes gradients captured by hooks)
+                extra_vals = dag_logger.get_extra_vals(raw_model)
 
                 if cfg.grad_clip:
                     scaler.unscale_(optimizer)
@@ -789,11 +784,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
 
                 dt = time.time() - t0
                 t0 = time.time()
-                if (
-                    iter_num % cfg.log_interval == 0
-                    and master_process
-                    and run is not None
-                ):
+                if iter_num % cfg.log_interval == 0 and master_process:
                     try:
                         # Prepare logging dict
                         base_dict = {"iter": iter_num, **extra_vals}
@@ -859,6 +850,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                     "device-side assert triggered",
                     "not implemented for",
                     "RuntimeError: Expected",
+                    "Logging data not available",
                 ]
 
                 is_critical = any(
@@ -897,11 +889,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
         )
         if ddp:
             destroy_process_group()
-        if run is not None:
-            try:
-                run.finish()
-            except Exception as e:
-                print(f"Warning: Failed to finish wandb run: {e}")
+        run.finish()
 
         # Stop RunPod instance if we're running on RunPod and keep-alive is not enabled
         if os.getenv("RUNPOD_POD_ID") and not getattr(cfg, "keep_alive", False):
