@@ -55,9 +55,8 @@ def test_comprehensive_training_logging(small_model, sample_batch_small):
     wandb_dict = logger.get_wandb_logging_dict(model)
 
     # Verify specific components
-    gate_keys = [k for k in wandb_dict if k.startswith("gate/")]
     norm_keys = [k for k in wandb_dict if k.startswith("norm/")]
-    assert len(gate_keys) > 0 or len(norm_keys) > 0, "Should have gate or norm values"
+    assert len(norm_keys) > 0, "Should have norm values"
 
     # Check operation gradients
     op_grad_keys = [key for key in extra_vals.keys() if key.startswith("op_grad/")]

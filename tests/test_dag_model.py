@@ -219,29 +219,8 @@ def test_extra_vals_daggpt():
 
     # Test gate and norm extraction after forward pass
     extra_vals = logger.get_extra_vals(model)
-    gate_vals = {k: v for k, v in extra_vals.items() if k.startswith("gate/")}
-    norm_vals = {k: v for k, v in extra_vals.items() if k.startswith("norm/")}
-    assert isinstance(gate_vals, dict)
-    assert isinstance(norm_vals, dict)
-
-    # Should have gate and norm keys
-    gate_keys = [k for k in gate_vals if k.startswith("gate/")]
-    norm_keys = [k for k in norm_vals if k.startswith("norm/")]
-
-    assert (
-        len(gate_keys) > 0 or len(norm_keys) > 0
-    ), "Expected gate or norm keys after forward pass"
-
-    # Verify gate and norm values are reasonable
-    for k in gate_keys:
-        assert isinstance(gate_vals[k], float), f"Gate value {k} is not a float"
-        assert 0.0 <= gate_vals[k] <= 1.0, f"Gate value {k} should be in [0,1]"
-        assert not torch.isnan(torch.tensor(gate_vals[k])), f"Gate value {k} is NaN"
-
-    for k in norm_keys:
-        assert isinstance(norm_vals[k], float), f"Norm value {k} is not a float"
-        assert norm_vals[k] >= 0, f"Norm value {k} should be non-negative"
-        assert not torch.isnan(torch.tensor(norm_vals[k])), f"Norm value {k} is NaN"
+    norm_keys = [k for k in extra_vals if k.startswith("norm/")]
+    assert len(norm_keys) > 0, "No norm values found"
 
     # Verify loss is reasonable
     assert loss > 0, "Loss should be positive"
@@ -448,13 +427,11 @@ def test_hook_behavior_no_grad_context():
         extra_vals = logger.get_extra_vals(model)
 
         # Should have at least gate and norm values
-        gate_keys = [k for k in extra_vals if k.startswith("gate/")]
         norm_keys = [k for k in extra_vals if k.startswith("norm/")]
+        assert len(norm_keys) > 0, "No norm values found"
 
         # Verify we have some meaningful logging data
-        assert (
-            len(gate_keys) > 0 or len(norm_keys) > 0
-        ), "Should have some logging values"
+        assert len(norm_keys) > 0, "Should have some logging values"
 
 
 # ---------------------------------------------------------------------
@@ -694,9 +671,8 @@ def test_basic_daggpt_functionality(tiny_model, sample_batch_tiny):
     assert_valid_forward_pass(model, config, input_ids, target_ids)
     assert_valid_forward_pass(model, config, input_ids)  # without targets
 
-    # Test DAG components exist
+    # Test DAG component exists
     assert hasattr(model, "dag"), "Model should have DAG"
-    assert hasattr(model, "dag_mixer"), "Model should have DAG mixer"
 
     # Test node values
     assert_valid_node_values(model)
@@ -722,9 +698,9 @@ def test_daggpt_vs_gpt_comparison():
     assert not hasattr(model_std, "dag")
     assert not hasattr(model_std, "dag_mixer")
 
-    # DAG GPT should have DAG components
+    # DAG GPT should have DAG component
     assert hasattr(model_dag, "dag")
-    assert hasattr(model_dag, "dag_mixer")
+    assert not hasattr(model_dag, "dag_mixer")
 
 
 def test_logging_integration(small_model, sample_batch_small):

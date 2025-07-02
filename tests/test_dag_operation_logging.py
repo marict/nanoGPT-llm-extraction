@@ -94,10 +94,9 @@ def test_comprehensive_logging_integration(small_model, sample_batch_small):
     extra_vals = logger.get_extra_vals(model)
     wandb_dict = logger.get_wandb_logging_dict(model)
 
-    # Check for gate and norm values
-    gate_keys = [key for key in extra_vals.keys() if key.startswith("gate/")]
+    # Check for norm values
     norm_keys = [key for key in extra_vals.keys() if key.startswith("norm/")]
-    assert len(gate_keys) > 0 or len(norm_keys) > 0, "No gate or norm values found"
+    assert len(norm_keys) > 0, "No norm values found"
 
     # Check for gradient values
     grad_keys = [key for key in extra_vals.keys() if key.startswith("op_grad/")]

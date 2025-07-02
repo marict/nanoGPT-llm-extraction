@@ -121,6 +121,9 @@ class TrainConfig:
     compile: bool = True
     keep_alive: bool = False  # Keep pod alive after training (disables auto-stop)
 
+    # Fine-tuning options
+    freeze_gpt: bool = False  # If True, freeze GPT backbone and train DAG layers only
+
 
 def load_config_file(path: str) -> Dict[str, object]:
     """Executes a python config file and returns its public symbols."""
@@ -552,12 +555,15 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
         base_model = GPT.from_pretrained(cfg.init_from, dict(dropout=cfg.dropout))
         for k in ("n_layer", "n_head", "n_embd", "block_size", "bias", "vocab_size"):
             model_args[k] = getattr(base_model.config, k)
-        # Always create a new model with the desired dag_depth
+        # Create new model with desired dag_depth (may be >0)
         gptconf = ModelConfig(**model_args)
         model = ModelClass(gptconf)
-        # If dag_depth=0, copy weights from the pretrained model
-        if cfg.dag_depth == 0:
-            model.load_state_dict(base_model.state_dict())
+
+        # Load overlapping GPT weights regardless of dag_depth
+        try:
+            model.load_state_dict(base_model.state_dict(), strict=False)
+        except Exception as e:
+            print(f"Warning: partial weight loading failed: {e}")
         iter_num, best_val_loss = 0, 1e9
     else:
         raise ValueError(f"Unsupported init_from {cfg.init_from}")
@@ -568,6 +574,23 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
 
     print(f"[{time.time() - setup_start:.2f}s] Model type: {type(model).__name__}")
     model.to(device)
+
+    # Optionally freeze GPT backbone parameters (except DAG components)
+    if getattr(cfg, "freeze_gpt", False):
+        frozen_count = 0
+        for name, param in model.named_parameters():
+            # Identify parameters belonging to transformer backbone or lm_head
+            if name.startswith("transformer") or name.startswith("lm_head"):
+                if not name.startswith("dag") and not name.startswith(
+                    "scalar_to_embed"
+                ):
+                    param.requires_grad = False
+                    frozen_count += 1
+        if master_process:
+            print(
+                f"Froze {frozen_count} GPT parameters; DAG-specific layers remain trainable."
+            )
+
     print(
         f"[{time.time() - setup_start:.2f}s] Model creation completed in {time.time() - model_start:.2f}s"
     )

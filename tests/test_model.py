@@ -90,7 +90,6 @@ def test_gpt_dag_depth_variations():
 
     # Should have DAG-specific components
     assert hasattr(model_dag, "dag"), "DAG present when dag_depth>0"
-    assert hasattr(model_dag, "dag_mixer"), "DAG mixer present when dag_depth>0"
 
     # Test forward pass works for both
     x = torch.randint(0, 100, (2, 8))

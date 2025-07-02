@@ -103,20 +103,6 @@ class DAGLogger:
         self.logging_data["node_values"] = self.get_node_values_list(model)
         self.logging_data["detailed_node_values"] = self.get_detailed_node_values(model)
 
-        # Extract gate values from the model's DAG mixer
-        gate_values = model.dag_mixer.last_gate_values
-        if gate_values is not None and len(gate_values) > 0:
-            gate_tensor = (
-                gate_values[-1] if isinstance(gate_values, list) else gate_values[-1]
-            )
-            if gate_tensor is not None:
-                self.logging_data["gate_values"] = {
-                    "mean": gate_tensor.mean().item(),
-                    "min": gate_tensor.min().item(),
-                    "max": gate_tensor.max().item(),
-                    "close_to_zero_ratio": (gate_tensor < 0.1).float().mean().item(),
-                }
-
         # Extract norm values from the model's stored hidden states
         original_hidden = model.last_original_hidden
         dag_hidden = model.dag.final_hidden
@@ -159,13 +145,6 @@ class DAGLogger:
         assert (
             self.logging_data
         ), "Logging data not available - call compute_log_statistics() first"
-
-        if "gate_values" in self.logging_data:
-            gate_data = self.logging_data["gate_values"]
-            metrics["gate/mean"] = gate_data["mean"]
-            metrics["gate/min"] = gate_data["min"]
-            metrics["gate/max"] = gate_data["max"]
-            metrics["gate/close_to_zero_ratio"] = gate_data["close_to_zero_ratio"]
 
         if "norm_values" in self.logging_data:
             norm_data = self.logging_data["norm_values"]
@@ -332,15 +311,6 @@ class DAGLogger:
                 print(f"  Token {t}: [{values_str}] (avg: {aggregated:.4f})")
             else:
                 print(f"  Token {t}: {token_values[0]:.4f}")
-
-        # Gate values - no fallbacks
-        assert "gate_values" in self.logging_data, "Gate values not in logging data"
-        gate_data = self.logging_data["gate_values"]
-        gate_mean = gate_data["mean"]
-        close_to_zero = gate_data["close_to_zero_ratio"]
-        print(
-            f"Gate values: mean={gate_mean:.4f}, close_to_zero_ratio={close_to_zero:.4f}"
-        )
 
         # Norm values - no fallbacks
         assert "norm_values" in self.logging_data, "Norm values not in logging data"

@@ -430,55 +430,6 @@ class DifferentiableDAG(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# DAG Mixer for combining original and DAG-processed hidden states
-# ---------------------------------------------------------------------------
-class DAGMixer(nn.Module):
-    """Handles mixing of original transformer hidden states with DAG-processed states."""
-
-    def __init__(self, config):
-        super().__init__()
-        self.mix_gate = nn.Linear(config.n_embd * 2, 1)
-        self.last_gate_values = None  # Store gate values for logging
-
-    def forward(self, original_hidden, dag_hidden):
-        """
-        Mix original and DAG-processed hidden states.
-
-        Args:
-            original_hidden: (B, T, H) - Original transformer hidden states
-            dag_hidden: (B, T, H) - DAG-processed hidden states
-
-        Returns:
-            mixed_hidden: (B, T, H) - Mixed hidden states
-            gate_values: list of gate values for logging
-        """
-        B, T, H = original_hidden.shape
-
-        # Process each token position to mix original and DAG hidden states
-        new_hidden_list = []
-        gate_values = []
-
-        for t in range(T):
-            # Mix original and DAG-processed hidden states
-            gate = torch.sigmoid(
-                self.mix_gate(
-                    torch.cat([original_hidden[:, t], dag_hidden[:, t]], dim=-1)
-                )
-            )
-            fused_hidden = (1 - gate) * original_hidden[:, t] + gate * dag_hidden[:, t]
-            new_hidden_list.append(fused_hidden)
-            gate_values.append(gate.detach())
-
-        # Reconstruct hidden tensor from list
-        mixed_hidden = torch.stack(new_hidden_list, dim=1)
-
-        # Store gate values for logging
-        self.last_gate_values = gate_values
-
-        return mixed_hidden, gate_values
-
-
-# ---------------------------------------------------------------------------
 # GPT configuration
 # ---------------------------------------------------------------------------
 @dataclass
@@ -537,7 +488,6 @@ class GPT(nn.Module):
                 1, config.n_embd
             )  # Still projects to full embedding
             self.dag = DifferentiableDAG(config, self.scalar_to_embed)
-            self.dag_mixer = DAGMixer(config)
 
         # init all weights
         self.apply(self._init_weights)
@@ -632,13 +582,13 @@ class GPT(nn.Module):
             final_values  # Store full tensor (B, scratch_nodes, T) or (B, T)
         )
 
-        # Mix original and DAG hidden states using the DAGMixer
-        hidden, gate_values = self.dag_mixer(original_hidden, dag_hidden)
+        # Simple residual addition of DAG-processed states
+        mixed_hidden = original_hidden + dag_hidden
 
         # Store mixed hidden states for logging
-        self.last_mixed_hidden = hidden
+        self.last_mixed_hidden = mixed_hidden
 
-        logits = self.lm_head(hidden)
+        logits = self.lm_head(mixed_hidden)
         loss = None
         if targets is not None:
             loss = self._compute_loss(logits, targets)
