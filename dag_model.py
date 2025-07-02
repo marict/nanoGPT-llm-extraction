@@ -300,20 +300,20 @@ class DAGPlanPredictor(nn.Module):
             operand1_probs[:, t] = F.gumbel_softmax(
                 operand1_logits,
                 tau=self.temperature,
-                hard=True,
+                hard=False,
                 dim=-1,
             )
             operand2_probs[:, t] = F.gumbel_softmax(
                 operand2_logits,
                 tau=self.temperature,
-                hard=True,
+                hard=False,
                 dim=-1,
             )
             operation_probs[:, t] = F.gumbel_softmax(
-                operation_logits, tau=self.temperature, hard=True, dim=-1
+                operation_logits, tau=self.temperature, hard=False, dim=-1
             )
             output_probs[:, t] = F.gumbel_softmax(
-                output_logits, tau=self.temperature, hard=True, dim=-1
+                output_logits, tau=self.temperature, hard=False, dim=-1
             )
 
         # Store the full operation_probs for gradient tracking
@@ -429,54 +429,6 @@ class DifferentiableDAG(nn.Module):
         self.final_values = scratch_values
 
         return final_hidden, None, scratch_values
-
-
-# ---------------------------------------------------------------------------
-# Context selectors using masked MultiheadAttention + Gumbel softmax
-# ---------------------------------------------------------------------------
-class MaskedContextSelector(nn.Module):
-    """Replaces Block-based context selection with masked attention + Gumbel softmax."""
-
-    def __init__(self, config, temperature: float = 2.0):
-        super().__init__()
-        self.attn = nn.MultiheadAttention(
-            config.n_embd, config.n_head, batch_first=True
-        )
-        self.temperature = temperature
-
-    def forward(self, hidden_states):
-        B, T, H = hidden_states.shape
-        device = hidden_states.device
-
-        outputs = []
-
-        for t in range(T):
-            if t == 0:
-                outputs.append(torch.zeros(B, H, device=device))
-            else:
-                context_len = t + 1
-                context = hidden_states[:, :context_len, :]
-                query = hidden_states[:, [t], :]
-
-                attn_out, attn_weights = self.attn(query, context, context)
-
-                if attn_weights.dim() == 3:
-                    attn_weights = attn_weights.squeeze(1)
-
-                attn_weights = safe_clamp(attn_weights)
-
-                rng_state = torch.get_rng_state()
-                seed = int(torch.sum(attn_weights * 1000).item()) % 2**31
-                torch.manual_seed(seed)
-                discrete_weights = F.gumbel_softmax(
-                    attn_weights, tau=self.temperature, hard=False
-                )
-                torch.set_rng_state(rng_state)
-
-                final_context = (discrete_weights.unsqueeze(-1) * context).sum(dim=1)
-                outputs.append(final_context)
-
-        return torch.stack(outputs, dim=1)
 
 
 # ---------------------------------------------------------------------------
