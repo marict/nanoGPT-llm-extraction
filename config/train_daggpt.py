@@ -38,7 +38,7 @@ dataset = "proofpile"
 
 backend = "nccl"
 dtype = "bfloat16"
-compile = True
+compile = False  # Currently broken for dag model
 
 always_save_checkpoint = True
 init_from = "scratch"
