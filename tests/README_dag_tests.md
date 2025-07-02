@@ -1,4 +1,25 @@
-# DAG Model Test Consolidation
+# Test suite – overview
+
+The automated tests have been slimmed down to **~70 fast-running checks**:
+
+| file | purpose |
+|------|---------|
+| `test_dag_model.py` | DAG forward / backward, config edge-cases |
+| `test_dag_operation_logging.py` | `DAGLogger` API, gradient capture, wandb dict |
+| `test_training_logging_integration.py` | miniature training-loop with logging |
+| `test_run_math_eval.py` | GSM8K/SVAMP math-eval helpers |
+| `test_model.py` | vanilla GPT blocks & ops |
+| `test_common.py` | shared fixtures, mocks, helpers |
+
+All heavy or duplicate tests were removed to keep CI snappy (<5 s on laptop).
+
+Run everything:
+```bash
+pytest -q           # full suite
+pytest -k dag -q    # only DAG-related tests
+```
+
+## DAG Model Test Consolidation
 
 ## Overview
 The DAG model tests have been consolidated to reduce redundancy while maintaining comprehensive coverage. This consolidation eliminated duplicate testing code and streamlined the test suite.

@@ -128,7 +128,7 @@ class DAGLogger:
         ):
             norm_values = {
                 "hidden": original_hidden[:, -1].norm(dim=-1).mean().detach().item(),
-                "dag_sem": dag_hidden[:, -1].norm(dim=-1).mean().detach().item(),
+                "dag_hidden": dag_hidden[:, -1].norm(dim=-1).mean().detach().item(),
                 "fused": mixed_hidden[:, -1].norm(dim=-1).mean().detach().item(),
             }
             self.logging_data["norm_values"] = norm_values
