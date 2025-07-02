@@ -300,20 +300,20 @@ class DAGPlanPredictor(nn.Module):
             operand1_probs[:, t] = F.gumbel_softmax(
                 operand1_logits,
                 tau=self.temperature,
-                hard=False,
+                hard=True,
                 dim=-1,
             )
             operand2_probs[:, t] = F.gumbel_softmax(
                 operand2_logits,
                 tau=self.temperature,
-                hard=False,
+                hard=True,
                 dim=-1,
             )
             operation_probs[:, t] = F.gumbel_softmax(
-                operation_logits, tau=self.temperature, hard=False, dim=-1
+                operation_logits, tau=self.temperature, hard=True, dim=-1
             )
             output_probs[:, t] = F.gumbel_softmax(
-                output_logits, tau=self.temperature, hard=False, dim=-1
+                output_logits, tau=self.temperature, hard=True, dim=-1
             )
 
         # Store the full operation_probs for gradient tracking

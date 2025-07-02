@@ -4,11 +4,11 @@ batch_size = 16
 block_size = 1024
 gradient_accumulation_steps = 4
 
-# max_iters = 1500000
-# lr_decay_iters = 1500000
+max_iters = 1500000
+lr_decay_iters = 1500000
 
-max_iters = 10000
-lr_decay_iters = 10000
+# max_iters = 10000
+# lr_decay_iters = 10000
 
 eval_interval = 1000
 eval_iters = 20
