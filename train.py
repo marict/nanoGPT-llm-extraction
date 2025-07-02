@@ -828,10 +828,6 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                                 raise RuntimeError(
                                     f"Missing gradient logs: expected {expected_grads}, found {len(grad_keys)}"
                                 )
-                            print(
-                                f"Logging {len(grad_keys)} gradient values to wandb (training)"
-                            )
-
                         wandb.log(log_dict, step=iter_num, commit=True)
                     except Exception as e:
                         print(
