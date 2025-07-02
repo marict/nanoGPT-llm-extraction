@@ -415,14 +415,18 @@ class DifferentiableDAG(nn.Module):
 
             # Output selection: select the final value from the scratch space
             output_att = output_probs[:, t, :available_nodes]
-            aggregated_value = (output_att * flat_values).sum(1)
+            selected_value = (output_att * flat_values).sum(1)
 
             # Convert scalar value back to embedding space
-            final_full_embed = self.value_to_embed(aggregated_value.unsqueeze(-1))
+            final_full_embed = self.value_to_embed(selected_value.unsqueeze(-1))
             new_hidden_list.append(final_full_embed)
 
         # Reconstruct hidden tensor from list
         final_hidden = torch.stack(new_hidden_list, dim=1)  # (B, T, H)
+
+        # Store the final values for logging
+        self.final_hidden = final_hidden
+        self.final_values = scratch_values
 
         return final_hidden, None, scratch_values
 
