@@ -191,7 +191,7 @@ def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
 class DAGPlanPredictor(nn.Module):
     """Predicts complete DAG execution plans for all tokens in batch."""
 
-    def __init__(self, config, temperature: float = 2.0):
+    def __init__(self, config, temperature: float = 20.0):
         super().__init__()
         self.dag_depth = config.dag_depth
         self.scratch_nodes = config.dag_scratch_nodes
@@ -292,18 +292,18 @@ class DAGPlanPredictor(nn.Module):
         operation_logits = safe_clamp(operation_logits)
         output_logits = safe_clamp(output_logits)
 
-        # Gumbel-Softmax (hard=True, straight-through)
+        # Gumbel-Softmax
         operand1_probs = F.gumbel_softmax(
-            operand1_logits, tau=self.temperature, hard=True, dim=-1
+            operand1_logits, tau=self.temperature, hard=False, dim=-1
         )
         operand2_probs = F.gumbel_softmax(
-            operand2_logits, tau=self.temperature, hard=True, dim=-1
+            operand2_logits, tau=self.temperature, hard=False, dim=-1
         )
         operation_probs = F.gumbel_softmax(
-            operation_logits, tau=self.temperature, hard=True, dim=-1
+            operation_logits, tau=self.temperature, hard=False, dim=-1
         )
         output_probs = F.gumbel_softmax(
-            output_logits, tau=self.temperature, hard=True, dim=-1
+            output_logits, tau=self.temperature, hard=False, dim=-1
         )
 
         # Cache tensors for external logging/debugging

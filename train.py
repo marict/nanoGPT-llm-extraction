@@ -31,7 +31,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import runpod_service
 import wandb
 from dag_logger import DAGLogger
-from dag_model import GPT, GPTConfig
+from dag_model import GPT, GPTConfig, op_names
 from data import prepare_dataset
 from evaluation import estimate_loss, evaluate_math
 from python_version_check import check_python_version
@@ -798,13 +798,13 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                         grad_keys = [
                             k for k in log_dict.keys() if k.startswith("op_grad/")
                         ]
-                        if dag_logger and len(grad_keys) == 0:
-                            # During training, missing gradients could indicate an issue
-                            print(
-                                f"Warning: No gradient keys found in wandb log_dict for training at iter {iter_num}"
-                            )
-                            print(f"Available keys: {list(log_dict.keys())}")
-                        elif dag_logger and len(grad_keys) > 0:
+                        if dag_logger:
+                            expected_grads = len(op_names)
+                            if len(grad_keys) < expected_grads:
+                                # Critical: not all gradients captured – stop training early
+                                raise RuntimeError(
+                                    f"Missing gradient logs: expected {expected_grads}, found {len(grad_keys)}"
+                                )
                             print(
                                 f"Logging {len(grad_keys)} gradient values to wandb (training)"
                             )
