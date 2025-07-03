@@ -267,16 +267,10 @@ class DAGPlanPredictor(nn.Module):
         operand2_logits = safe_clamp(operand2_logits)
         operation_logits = safe_clamp(operation_logits)
 
-        # Gumbel-Softmax
-        operand1_probs = F.gumbel_softmax(
-            operand1_logits, tau=self.temperature, hard=False, dim=-1
-        )
-        operand2_probs = F.gumbel_softmax(
-            operand2_logits, tau=self.temperature, hard=False, dim=-1
-        )
-        operation_probs = F.gumbel_softmax(
-            operation_logits, tau=self.temperature, hard=False, dim=-1
-        )
+        # Softmax (temperature-scaled)
+        operand1_probs = F.softmax(operand1_logits / self.temperature, dim=-1)
+        operand2_probs = F.softmax(operand2_logits / self.temperature, dim=-1)
+        operation_probs = F.softmax(operation_logits / self.temperature, dim=-1)
 
         # Cache tensors for external logging/debugging
         self.last_operation_probs_full = operation_probs
