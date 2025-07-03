@@ -786,6 +786,11 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                         )
                     with ctx:
                         _, loss = model(X, Y)
+                        # Immediately abort training if loss becomes NaN or Inf
+                        if not torch.isfinite(loss):
+                            raise RuntimeError(
+                                f"Non-finite loss detected (value={loss.item()}) at iteration {iter_num}. Aborting training."
+                            )
                         loss = loss / cfg.gradient_accumulation_steps
 
                     # Set up gradient tracking AFTER forward pass but BEFORE backward pass
@@ -861,6 +866,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                     "not implemented for",
                     "RuntimeError: Expected",
                     "Logging data not available",
+                    "Non-finite loss",
                 ]
 
                 is_critical = any(
