@@ -96,7 +96,7 @@ class DAGLogger:
         ), "last_original_hidden does not require gradients"
 
         def save_orig_hidden_grad(grad):
-            self.captured_gradients["orig_hidden_grad_mean"] = (
+            self.captured_gradients["grad/orig_hidden_mean"] = (
                 grad.detach().mean().item()
             )
 

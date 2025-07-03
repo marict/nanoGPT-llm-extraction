@@ -184,6 +184,7 @@ def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
         max_val = 40.0
     return logits.clamp(-max_val, max_val)
 
+
 class DAGPlanPredictor(nn.Module):
     """Predicts complete DAG execution plans for all tokens in batch."""
 
@@ -231,7 +232,9 @@ class DAGPlanPredictor(nn.Module):
         # Run predictor across batch and time in one pass
         hidden_flat = hidden_states.reshape(B * T, H)  # (B*T, H)
         raw_plan = self.predictor(hidden_flat)  # (B*T, total_plan_dim)
-        raw_plan = raw_plan.view(B, T, self.dag_depth, self.plan_dim)  # (B, T, D, plan_dim)
+        raw_plan = raw_plan.view(
+            B, T, self.dag_depth, self.plan_dim
+        )  # (B, T, D, plan_dim)
         dag_plan_logits = raw_plan  # alias for clarity
 
         # Split into operand and operation logits
