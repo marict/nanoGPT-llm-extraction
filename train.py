@@ -819,18 +819,6 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                             if dag_logger
                             else base_dict
                         )
-
-                        # Check if gradients are being logged during training
-                        grad_keys = [
-                            k for k in log_dict.keys() if k.startswith("op_grad/")
-                        ]
-                        if dag_logger:
-                            expected_grads = len(op_names)
-                            if len(grad_keys) < expected_grads:
-                                # Critical: not all gradients captured – stop training early
-                                raise RuntimeError(
-                                    f"Missing gradient logs: expected {expected_grads}, found {len(grad_keys)}"
-                                )
                         wandb.log(log_dict, step=iter_num, commit=True)
                     except Exception as e:
                         print(

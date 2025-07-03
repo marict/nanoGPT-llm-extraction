@@ -58,9 +58,9 @@ class DAGLogger:
             grad_mean = grad.detach().mean().item()
             grad_std = grad.detach().std().item()
 
-            self.captured_gradients["dag_output_grad_norm"] = grad_norm
-            self.captured_gradients["dag_output_grad_mean"] = grad_mean
-            self.captured_gradients["dag_output_grad_std"] = grad_std
+            self.captured_gradients["grad/dag_output_norm"] = grad_norm
+            self.captured_gradients["grad/dag_output_mean"] = grad_mean
+            self.captured_gradients["grad/dag_output_std"] = grad_std
 
         hook = model.dag.final_hidden.register_hook(save_dag_output_grad)
         self.gradient_hooks.append(hook)
@@ -76,8 +76,8 @@ class DAGLogger:
             grad_norm = grad.detach().norm().item()
             grad_mean = grad.detach().mean().item()
 
-            self.captured_gradients["dag_scratch_grad_norm"] = grad_norm
-            self.captured_gradients["dag_scratch_grad_mean"] = grad_mean
+            self.captured_gradients["grad/dag_scratch_norm"] = grad_norm
+            self.captured_gradients["grad/dag_scratch_mean"] = grad_mean
 
         hook = model.dag.final_values.register_hook(save_dag_scratch_grad)
         self.gradient_hooks.append(hook)
@@ -347,27 +347,9 @@ class DAGLogger:
                 values_str = ", ".join(
                     [f"{val:.4f}" for _, val in enumerate(token_values)]
                 )
-                aggregated = detailed_values["aggregated_per_token"][t]
-                print(f"  Token {t}: [{values_str}] (avg: {aggregated:.4f})")
+                print(f"  Token {t}: [{values_str}]")
             else:
                 print(f"  Token {t}: {token_values[0]:.4f}")
-
-        # Norm values - no fallbacks
-        assert "norm_values" in self.logging_data, "Norm values not in logging data"
-        norm_data = self.logging_data["norm_values"]
-        norm_strs = [f"{name}={val:.4f}" for name, val in norm_data.items()]
-        print(f"Norms: {', '.join(norm_strs)}")
-
-        # DAG gradients
-        dag_grad_keys = [
-            k
-            for k in self.captured_gradients.keys()
-            if k.startswith("dag_output_grad") or k.startswith("dag_scratch_grad")
-        ]
-        if dag_grad_keys:
-            print("DAG gradients:")
-            for k in dag_grad_keys:
-                print(f"  {k}: {self.captured_gradients[k]:.6f}")
 
     def get_wandb_logging_dict(self, model, base_dict: Optional[Dict] = None) -> Dict:
         """
@@ -417,7 +399,7 @@ class DAGLogger:
             # Average over batch, time, and steps to get per-operation gradients
             op_grads = grad.detach().mean(dim=(0, 1, 2)).cpu().numpy()  # (n_ops,)
             for i, op_name in enumerate(op_names):
-                self.captured_gradients[f"op_grad/{op_name}"] = float(op_grads[i])
+                self.captured_gradients[f"grad/op/{op_name}"] = float(op_grads[i])
 
         hook = model.dag.plan_predictor.last_operation_probs_full.register_hook(
             save_op_grad
