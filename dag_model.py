@@ -350,7 +350,9 @@ class DifferentiableDAG(nn.Module):
 
         final_scalars = scratch_values_list[-1]
 
-        final_hidden = self.scalar_to_embed(final_scalars.unsqueeze(-1))  # (B,T,H)
+        # Prevent the scalars from exploding when they are converted back to embeddings
+        scalar_norm = F.layer_norm(final_scalars.unsqueeze(-1), [1])  # (B,T,1)
+        final_hidden = self.scalar_to_embed(scalar_norm)
 
         # Cache for logging (transpose to old shape for compatibility)
         self.final_hidden = final_hidden
@@ -376,7 +378,7 @@ class GPTConfig:
         True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     )
     dag_depth: int = 4  # 0 = standard GPT, >0 = DAG-augmented GPT
-    gumbel_temperature: float = 2.0
+    gumbel_temperature: float = 20.0
 
 
 # ---------------------------------------------------------------------------
