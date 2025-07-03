@@ -34,30 +34,11 @@ def test_plan_predictor_valid_outputs():
     op1_probs, op2_probs, op_probs, output_probs = plan_predictor(hidden_states)
 
     # Check shapes
-    B, T, depth, max_nodes = op1_probs.shape
-    assert op1_probs.shape == (
-        1,
-        3,
-        2,
-        8,
-    ), f"op1_probs.shape: {op1_probs.shape}"  # B, T, dag_depth, max_nodes_per_token
-    assert op2_probs.shape == (
-        1,
-        3,
-        2,
-        8,
-    ), f"op2_probs.shape: {op2_probs.shape}"  # B, T, dag_depth, max_nodes_per_token
-    assert op_probs.shape == (
-        1,
-        3,
-        2,
-        len(op_funcs),
-    ), f"op_probs.shape: {op_probs.shape}"  # B, T, dag_depth, n_ops
-    assert output_probs.shape == (
-        1,
-        3,
-        8,
-    ), f"output_probs.shape: {output_probs.shape}"  # B, T, max_nodes
+    expected_S = config.dag_depth + 1
+    assert op1_probs.shape == (1, 3, 2, expected_S)
+    assert op2_probs.shape == (1, 3, 2, expected_S)
+    assert op_probs.shape == (1, 3, 2, len(op_funcs))
+    assert output_probs.shape == (1, 3, expected_S)
     # Check that probabilities sum to 1 across appropriate dimensions
     assert torch.allclose(
         op1_probs.sum(dim=-1), torch.ones(1, 3, 2)

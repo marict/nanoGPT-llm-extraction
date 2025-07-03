@@ -375,7 +375,7 @@ class DAGLogger:
         for t, token_values in enumerate(detailed_values["values_per_token"]):
             if scratch_nodes > 1:
                 values_str = ", ".join(
-                    [f"slot{s}: {val:.4f}" for s, val in enumerate(token_values)]
+                    [f"{val:.4f}" for _, val in enumerate(token_values)]
                 )
                 aggregated = detailed_values["aggregated_per_token"][t]
                 print(f"  Token {t}: [{values_str}] (avg: {aggregated:.4f})")

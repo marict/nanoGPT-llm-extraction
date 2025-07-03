@@ -137,8 +137,6 @@ def test_dag_hidden_gradient_logging():
         "dag_output_grad_norm",
         "dag_output_grad_mean",
         "dag_output_grad_std",
-        "dag_scratch_grad_norm",
-        "dag_scratch_grad_mean",
     ]
 
     for key in expected_dag_grad_keys:
@@ -155,9 +153,6 @@ def test_dag_hidden_gradient_logging():
         extra_vals["dag_output_grad_norm"] >= 0
     ), "Gradient norm should be non-negative"
     assert extra_vals["dag_output_grad_std"] >= 0, "Gradient std should be non-negative"
-    assert (
-        extra_vals["dag_scratch_grad_norm"] >= 0
-    ), "Scratch gradient norm should be non-negative"
 
 
 def test_no_dag_depth_logging(sample_batch_small):

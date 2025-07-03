@@ -198,8 +198,8 @@ class DAGPlanPredictor(nn.Module):
         self.temperature = temperature
         self.block_size = config.block_size
 
-        # Calculate max possible nodes per token (at end of sequence)
-        self.max_nodes_per_token = config.block_size * config.dag_scratch_nodes
+        # Token-local scratch length: initial value + one new value per step
+        self.max_nodes_per_token = config.dag_depth + 1
         self.n_ops = len(op_funcs)  # Number of operations
 
         # Total plan dimensions per token per step: [operand1, operand2, operation]
@@ -264,27 +264,7 @@ class DAGPlanPredictor(nn.Module):
             2 * self.max_nodes_per_token : 2 * self.max_nodes_per_token + self.n_ops,
         ]
 
-        # Build causal masks so token t can only access nodes up to position t
-        nodes = torch.arange(self.max_nodes_per_token, device=device)  # (max_nodes)
-        available_nodes_per_token = (
-            torch.arange(T, device=device) + 1
-        ) * self.scratch_nodes  # (T)
-        mask_valid = nodes.unsqueeze(0) < available_nodes_per_token.unsqueeze(
-            1
-        )  # (T, max_nodes)
-        # Invert for masked_fill (True means "mask this position")
-        mask_invalid = ~mask_valid  # (T, max_nodes)
-
-        # Expand masks to match logits shapes
-        # operand mask: (1, T, 1, max_nodes)
-        operand_mask = mask_invalid.unsqueeze(0).unsqueeze(2)
-        # output mask: (1, T, max_nodes)
-        output_mask = mask_invalid.unsqueeze(0)
-
-        # Apply causal masking by setting invalid logits to large negative value
-        operand1_logits = operand1_logits.masked_fill(operand_mask, -1e9)
-        operand2_logits = operand2_logits.masked_fill(operand_mask, -1e9)
-        output_logits = output_logits.masked_fill(output_mask, -1e9)
+        # For final output selection all slots are legal (they will all be populated)
 
         # Clamp logits before Gumbel-Softmax for numerical stability
         operand1_logits = safe_clamp(operand1_logits)
@@ -360,73 +340,40 @@ class DifferentiableDAG(nn.Module):
         initial_values = self.embed_to_value(incoming_hidden)  # (B, T, 1)
         initial_values = initial_values.squeeze(-1)  # (B, T)
 
-        # Initialise scratch space (B, scratch_nodes, T)
-        scratch_values = initial_values.unsqueeze(1).repeat(1, self.scratch_nodes, 1)
+        # Token-local scratch space (append-only)
+        scratch_values_list = [initial_values]  # list of (B,T) tensors
 
-        # Generate DAG plan for all tokens (vectorised)
-        operand1_probs, operand2_probs, operation_probs, output_probs = (
-            self.plan_predictor(incoming_hidden)
-        )  # shapes documented in predictor
+        # Generate DAG plan (vectorised)
+        operand1_probs, operand2_probs, operation_probs, _ = self.plan_predictor(
+            incoming_hidden
+        )
 
-        # For flattening scratch space later on
-        # Helper: flatten scratch space to fixed length (B, max_nodes_total)
-        max_nodes_total = self.plan_predictor.max_nodes_per_token
-
-        def flatten_scratch(vals: torch.Tensor):
-            """Flatten scratch tensor to (B, max_nodes_total), padding with zeros if needed."""
-            flat = vals.reshape(B, -1)  # (B, scratch_nodes * current_T)
-            if flat.size(1) < max_nodes_total:
-                pad_size = max_nodes_total - flat.size(1)
-                flat = torch.cat(
-                    [flat, torch.zeros(B, pad_size, device=device, dtype=flat.dtype)],
-                    dim=1,
-                )
-            return flat  # (B, max_nodes_total)
-
-        # Execute DAG across dag_depth steps (vectorised)
         for step in range(self.dag_depth):
-            target_node = step % self.scratch_nodes  # node index to overwrite this step
+            att1 = operand1_probs[:, :, step, :]  # (B,T,S)
+            att2 = operand2_probs[:, :, step, :]
+            op_w = operation_probs[:, :, step, :]  # (B,T,n_ops)
 
-            # Flatten current scratch values, and pad with zeros to align with
-            # the max number of scratch nodes per token.
-            flat_vals = flatten_scratch(scratch_values)  # (B, max_nodes_total)
+            S_curr = len(scratch_values_list)
+            att1_step = att1[..., :S_curr]
+            att2_step = att2[..., :S_curr]
+            current_stack = torch.stack(scratch_values_list, dim=-1)
+            v1 = (att1_step * current_stack).sum(-1)
+            v2 = (att2_step * current_stack).sum(-1)
 
-            # Pre-computed attention weights for this step
-            att1 = operand1_probs[:, :, step, :]  # (B, T, max_nodes_total)
-            att2 = operand2_probs[:, :, step, :]  # (B, T, max_nodes_total)
-            op_w = operation_probs[:, :, step, :]  # (B, T, n_ops)
-
-            # Broadcast flat_vals for element-wise multiply
-            flat_vals_exp = flat_vals.unsqueeze(1)  # (B, 1, max_nodes_total)
-
-            # Select operands, casual integrity has been gaurenteed by the plan predictor.
-            # Note that tokens cannot use nodes from previous tokens computed in the same step.
-            v1 = (att1 * flat_vals_exp).sum(-1)
-            v2 = (att2 * flat_vals_exp).sum(-1)
-
-            # Weighted sum across operations gives new value
             outs = torch.stack([op(v1, v2) for op in op_funcs], dim=-1)
-
-            # Weighted sum across operations → new value (B, T)
             new_val = (op_w * outs).sum(-1)
 
-            # Update designated scratch node in a gradient-safe manner
-            new_scratch = scratch_values.clone()
-            new_scratch[:, target_node, :] = new_val
-            scratch_values = new_scratch
+            scratch_values_list.append(new_val)
 
-        # Select final value for each token using output probabilities
-        flat_vals_final = flatten_scratch(scratch_values)  # (B, max_nodes_total)
-        selected_value = (output_probs * flat_vals_final.unsqueeze(1)).sum(-1)  # (B, T)
+        final_scalars = scratch_values_list[-1]
 
-        # Map scalar values back to embedding space
-        final_hidden = self.value_to_embed(selected_value.unsqueeze(-1))  # (B, T, H)
+        final_hidden = self.scalar_to_embed(final_scalars.unsqueeze(-1))  # (B,T,H)
 
-        # Cache for logging
+        # Cache for logging (transpose to old shape for compatibility)
         self.final_hidden = final_hidden
-        self.final_values = scratch_values
+        self.final_values = torch.stack(scratch_values_list, dim=1)  # (B,S,T)
 
-        return final_hidden, None, scratch_values
+        return final_hidden, None, self.final_values
 
 
 # ---------------------------------------------------------------------------

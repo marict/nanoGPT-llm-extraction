@@ -80,3 +80,33 @@ flowchart TD
 
 ## License
 MIT (same as nanoGPT)
+
+## Differentiable DAG (per-token version)
+
+Each token now owns an **independent, append-only scratch list** of scalar nodes.  Let `D = dag_depth`.
+
+1.  Slot 0 is the value extracted from the token's transformer embedding.
+2.  For each step `s ∈ [0, D-1]` the planner predicts:
+    * `operand1`, `operand2`  – categorical over current `s+1` slots.
+    * `op` – categorical over primitive operations {add, identity, multiply, subtract}.
+3.  The executor reads the chosen operands, applies the selected op, and **appends** the result to slot `s+1` (no overwrites).
+4.  After `D` steps the final slot (index `D`) is projected back to embedding space and mixed with the original transformer hidden state as:
+   ```python
+   dag_hidden_norm = LayerNorm(H) (dag_hidden) * dag_scale
+   mixed_hidden    = orig_hidden + dag_hidden_norm
+   ```
+
+Tensor shapes (B=batch, T=sequence, S=D+1, n_ops=4):
+
+| tensor                      | shape             |
+|-----------------------------|-------------------|
+| `operand*_probs`            | (B, T, D, S)      |
+| `operation_probs`           | (B, T, D, n_ops)  |
+| scratch values during exec  | (B, T, ≤S)        |
+| final hidden                | (B, T, H)         |
+
+The design guarantees causality:
+* Tokens never access other tokens' scratch lists.
+* At step `s`, masks ensure only slots `0..s` are visible.
+
+See `dag_model.DAGPlanPredictor` and `dag_model.DifferentiableDAG` for implementation details.
