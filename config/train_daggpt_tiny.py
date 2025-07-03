@@ -14,7 +14,7 @@ log_interval = 20
 
 weight_decay = 1e-1
 
-dag_depth = 4  # reduce DAG cost
+dag_depth = 16  # reduce DAG cost
 
 n_layer = 2  # very shallow
 n_head = 4  # just enough heads

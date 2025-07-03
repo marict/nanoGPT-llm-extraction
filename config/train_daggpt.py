@@ -13,7 +13,7 @@ log_interval = 50
 
 weight_decay = 1e-1
 
-dag_depth = 8
+dag_depth = 16
 
 # n_embed must be divisible by n_head
 n_layer = 12
