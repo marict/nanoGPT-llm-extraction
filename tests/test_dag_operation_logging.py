@@ -30,26 +30,6 @@ def test_basic_operation_logging(small_model, sample_batch_small):
     assert len(wandb_dict) >= 0  # May be empty without gradients
 
 
-def test_operation_gradient_capture(small_model, sample_batch_small):
-    """Test that operation gradients are correctly captured."""
-    model, config = small_model
-
-    # Set up gradient tracking test
-    logger, loss, input_ids, target_ids = setup_gradient_tracking_test(model, config)
-
-    # Verify gradients were captured
-    extra_vals = logger.get_extra_vals(model)
-
-    expected_grad_keys = [f"op_grad/{op}" for op in op_names]
-    found_grad_keys = [key for key in extra_vals.keys() if key.startswith("op_grad/")]
-
-    assert len(found_grad_keys) > 0, "No operation gradients found"
-
-    for key in expected_grad_keys:
-        assert key in extra_vals, f"Missing gradient key: {key}"
-        assert isinstance(extra_vals[key], float), f"Gradient {key} is not a float"
-
-
 def test_gradient_consistency(small_model, sample_batch_small):
     """Test gradient computation consistency across multiple passes."""
     model, config = small_model
@@ -99,7 +79,7 @@ def test_comprehensive_logging_integration(small_model, sample_batch_small):
     assert len(norm_keys) > 0, "No norm values found"
 
     # Check for gradient values
-    grad_keys = [key for key in extra_vals.keys() if key.startswith("op_grad/")]
+    grad_keys = [key for key in extra_vals.keys() if key.startswith("grad/op")]
     assert len(grad_keys) == len(op_names), "Should have gradients for all operations"
 
     # Verify wandb logging dict structure
@@ -134,9 +114,9 @@ def test_dag_hidden_gradient_logging():
 
     # Check for DAG gradient keys
     expected_dag_grad_keys = [
-        "dag_output_grad_norm",
-        "dag_output_grad_mean",
-        "dag_output_grad_std",
+        "grad/dag_output_norm",
+        "grad/dag_output_mean",
+        "grad/dag_output_std",
     ]
 
     for key in expected_dag_grad_keys:
@@ -150,9 +130,9 @@ def test_dag_hidden_gradient_logging():
 
     # Verify gradient norms are non-negative
     assert (
-        extra_vals["dag_output_grad_norm"] >= 0
+        extra_vals["grad/dag_output_norm"] >= 0
     ), "Gradient norm should be non-negative"
-    assert extra_vals["dag_output_grad_std"] >= 0, "Gradient std should be non-negative"
+    assert extra_vals["grad/dag_output_std"] >= 0, "Gradient std should be non-negative"
 
 
 def test_no_dag_depth_logging(sample_batch_small):

@@ -59,7 +59,7 @@ def test_comprehensive_training_logging(small_model, sample_batch_small):
     assert len(norm_keys) > 0, "Should have norm values"
 
     # Check operation gradients
-    op_grad_keys = [key for key in extra_vals.keys() if key.startswith("op_grad/")]
+    op_grad_keys = [key for key in extra_vals.keys() if key.startswith("grad/op")]
     assert len(op_grad_keys) == len(
         op_names
     ), "Should have gradients for all operations"
@@ -144,7 +144,7 @@ def test_gradient_capture_integration(small_model):
     extra_vals = dag_logger.get_extra_vals(model)
 
     # Verify gradients were captured
-    op_grad_keys = [key for key in extra_vals.keys() if key.startswith("op_grad/")]
+    op_grad_keys = [key for key in extra_vals.keys() if key.startswith("grad/op")]
     assert len(op_grad_keys) > 0, "Should have captured operation gradients"
 
     # Test console logging works
