@@ -683,11 +683,14 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                                 temperature=0.8,
                                 top_k=40,
                             )
-                            generated_sample = decode(generated[0].cpu().tolist())
-                            print(f"Generated sample: {generated_sample}")
+                            # Show only the continuation (exclude the prompt prefix)
+                            continuation_ids = generated[0, len(encoded) :]
+                            continuation_text = decode(continuation_ids.cpu().tolist())
+                            print(
+                                f"Generated sample: {sample_prompt}{{BEGIN}}{continuation_text}{{END}}"
+                            )
                     except Exception as e:
                         print(f"Warning: Failed to generate sample text: {e}")
-                        generated_sample = f"Error: {str(e)}"
                         raise e
 
                     # Compute logging statistics and collect non-gradient extra values

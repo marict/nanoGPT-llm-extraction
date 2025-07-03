@@ -369,8 +369,6 @@ class DifferentiableDAG(nn.Module):
         )  # shapes documented in predictor
 
         # For flattening scratch space later on
-        max_nodes = self.scratch_nodes * T  # == self.plan_predictor.max_nodes_per_token
-
         # Helper: flatten scratch space to fixed length (B, max_nodes_total)
         max_nodes_total = self.plan_predictor.max_nodes_per_token
 
@@ -389,7 +387,8 @@ class DifferentiableDAG(nn.Module):
         for step in range(self.dag_depth):
             target_node = step % self.scratch_nodes  # node index to overwrite this step
 
-            # Flatten current scratch values
+            # Flatten current scratch values, and pad with zeros to align with
+            # the max number of scratch nodes per token.
             flat_vals = flatten_scratch(scratch_values)  # (B, max_nodes_total)
 
             # Pre-computed attention weights for this step
@@ -400,7 +399,8 @@ class DifferentiableDAG(nn.Module):
             # Broadcast flat_vals for element-wise multiply
             flat_vals_exp = flat_vals.unsqueeze(1)  # (B, 1, max_nodes_total)
 
-            # Select operands
+            # Select operands, casual integrity has been gaurenteed by the plan predictor.
+            # Note that tokens cannot use nodes from previous tokens computed in the same step.
             v1 = (att1 * flat_vals_exp).sum(-1)
             v2 = (att2 * flat_vals_exp).sum(-1)
 
