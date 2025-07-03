@@ -100,7 +100,6 @@ class MLP(nn.Module):
         x = self.dropout(x)
         return x
 
-
 class Block(nn.Module):
 
     def __init__(self, config):
@@ -115,29 +114,23 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_2(x))
         return x
 
-
 # ---------------------------------------------------------------------------
 # DAG operations
 # ---------------------------------------------------------------------------
 def add(x, y):
     return x + y
 
-
 def identity(x, _):
     return x
-
 
 def multiply(x, y):
     return x * y
 
-
 def subtract(x, y):
     return x - y
 
-
 def divide(x, y, eps: float = 1e-8):
     return torch.clamp(x / (y.abs() + eps), -1e6, 1e6)
-
 
 def power(x, y, max_exp: float = 6.0):
     x_safe = torch.clamp(x.abs() + 1e-8, min=1e-8, max=1e3)
@@ -145,18 +138,14 @@ def power(x, y, max_exp: float = 6.0):
     result = (x_safe**y_safe) * torch.sign(x)
     return torch.clamp(result, -1e6, 1e6)
 
-
 def log(x, _unused=None, eps: float = 1e-8):
     return torch.clamp(torch.log(torch.clamp(torch.abs(x) + eps, min=eps)), -20.0, 20.0)
-
 
 def max_op(x, y):
     return torch.maximum(x, y)
 
-
 def min_op(x, y):
     return torch.minimum(x, y)
-
 
 # op_funcs = [add, identity, multiply, subtract, divide, power, log, max_op, min_op]
 # #op_names = [
@@ -183,7 +172,6 @@ def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
     else:
         max_val = 40.0
     return logits.clamp(-max_val, max_val)
-
 
 class DAGPlanPredictor(nn.Module):
     """Predicts complete DAG execution plans for all tokens in batch."""
