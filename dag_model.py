@@ -119,42 +119,57 @@ class Block(nn.Module):
 # ---------------------------------------------------------------------------
 # DAG operations
 # ---------------------------------------------------------------------------
-def add(x, y):
+def add(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return x + y
 
 
-def identity(x, _):
+def identity(x: torch.Tensor, _: torch.Tensor) -> torch.Tensor:
     return x
 
 
-def multiply(x, y):
-    return x * y
+def multiply(
+    x: torch.Tensor, y: torch.Tensor, rel_coef: float = 10.0, abs_cap: float = 1e6
+):
+    """
+    Safe x * y that still allows large-magnitude results.
+
+    • rel_coef sets how many times larger than the bigger operand
+      the product is allowed to be (default 10×).
+    • abs_cap is an absolute ceiling as a final back-stop.
+    """
+    prod = x * y
+    # dynamic limit: 10 × max(|x|, |y|)  (broadcasted)
+    dyn_lim = rel_coef * torch.maximum(x.abs(), y.abs())
+    lim = torch.clamp(dyn_lim, max=abs_cap)
+    return torch.clamp(prod, -lim, lim)
 
 
-def subtract(x, y):
+def subtract(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return x - y
 
 
-def divide(x, y, eps: float = 1e-8):
+def divide(x: torch.Tensor, y: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     return torch.clamp(x / (y.abs() + eps), -1e6, 1e6)
 
 
-def power(x, y, max_exp: float = 6.0):
+def power(x: torch.Tensor, y: torch.Tensor, max_exp: float = 6.0) -> torch.Tensor:
     x_safe = torch.clamp(x.abs() + 1e-8, min=1e-8, max=1e3)
     y_safe = torch.clamp(y, min=-max_exp, max=max_exp)
     result = (x_safe**y_safe) * torch.sign(x)
     return torch.clamp(result, -1e6, 1e6)
 
 
-def log(x, _unused=None, eps: float = 1e-8):
+def log(
+    x: torch.Tensor, _unused: torch.Tensor = None, eps: float = 1e-8
+) -> torch.Tensor:
     return torch.clamp(torch.log(torch.clamp(torch.abs(x) + eps, min=eps)), -20.0, 20.0)
 
 
-def max_op(x, y):
+def max_op(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return torch.maximum(x, y)
 
 
-def min_op(x, y):
+def min_op(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return torch.minimum(x, y)
 
 
