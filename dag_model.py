@@ -484,10 +484,12 @@ class GPT(nn.Module):
 
         # DAG-specific components (only if dag_depth > 0)
         if config.dag_depth > 0:
-            self.scalar_to_embed = nn.Linear(
-                1, config.n_embd
-            )  # Still projects to full embedding
+            self.scalar_to_embed = nn.Linear(1, config.n_embd)
             self.dag = DifferentiableDAG(config, self.scalar_to_embed)
+
+            # Learnable scaling of DAG contribution after normalization
+            self.dag_ln = LayerNorm(config.n_embd, bias=config.bias)
+            self.dag_scale = nn.Parameter(torch.tensor(1.0, dtype=torch.float32))
 
         # init all weights
         self.apply(self._init_weights)
@@ -582,8 +584,10 @@ class GPT(nn.Module):
             final_values  # Store full tensor (B, scratch_nodes, T) or (B, T)
         )
 
-        # Simple residual addition of DAG-processed states
-        mixed_hidden = original_hidden + dag_hidden
+        # Normalize DAG hidden and apply learnable scale
+        dag_hidden_norm = self.dag_ln(dag_hidden) * self.dag_scale
+
+        mixed_hidden = original_hidden + dag_hidden_norm
 
         # Store mixed hidden states for logging
         self.last_mixed_hidden = mixed_hidden

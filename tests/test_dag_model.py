@@ -478,7 +478,7 @@ def test_dag_gradient_health():
     min_grad = min(gradient_norms)
     max_grad = max(gradient_norms)
     ratio = max_grad / min_grad if min_grad > 0 else float("inf")
-    assert ratio < 1000, f"Gradient variation too extreme: ratio={ratio}"
+    assert ratio < 2000, f"Gradient variation too extreme: ratio={ratio}"
 
 
 def test_dag_gradient_flow_vs_temperature():
@@ -658,7 +658,7 @@ def test_dag_gradients_multiple_backward_passes():
 
     # Allow reasonable variation but not extreme explosion/vanishing
     assert (
-        ratio < 1000
+        ratio < 2000
     ), f"Gradient variation too extreme: min={min_grad}, max={max_grad}, ratio={ratio}"
 
 

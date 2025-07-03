@@ -149,10 +149,15 @@ class DAGLogger:
             and dag_hidden is not None
             and mixed_hidden is not None
         ):
+            hidden_norm = original_hidden[:, -1].norm(dim=-1).mean().detach().item()
+            dag_norm = dag_hidden[:, -1].norm(dim=-1).mean().detach().item()
+            fused_norm = mixed_hidden[:, -1].norm(dim=-1).mean().detach().item()
+
             norm_values = {
-                "hidden": original_hidden[:, -1].norm(dim=-1).mean().detach().item(),
-                "dag_hidden": dag_hidden[:, -1].norm(dim=-1).mean().detach().item(),
-                "fused": mixed_hidden[:, -1].norm(dim=-1).mean().detach().item(),
+                "hidden": hidden_norm,
+                "dag_hidden": dag_norm,
+                "fused": fused_norm,
+                "dag_to_orig_ratio": dag_norm / (hidden_norm + 1e-8),
             }
             self.logging_data["norm_values"] = norm_values
 
@@ -181,6 +186,17 @@ class DAGLogger:
         Returns:
             Dictionary of all logging metrics
         """
+        required_keys = [
+            "node_values",
+            "detailed_node_values",
+            "norm_values",
+            "op_probs",
+        ]
+
+        for k in required_keys:
+            if k not in self.logging_data:
+                raise RuntimeError(f"Missing logging data key: {k}")
+
         metrics = {}
 
         # Add gradient information - preserve original names
@@ -200,6 +216,10 @@ class DAGLogger:
         if "op_probs" in self.logging_data:
             for op_name, p_val in self.logging_data["op_probs"].items():
                 metrics[f"op_prob/{op_name}"] = p_val
+
+        # Log DAG scale if present
+        if hasattr(model, "dag_scale"):
+            metrics["dag_scale"] = model.dag_scale.item()
 
         return metrics
 

@@ -220,6 +220,9 @@ def test_operation_probability_logging(small_model, sample_batch_small):
         val = extra_vals[k]
         assert 0.0 <= val <= 1.0, "Probability out of range"
 
+    # dag_scale should be logged
+    assert "dag_scale" in extra_vals
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
