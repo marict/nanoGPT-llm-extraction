@@ -23,7 +23,6 @@ def test_plan_predictor_valid_outputs():
         n_head=1,
         n_embd=8,
         dag_depth=2,
-        dag_scratch_nodes=2,
     )
 
     plan_predictor = DAGPlanPredictor(config, temperature=1.0)

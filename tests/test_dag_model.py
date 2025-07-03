@@ -49,7 +49,6 @@ def small_dag_gpt():
         n_head=1,
         n_embd=8,
         dag_depth=2,
-        dag_scratch_nodes=2,  # Fixed scratch space
     )
     return GPT(cfg), cfg
 

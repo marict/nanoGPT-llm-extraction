@@ -18,7 +18,6 @@ TINY_CONFIG = GPTConfig(
     n_head=1,
     n_embd=8,
     dag_depth=2,
-    dag_scratch_nodes=2,
     dropout=0.0,
     bias=False,
 )

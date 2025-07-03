@@ -322,42 +322,12 @@ class DAGLogger:
             model.dag, "plan_predictor"
         ), "DAG missing plan_predictor attribute"
 
-        if (
-            hasattr(model.dag.plan_predictor, "last_op_logits")
-            and model.dag.plan_predictor.last_op_logits is not None
-        ):
-            with torch.no_grad():
-                op_logits = model.dag.plan_predictor.last_op_logits
-                probs = F.softmax(op_logits, dim=-1).detach().cpu().numpy()
+        assert hasattr(
+            model.dag, "num_scratch_nodes"
+        ), "DAG missing scratch_nodes attribute"
+        assert model.dag.num_scratch_nodes is not None, "dag.num_scratch_nodes is None"
+        assert model.dag.num_scratch_nodes > 0, "dag.num_scratch_nodes must be positive"
 
-                print("Operation probabilities:")
-                for op_name, prob in zip(op_names, probs):
-                    print(f"  {op_name}: {prob:.4f}")
-
-        if (
-            hasattr(model.dag.plan_predictor, "last_attn")
-            and model.dag.plan_predictor.last_attn is not None
-        ):
-            with torch.no_grad():
-                attn_probs = model.dag.plan_predictor.last_attn[0]
-
-                print("Operands chosen:")
-                assert (
-                    attn_probs.dim() >= 3 and attn_probs.shape[-1] == 2
-                ), "Unexpected attention probabilities format"
-
-                for t in range(attn_probs.shape[0]):  # time steps
-                    for step in range(attn_probs.shape[1]):  # dag steps
-                        operand1_probs = attn_probs[t, step, :, 0]
-                        operand2_probs = attn_probs[t, step, :, 1]
-                        operand1_choice = int(operand1_probs.argmax())
-                        operand2_choice = int(operand2_probs.argmax())
-                        max_nodes = model.dag.scratch_nodes * (t + 1)
-                        print(
-                            f"  Token {t}, Step {step}: {operand1_choice}, {operand2_choice} (out of {max_nodes})"
-                        )
-
-        # Show detailed node values - no fallbacks
         assert (
             self.logging_data
         ), "Logging data not available - call compute_log_statistics() first"

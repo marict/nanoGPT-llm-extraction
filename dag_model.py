@@ -194,18 +194,17 @@ class DAGPlanPredictor(nn.Module):
     def __init__(self, config, temperature: float = 20.0):
         super().__init__()
         self.dag_depth = config.dag_depth
-        self.scratch_nodes = config.dag_scratch_nodes
         self.temperature = temperature
         self.block_size = config.block_size
 
         # Token-local scratch length: initial value + one new value per step
-        self.max_nodes_per_token = config.dag_depth + 1
+        self.num_scratch_nodes = config.dag_depth + 1
         self.n_ops = len(op_funcs)  # Number of operations
 
         # Total plan dimensions per token per step: [operand1, operand2, operation]
         # Plus final output selection: [output_operand]
-        plan_dim = 2 * self.max_nodes_per_token + self.n_ops
-        output_selection_dim = self.max_nodes_per_token
+        plan_dim = 2 * self.num_scratch_nodes + self.n_ops
+        output_selection_dim = self.num_scratch_nodes
 
         # Predictor: hidden_state -> full DAG plan + output selection
         self.predictor = nn.Sequential(
@@ -246,22 +245,22 @@ class DAGPlanPredictor(nn.Module):
         raw_plan = raw_plan.view(B, T, total_plan_dim)
 
         # Split raw predictor output into DAG plan and output-selection logits
-        dag_plan_dim = self.dag_depth * (2 * self.max_nodes_per_token + self.n_ops)
+        dag_plan_dim = self.dag_depth * (2 * self.num_scratch_nodes + self.n_ops)
         dag_plan_logits = raw_plan[:, :, :dag_plan_dim]  # (B, T, dag_depth*plan_dim)
         output_logits = raw_plan[:, :, dag_plan_dim:]  # (B, T, max_nodes)
 
         # Reshape DAG plan to (B, T, dag_depth, plan_dim)
-        plan_dim = 2 * self.max_nodes_per_token + self.n_ops
+        plan_dim = 2 * self.num_scratch_nodes + self.n_ops
         dag_plan_logits = dag_plan_logits.view(B, T, self.dag_depth, plan_dim)
 
         # Split into operand and operation logits
-        operand1_logits = dag_plan_logits[..., : self.max_nodes_per_token]
+        operand1_logits = dag_plan_logits[..., : self.num_scratch_nodes]
         operand2_logits = dag_plan_logits[
-            ..., self.max_nodes_per_token : 2 * self.max_nodes_per_token
+            ..., self.num_scratch_nodes : 2 * self.num_scratch_nodes
         ]
         operation_logits = dag_plan_logits[
             ...,
-            2 * self.max_nodes_per_token : 2 * self.max_nodes_per_token + self.n_ops,
+            2 * self.num_scratch_nodes : 2 * self.num_scratch_nodes + self.n_ops,
         ]
 
         # For final output selection all slots are legal (they will all be populated)
@@ -307,13 +306,11 @@ class DifferentiableDAG(nn.Module):
         super().__init__()
         self.hidden_dim = config.n_embd
         self.dag_depth = config.dag_depth
+        self.num_scratch_nodes = config.dag_depth + 1
         self.scalar_to_embed = scalar_to_embed
         self.temperature = config.gumbel_temperature
 
         self.pre_dag = Block(config)
-
-        # New parameters for fixed scratch space
-        self.scratch_nodes = config.dag_scratch_nodes
 
         # Initialize plan predictor
         self.plan_predictor = DAGPlanPredictor(config, self.temperature)
@@ -394,8 +391,6 @@ class GPTConfig:
     )
     dag_depth: int = 4  # 0 = standard GPT, >0 = DAG-augmented GPT
     gumbel_temperature: float = 2.0
-    # New parameters for fixed scratch space optimization
-    dag_scratch_nodes: int = 2  # Fixed number of nodes per token (FIFO queue)
 
 
 # ---------------------------------------------------------------------------

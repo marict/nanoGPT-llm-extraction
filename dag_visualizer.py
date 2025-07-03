@@ -10,7 +10,7 @@ Usage:
     from dag_visualizer import DAGVisualizer
 
     # Create model with DAG components
-    config = GPTConfig(dag_depth=3, dag_scratch_nodes=2, ...)
+    config = GPTConfig(dag_depth=3, ...)
     model = GPT(config)
 
     # Create visualizer
@@ -66,7 +66,7 @@ class DAGVisualizer:
     def __init__(self, config: GPTConfig):
         self.config = config
         self.dag_depth = config.dag_depth
-        self.scratch_nodes = config.dag_scratch_nodes
+        self.num_scratch_nodes = config.dag_depth + 1
         self.op_names = op_names
         self.n_ops = len(op_funcs)
 
@@ -122,11 +122,11 @@ class DAGVisualizer:
             trace = {
                 "sequence_length": T,
                 "dag_depth": self.dag_depth,
-                "scratch_nodes": self.scratch_nodes,
+                "scratch_nodes": self.num_scratch_nodes,
                 "tokens": [],
                 "global_stats": {
                     "operation_usage": torch.zeros(self.n_ops),
-                    "node_access_frequency": torch.zeros(T, self.scratch_nodes),
+                    "node_access_frequency": torch.zeros(T, self.num_scratch_nodes),
                     "step_complexity": torch.zeros(self.dag_depth),
                 },
             }
@@ -135,14 +135,14 @@ class DAGVisualizer:
             for t in range(T):
                 token_info = {
                     "position": t,
-                    "available_nodes": (t + 1) * self.scratch_nodes,
+                    "available_nodes": (t + 1) * self.num_scratch_nodes,
                     "steps": [],
                 }
 
                 # Process each DAG step for this token
                 for step in range(self.dag_depth):
                     # Get most likely operands and operation
-                    available_nodes = (t + 1) * self.scratch_nodes
+                    available_nodes = (t + 1) * self.num_scratch_nodes
 
                     if available_nodes > 0:
                         op1_probs_step = op1_probs[t, step, :available_nodes]
@@ -155,10 +155,10 @@ class DAGVisualizer:
                         op_choice = torch.argmax(op_probs_step).item()
 
                         # Convert flat node indices to (token, slot) format
-                        op1_token = op1_choice // self.scratch_nodes
-                        op1_slot = op1_choice % self.scratch_nodes
-                        op2_token = op2_choice // self.scratch_nodes
-                        op2_slot = op2_choice % self.scratch_nodes
+                        op1_token = op1_choice // self.num_scratch_nodes
+                        op1_slot = op1_choice % self.num_scratch_nodes
+                        op2_token = op2_choice // self.num_scratch_nodes
+                        op2_slot = op2_choice % self.num_scratch_nodes
 
                         step_info = {
                             "step": step,
@@ -179,7 +179,7 @@ class DAGVisualizer:
                                 "name": self.op_names[op_choice],
                                 "prob": op_probs_step[op_choice].item(),
                             },
-                            "target_slot": step % self.scratch_nodes,  # FIFO target
+                            "target_slot": step % self.num_scratch_nodes,  # FIFO target
                         }
 
                         # Update global statistics
@@ -241,7 +241,7 @@ class DAGVisualizer:
         # Add initial nodes (input nodes from all previous and current tokens)
         y_input = 0
         for prev_token in range(available_tokens):
-            for slot in range(self.scratch_nodes):
+            for slot in range(self.num_scratch_nodes):
                 node_id = f"t{prev_token}_s{slot}_input"
                 G.add_node(node_id)
                 pos[node_id] = (prev_token * 2 + slot * 0.5, y_input)
@@ -375,7 +375,7 @@ class DAGVisualizer:
         ax2.set_title("Node Access Frequency Heatmap", fontweight="bold")
         ax2.set_xlabel("Token Position")
         ax2.set_ylabel("Scratch Slot")
-        ax2.set_yticks(range(self.scratch_nodes))
+        ax2.set_yticks(range(self.num_scratch_nodes))
         plt.colorbar(im, ax=ax2, label="Access Count")
 
         # 3. DAG complexity by step
@@ -433,7 +433,7 @@ class DAGVisualizer:
             token_info = trace["tokens"][t]
 
             # Add initial input nodes
-            for slot in range(self.scratch_nodes):
+            for slot in range(self.num_scratch_nodes):
                 node_id = f"t{t}_s{slot}_init"
                 G.add_node(node_id)
                 pos[node_id] = (t, slot * 0.5)
@@ -570,7 +570,7 @@ def demo_dag_visualization():
         n_head=4,
         n_embd=32,
         dag_depth=3,
-        dag_scratch_nodes=2,
+        # scratch nodes derived automatically
     )
 
     model = GPT(config)
