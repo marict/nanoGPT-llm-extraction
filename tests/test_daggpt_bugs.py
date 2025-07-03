@@ -30,14 +30,13 @@ def test_plan_predictor_valid_outputs():
     # Test batch of hidden states
     hidden_states = torch.randn(1, 3, 8)  # (B, T, H)
 
-    op1_probs, op2_probs, op_probs, output_probs = plan_predictor(hidden_states)
+    op1_probs, op2_probs, op_probs = plan_predictor(hidden_states)
 
     # Check shapes
     expected_S = config.dag_depth + 1
     assert op1_probs.shape == (1, 3, 2, expected_S)
     assert op2_probs.shape == (1, 3, 2, expected_S)
     assert op_probs.shape == (1, 3, 2, len(op_funcs))
-    assert output_probs.shape == (1, 3, expected_S)
     # Check that probabilities sum to 1 across appropriate dimensions
     assert torch.allclose(
         op1_probs.sum(dim=-1), torch.ones(1, 3, 2)
@@ -49,9 +48,6 @@ def test_plan_predictor_valid_outputs():
         op_probs.sum(dim=-1), torch.ones(1, 3, 2)
     ), f"op_probs.sum(dim=-1): {op_probs.sum(dim=-1)}"
 
-    assert torch.allclose(
-        output_probs.sum(dim=-1), torch.ones(1, 3)
-    ), f"output_probs.sum(dim=-1): {output_probs.sum(dim=-1)}"
     # Check that all probabilities are non-negative and finite
     assert torch.all(op1_probs >= 0), "op1_probs should be non-negative"
     assert torch.all(op2_probs >= 0), "op2_probs should be non-negative"
@@ -59,7 +55,6 @@ def test_plan_predictor_valid_outputs():
     assert torch.all(torch.isfinite(op1_probs)), "op1_probs should be finite"
     assert torch.all(torch.isfinite(op2_probs)), "op2_probs should be finite"
     assert torch.all(torch.isfinite(op_probs)), "op_probs should be finite"
-    assert torch.all(torch.isfinite(output_probs)), "output_probs should be finite"
 
 
 # ---------------------------------------------------------------------------

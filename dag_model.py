@@ -184,10 +184,6 @@ def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
         max_val = 40.0
     return logits.clamp(-max_val, max_val)
 
-
-# ---------------------------------------------------------------------------
-# controller: unchanged except it only sees EMBEDDINGS
-# ---------------------------------------------------------------------------
 class DAGPlanPredictor(nn.Module):
     """Predicts complete DAG execution plans for all tokens in batch."""
 
@@ -202,24 +198,19 @@ class DAGPlanPredictor(nn.Module):
         self.n_ops = len(op_funcs)  # Number of operations
 
         # Total plan dimensions per token per step: [operand1, operand2, operation]
-        # Plus final output selection: [output_operand]
-        plan_dim = 2 * self.num_scratch_nodes + self.n_ops
-        output_selection_dim = self.num_scratch_nodes
+        self.plan_dim = 2 * self.num_scratch_nodes + self.n_ops
 
-        # Predictor: hidden_state -> full DAG plan + output selection
+        # Predictor: hidden_state -> full DAG plan (no separate output-selection logits)
         self.predictor = nn.Sequential(
             nn.Linear(config.n_embd, config.n_embd),
             nn.GELU(),
-            nn.Linear(
-                config.n_embd, config.dag_depth * plan_dim + output_selection_dim
-            ),
+            nn.Linear(config.n_embd, config.dag_depth * self.plan_dim),
         )
 
         # Store last predictions for logging
         self.last_operation_probs_full: torch.Tensor | None = None
         self.last_operand1_probs: torch.Tensor | None = None
         self.last_operand2_probs: torch.Tensor | None = None
-        self.last_output_probs: torch.Tensor | None = None
 
     def forward(self, hidden_states: torch.Tensor):
         """
@@ -232,7 +223,6 @@ class DAGPlanPredictor(nn.Module):
             operand1_probs: (B, T, dag_depth, max_nodes) - probabilities for operand 1
             operand2_probs: (B, T, dag_depth, max_nodes) - probabilities for operand 2
             operation_probs: (B, T, dag_depth, n_ops) - probabilities for operations
-            output_probs: (B, T, max_nodes) - probabilities for final output selection
         """
         # Vectorised forward pass (no explicit Python loop over tokens)
         B, T, H = hidden_states.shape
@@ -241,17 +231,8 @@ class DAGPlanPredictor(nn.Module):
         # Run predictor across batch and time in one pass
         hidden_flat = hidden_states.reshape(B * T, H)  # (B*T, H)
         raw_plan = self.predictor(hidden_flat)  # (B*T, total_plan_dim)
-        total_plan_dim = raw_plan.shape[-1]
-        raw_plan = raw_plan.view(B, T, total_plan_dim)
-
-        # Split raw predictor output into DAG plan and output-selection logits
-        dag_plan_dim = self.dag_depth * (2 * self.num_scratch_nodes + self.n_ops)
-        dag_plan_logits = raw_plan[:, :, :dag_plan_dim]  # (B, T, dag_depth*plan_dim)
-        output_logits = raw_plan[:, :, dag_plan_dim:]  # (B, T, max_nodes)
-
-        # Reshape DAG plan to (B, T, dag_depth, plan_dim)
-        plan_dim = 2 * self.num_scratch_nodes + self.n_ops
-        dag_plan_logits = dag_plan_logits.view(B, T, self.dag_depth, plan_dim)
+        raw_plan = raw_plan.view(B, T, self.dag_depth, self.plan_dim)  # (B, T, D, plan_dim)
+        dag_plan_logits = raw_plan  # alias for clarity
 
         # Split into operand and operation logits
         operand1_logits = dag_plan_logits[..., : self.num_scratch_nodes]
@@ -263,13 +244,10 @@ class DAGPlanPredictor(nn.Module):
             2 * self.num_scratch_nodes : 2 * self.num_scratch_nodes + self.n_ops,
         ]
 
-        # For final output selection all slots are legal (they will all be populated)
-
         # Clamp logits before Gumbel-Softmax for numerical stability
         operand1_logits = safe_clamp(operand1_logits)
         operand2_logits = safe_clamp(operand2_logits)
         operation_logits = safe_clamp(operation_logits)
-        output_logits = safe_clamp(output_logits)
 
         # Gumbel-Softmax
         operand1_probs = F.gumbel_softmax(
@@ -281,17 +259,13 @@ class DAGPlanPredictor(nn.Module):
         operation_probs = F.gumbel_softmax(
             operation_logits, tau=self.temperature, hard=False, dim=-1
         )
-        output_probs = F.gumbel_softmax(
-            output_logits, tau=self.temperature, hard=False, dim=-1
-        )
 
         # Cache tensors for external logging/debugging
         self.last_operation_probs_full = operation_probs
         self.last_operand1_probs = operand1_probs
         self.last_operand2_probs = operand2_probs
-        self.last_output_probs = output_probs
 
-        return operand1_probs, operand2_probs, operation_probs, output_probs
+        return operand1_probs, operand2_probs, operation_probs
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +315,7 @@ class DifferentiableDAG(nn.Module):
         scratch_values_list = [initial_values]  # list of (B,T) tensors
 
         # Generate DAG plan (vectorised)
-        operand1_probs, operand2_probs, operation_probs, _ = self.plan_predictor(
+        operand1_probs, operand2_probs, operation_probs = self.plan_predictor(
             incoming_hidden
         )
 

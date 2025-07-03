@@ -574,7 +574,6 @@ def test_dag_gumbel_outputs_are_discrete():
     operation_probs = (
         model.dag.plan_predictor.last_operation_probs_full
     )  # (B, T, dag_depth, n_ops)
-    output_probs = model.dag.plan_predictor.last_output_probs  # (B, T, max_nodes)
 
     def check_approximately_onehot(probs_tensor, tolerance=0.6):
         """Check if each probability distribution is approximately one-hot."""
@@ -609,7 +608,6 @@ def test_dag_gumbel_outputs_are_discrete():
     check_approximately_onehot(operand1_probs)
     check_approximately_onehot(operand2_probs)
     check_approximately_onehot(operation_probs)
-    check_approximately_onehot(output_probs)
 
 
 def test_dag_gradients_multiple_backward_passes():
