@@ -25,6 +25,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import tiktoken
 import torch
+from torch import Tensor
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -38,6 +39,31 @@ from python_version_check import check_python_version
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
 CUDA_AVAILABLE = torch.cuda.is_available()
+
+
+# --------------------------------------------------------------------------- #
+# Safe checkpoint saving with retry
+# --------------------------------------------------------------------------- #
+
+
+class CheckpointSaveError(Exception):
+    """Raised when saving a checkpoint fails after retries."""
+
+
+def _safe_torch_save(obj, path: Path, retries: int = 1) -> None:
+    """Save <obj> to <path> with retry; raise CheckpointSaveError on failure."""
+    for attempt in range(retries + 1):
+        try:
+            torch.save(obj, path)
+            return
+        except Exception as exc:  # noqa: BLE001
+            if attempt >= retries:
+                raise CheckpointSaveError(
+                    f"Failed to save checkpoint {path}: {exc}"
+                ) from exc
+            print(
+                f"Retrying checkpoint save ({attempt+1}/{retries}) due to error: {exc}"
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -781,7 +807,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                             checkpoint_path = Path(CHECKPOINT_DIR) / checkpoint_filename
                             if master_process:
                                 print(f"Saving checkpoint: {checkpoint_path}")
-                            torch.save(ckpt, checkpoint_path)
+                            _safe_torch_save(ckpt, checkpoint_path)
                 except Exception as e:
                     print(f"Warning: Error during evaluation: {e}")
 
