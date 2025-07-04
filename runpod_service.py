@@ -106,6 +106,12 @@ def start_cloud_training(
     # Validate inputs
     _validate_note(note)
 
+    # Require WANDB_API_KEY so that a W&B run (and run_id) is always available
+    if not os.getenv("WANDB_API_KEY"):
+        raise RunPodError(
+            "WANDB_API_KEY environment variable must be set when launching training through runpod_service."
+        )
+
     # Set up RunPod API
     runpod.api_key = (
         api_key or os.getenv("RUNPOD_API_KEY") or getattr(runpod, "api_key", None)
@@ -125,14 +131,26 @@ def start_cloud_training(
     project_name = pod_name
     train_args = " ".join(args_list)
 
-    # Create RunPod instance
-    gpu_type_id = _resolve_gpu_id(gpu_type)
+    # ------------------------------------------------------------------ #
+    # 1. Create a local W&B run FIRST to obtain run_id
+    # ------------------------------------------------------------------ #
+    placeholder_name = f"prelaunch{'-' + note if note else ''}"
+    wandb_result = init_local_wandb_and_open_browser(project_name, placeholder_name)
+    wandb_run_id: str | None = None
+    if wandb_result:
+        _, wandb_run_id = wandb_result
 
-    # Build initial training command (without wandb run ID)
-    initial_command = _build_training_command(train_args, keep_alive, note, None)
-    docker_script = _create_docker_script(initial_command)
-
+    # Build training command (wandb_run_id guaranteed because WANDB_API_KEY is required)
+    training_command = _build_training_command(
+        train_args, keep_alive, note, wandb_run_id
+    )
+    docker_script = _create_docker_script(training_command)
     final_docker_args = f"bash -c {shlex.quote(docker_script)}"
+
+    # ------------------------------------------------------------------ #
+    # 2. Create RunPod instance
+    # ------------------------------------------------------------------ #
+    gpu_type_id = _resolve_gpu_id(gpu_type)
 
     try:
         pod = runpod.create_pod(
@@ -162,14 +180,20 @@ def start_cloud_training(
     if not pod_id:
         raise RunPodError("RunPod API did not return a pod id")
 
-    # Initialize W&B with correct run name
-    wandb_run_name = pod_id if not note else f"{pod_id} - {note}"
-    wandb_result = init_local_wandb_and_open_browser(project_name, wandb_run_name)
+    if not wandb_run_id:
+        raise RunPodError("W&B run id not found")
 
-    if wandb_result:
-        wandb_url, wandb_run_id = wandb_result
-        print(f"W&B run created: {wandb_url}")
+    # ------------------------------------------------------------------ #
+    # 3. Rename local W&B run to final name (pod_id or pod_id-note)
+    # ------------------------------------------------------------------ #
+    try:
+        final_name = pod_id if not note else f"{pod_id} - {note}"
+        wandb.run.name = final_name
+        wandb.run.save()
+        print(f"W&B run renamed to: {final_name}")
         print(f"Remote training will resume W&B run: {wandb_run_id}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: failed to rename W&B run: {exc}")
 
     print(f"Starting training job '{pod_name}' (pod {pod_id}) on {gpu_type}")
     return pod_id

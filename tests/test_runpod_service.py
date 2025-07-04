@@ -100,11 +100,17 @@ def test_start_cloud_training(monkeypatch):
         return {"id": "pod123"}
 
     monkeypatch.setenv("RUNPOD_API_KEY", "key")
+    monkeypatch.setenv("WANDB_API_KEY", "wandb_key")
     monkeypatch.setattr(rp.runpod, "create_pod", fake_create_pod)
     monkeypatch.setattr(
         rp.runpod,
         "get_gpus",
         lambda: [{"id": "gpu123", "displayName": rp.DEFAULT_GPU_TYPE}],
+    )
+
+    # Patch wandb init helper to avoid real network
+    monkeypatch.setattr(
+        rp, "init_local_wandb_and_open_browser", lambda p, r: ("url", "run123")
     )
 
     pod_id = rp.start_cloud_training("config.py")
@@ -180,6 +186,7 @@ def test_start_cloud_training_comprehensive(monkeypatch, tmp_path):
         return {"id": f"pod{len(created_pods)}"}
 
     monkeypatch.setenv("RUNPOD_API_KEY", "test_key")
+    monkeypatch.setenv("WANDB_API_KEY", "wandb_key")
     monkeypatch.setattr(rp.runpod, "create_pod", fake_create_pod)
     monkeypatch.setattr(
         rp.runpod,
@@ -200,7 +207,12 @@ def test_start_cloud_training_comprehensive(monkeypatch, tmp_path):
     assert pod_id == "pod1"
     assert len(wandb_calls) == 1
     assert wandb_calls[0]["project"] == "daggpt-train"
-    assert wandb_calls[0]["run_id"] == "pod1"  # run_id is now the pod_id
+    # Only the placeholder run should be created locally (prelaunch)
+    assert wandb_calls[0]["run_id"].startswith("prelaunch")
+
+    # Ensure the wandb run id is forwarded to the remote command exactly once
+    docker_args_first = created_pods[0]["docker_args"]
+    assert "--wandb-run-id=abc123" in docker_args_first
 
     # Test 2: With keep-alive flag
     created_pods.clear()
@@ -229,7 +241,7 @@ def test_start_cloud_training_comprehensive(monkeypatch, tmp_path):
     pod_id = rp.start_cloud_training(str(config_file))
     assert len(wandb_calls) == 1
     assert wandb_calls[0]["project"] == "custom-project-name"
-    assert wandb_calls[0]["run_id"] == "pod1"  # run_id is the pod_id, not project name
+    assert wandb_calls[0]["run_id"].startswith("prelaunch")
 
 
 def test_wandb_logs_url_modification(monkeypatch):
