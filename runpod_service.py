@@ -108,6 +108,7 @@ def start_cloud_training(
     *,
     api_key: str | None = None,
     keep_alive: bool = False,
+    note: str | None = None,
 ) -> str:
     """Launch a RunPod GPU instance and run training automatically."""
 
@@ -135,6 +136,10 @@ def start_cloud_training(
             project_name = data.get("name", "daggpt-train")
         except Exception:
             pass
+    # Append optional note to the derived names so that runs can be easily identified
+    if note:
+        pod_name = f"{pod_name} - {note}"
+        project_name = f"{project_name} - {note}"
     train_args = " ".join(args_list)
 
     gpu_type_id = _resolve_gpu_id(gpu_type)
@@ -290,13 +295,11 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    args.config.note = (
-        f"{args.config.note} - {args.note}" if args.note else args.config.note
-    )
     if args.cmd == "train":
         start_cloud_training(
             args.config,
             gpu_type=args.gpu_type,
             api_key=args.api_key,
             keep_alive=args.keep_alive,
+            note=args.note,
         )
