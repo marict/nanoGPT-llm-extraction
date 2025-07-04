@@ -416,8 +416,7 @@ class GPT(nn.Module):
             self.dag = DifferentiableDAG(config, self.scalar_to_embed)
 
             # Learnable scaling of DAG contribution after normalization
-            self.dag_ln = LayerNorm(config.n_embd, bias=config.bias)
-            self.dag_scale = nn.Parameter(torch.tensor(1.0, dtype=torch.float32))
+            self.dag_scale = nn.Parameter(torch.tensor(0.1, dtype=torch.float32))
 
         # init all weights
         self.apply(self._init_weights)
@@ -513,7 +512,7 @@ class GPT(nn.Module):
         )
 
         # Normalize DAG hidden and apply learnable scale
-        dag_hidden_norm = self.dag_ln(dag_hidden) * self.dag_scale
+        dag_hidden_norm = dag_hidden * self.dag_scale
 
         mixed_hidden = original_hidden + dag_hidden_norm
 
