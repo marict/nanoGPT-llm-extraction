@@ -200,7 +200,7 @@ def test_start_cloud_training_comprehensive(monkeypatch, tmp_path):
     assert pod_id == "pod1"
     assert len(wandb_calls) == 1
     assert wandb_calls[0]["project"] == "daggpt-train"
-    assert wandb_calls[0]["run_id"] == "daggpt-train"
+    assert wandb_calls[0]["run_id"] == "pod1"  # run_id is now the pod_id
 
     # Test 2: With keep-alive flag
     created_pods.clear()
@@ -224,11 +224,12 @@ def test_start_cloud_training_comprehensive(monkeypatch, tmp_path):
     config_file = tmp_path / "test_config.py"
     config_file.write_text('name = "custom-project-name"\n')
 
+    created_pods.clear()
     wandb_calls.clear()
     pod_id = rp.start_cloud_training(str(config_file))
     assert len(wandb_calls) == 1
     assert wandb_calls[0]["project"] == "custom-project-name"
-    assert wandb_calls[0]["run_id"] == "custom-project-name"
+    assert wandb_calls[0]["run_id"] == "pod1"  # run_id is the pod_id, not project name
 
 
 def test_wandb_logs_url_modification(monkeypatch):
