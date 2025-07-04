@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -31,12 +32,13 @@ def _validate_note(note: str) -> None:
     if not note:
         return
 
-    invalid_chars = re.findall(r"[^A-Za-z0-9_\s-]", note)
+    # Remove spaces from allowed characters since they cause GraphQL issues
+    invalid_chars = re.findall(r"[^A-Za-z0-9_-]", note)
     if invalid_chars:
         unique_invalid = sorted(set(invalid_chars))
         raise ValueError(
             f"Note contains invalid characters: {unique_invalid}. "
-            "Only letters, numbers, spaces, hyphens, and underscores are allowed."
+            "Only letters, numbers, hyphens, and underscores are allowed."
         )
 
 
@@ -74,8 +76,7 @@ def _build_training_command(
         cmd += " --keep-alive"
 
     if note:
-        escaped_note = note.replace('"', '\\"')
-        cmd += f' --note="{escaped_note}"'
+        cmd += f" --note={note}"
 
     if wandb_run_id:
         cmd += f" --wandb-run-id={wandb_run_id}"
@@ -132,6 +133,14 @@ def start_cloud_training(
     initial_command = _build_training_command(train_args, keep_alive, note, None)
     docker_script = _create_docker_script(initial_command)
 
+    print(f"DEBUG: pod_name = '{pod_name}'")
+    print(f"DEBUG: docker_script = '{docker_script}'")
+
+    import shlex
+
+    final_docker_args = f"bash -c {shlex.quote(docker_script)}"
+    print(f"DEBUG: final_docker_args = '{final_docker_args}'")
+
     try:
         pod = runpod.create_pod(
             name=pod_name,
@@ -150,7 +159,7 @@ def start_cloud_training(
                 "TRANSFORMERS_CACHE": "/workspace/.cache/huggingface/transformers",
             },
             start_ssh=False,
-            docker_args=f"bash -c '{docker_script}'",
+            docker_args=final_docker_args,
         )
     except runpod.error.QueryError as exc:  # type: ignore[attr-defined]
         print("RunPod API QueryError:", exc)
