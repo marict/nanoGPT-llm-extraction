@@ -446,14 +446,14 @@ def test_dag_gradient_health():
         n_layer=1,
         n_head=1,
         n_embd=16,
-        dag_depth=2,
+        dag_depth=16,  # Enough dag steps to actually get a gradient
         gumbel_temperature=2.0,
     )
     model = GPT(cfg)
 
     gradient_norms = []
 
-    for i in range(3):  # Reduced from 5 to save time
+    for i in range(3):
         x = torch.randint(0, cfg.vocab_size, (2, 6))
         y = torch.randint(0, cfg.vocab_size, (2, 6))
 

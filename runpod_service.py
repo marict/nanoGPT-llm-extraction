@@ -284,8 +284,15 @@ if __name__ == "__main__":
         action="store_true",
         help="Keep pod alive after training completes (disables auto-stop)",
     )
+    t.add_argument(
+        "--note",
+        help="Note to add to the wandb run",
+    )
 
     args = parser.parse_args()
+    args.config.note = (
+        f"{args.config.note} - {args.note}" if args.note else args.config.note
+    )
     if args.cmd == "train":
         start_cloud_training(
             args.config,

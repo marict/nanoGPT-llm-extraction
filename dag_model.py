@@ -350,9 +350,7 @@ class DifferentiableDAG(nn.Module):
 
         final_scalars = scratch_values_list[-1]
 
-        # Prevent the scalars from exploding when they are converted back to embeddings
-        scalar_norm = F.layer_norm(final_scalars.unsqueeze(-1), [1])  # (B,T,1)
-        final_hidden = self.scalar_to_embed(scalar_norm)
+        final_hidden = self.scalar_to_embed(final_scalars.unsqueeze(-1))  # (B,T,H)
 
         # Cache for logging (transpose to old shape for compatibility)
         self.final_hidden = final_hidden
