@@ -182,6 +182,7 @@ def parse_args() -> argparse.ArgumentParser:
     parser.add_argument("--gpu-type")
     parser.add_argument("--wandb-api-key")
     parser.add_argument("--wandb-run-id", help="Resume existing wandb run with this ID")
+    parser.add_argument("--note", help="Optional note to append to config name")
     parser.add_argument("--subset", type=float)
     parser.add_argument(
         "--keep-alive",
@@ -942,6 +943,10 @@ def main() -> None:
         cfg.dag_depth = args.dag_depth
     if args.keep_alive:
         cfg.keep_alive = args.keep_alive
+
+    # Append CLI-provided note to config name (if any)
+    if args.note:
+        cfg.name = f"{cfg.name} - {args.note}"
     print(
         f"[{time.time() - main_start:.2f}s] Configuration setup completed in {time.time() - config_start:.2f}s"
     )

@@ -156,6 +156,12 @@ def start_cloud_training(
     if keep_alive:
         final_train_args += " --keep-alive"
 
+    # Pass note through to remote train script so cfg.name matches and wandb resumes correctly
+    if note:
+        # Quote the note to preserve spaces if any
+        escaped_note = note.replace('"', '\\"')
+        final_train_args += f' --note="{escaped_note}"'
+
     # Add wandb run ID if available
     if wandb_result:
         wandb_url, wandb_run_id = wandb_result
