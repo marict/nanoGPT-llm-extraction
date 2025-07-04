@@ -5,8 +5,8 @@ block_size = 512
 gradient_accumulation_steps = 2
 
 # Should be enough to show saturation
-max_iters = 20_000
-lr_decay_iters = 20_000
+max_iters = 40_000
+lr_decay_iters = 40_000
 
 eval_interval = 1000
 eval_iters = 20
