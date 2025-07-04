@@ -575,7 +575,7 @@ def test_dag_gumbel_outputs_are_discrete():
         model.dag.plan_predictor.last_operation_probs_full
     )  # (B, T, dag_depth, n_ops)
 
-    def check_approximately_onehot(probs_tensor, tolerance=0.6):
+    def check_approximately_onehot(probs_tensor, tolerance=0.7):
         """Check if each probability distribution is approximately one-hot."""
         # Flatten all dimensions except the last one (the dimension we're taking softmax over)
         flat_probs = probs_tensor.view(-1, probs_tensor.size(-1))

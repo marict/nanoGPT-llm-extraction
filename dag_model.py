@@ -278,6 +278,7 @@ class DAGPlanPredictor(nn.Module):
         operation_logits = safe_clamp(operation_logits)
 
         # Standard softmax with temperature scaling
+        # Scale to prevent underflow.
         scale = math.sqrt(self.n_ops)  # or math.log(self.n_ops)
         operand1_probs = F.softmax(operand1_logits * scale / self.temperature, dim=-1)
         operand2_probs = F.softmax(operand2_logits * scale / self.temperature, dim=-1)
