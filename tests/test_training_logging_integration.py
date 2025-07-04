@@ -107,9 +107,7 @@ def test_node_values_comprehensive(small_model):
     # Test error case - model without forward pass
     fresh_model = GPT(cfg)
     fresh_logger = DAGLogger()
-    with pytest.raises(
-        AssertionError, match="Model missing last_values_list attribute"
-    ):
+    with pytest.raises(AssertionError, match="Model missing final_values attribute"):
         fresh_logger.get_node_values_list(fresh_model)
 
 

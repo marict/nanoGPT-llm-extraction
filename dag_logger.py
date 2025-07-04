@@ -144,22 +144,30 @@ class DAGLogger:
         original_hidden = model.last_original_hidden
         dag_hidden = model.dag.final_hidden
         mixed_hidden = model.last_mixed_hidden
-        if (
-            original_hidden is not None
-            and dag_hidden is not None
-            and mixed_hidden is not None
-        ):
-            hidden_norm = original_hidden[:, -1].norm(dim=-1).mean().detach().item()
-            dag_norm = dag_hidden[:, -1].norm(dim=-1).mean().detach().item()
-            fused_norm = mixed_hidden[:, -1].norm(dim=-1).mean().detach().item()
+        final_values = model.final_values
 
-            norm_values = {
-                "hidden": hidden_norm,
-                "dag_hidden": dag_norm,
-                "fused": fused_norm,
-                "dag_to_orig_ratio": dag_norm / (hidden_norm + 1e-8),
-            }
-            self.logging_data["norm_values"] = norm_values
+        if original_hidden is None:
+            raise RuntimeError("model should contain original_hidden")
+        if dag_hidden is None:
+            raise RuntimeError("dag should contain final_hidden")
+        if mixed_hidden is None:
+            raise RuntimeError("model should contain last_mixed_hidden")
+        if final_values is None:
+            raise RuntimeError("model should contain final_values")
+
+        hidden_norm = original_hidden[:, -1].norm(dim=-1).mean().detach().item()
+        dag_norm = dag_hidden[:, -1].norm(dim=-1).mean().detach().item()
+        fused_norm = mixed_hidden[:, -1].norm(dim=-1).mean().detach().item()
+        final_values_norm = final_values.norm(dim=-1).mean().detach().item()
+
+        norm_values = {
+            "hidden": hidden_norm,
+            "dag_hidden": dag_norm,
+            "fused": fused_norm,
+            "dag_to_orig_ratio": dag_norm / (hidden_norm + 1e-8),
+            "final_values": final_values_norm,
+        }
+        self.logging_data["norm_values"] = norm_values
 
         # Operation probability statistics (average over batch, time and DAG steps)
         with torch.no_grad():
@@ -208,18 +216,25 @@ class DAGLogger:
             self.logging_data
         ), "Logging data not available - call compute_log_statistics() first"
 
-        if "norm_values" in self.logging_data:
-            norm_data = self.logging_data["norm_values"]
-            for norm_name, norm_val in norm_data.items():
-                metrics[f"norm/{norm_name}"] = norm_val
+        if "norm_values" not in self.logging_data:
+            raise RuntimeError("norm_values not in logging data")
 
-        if "op_probs" in self.logging_data:
-            for op_name, p_val in self.logging_data["op_probs"].items():
-                metrics[f"op_prob/{op_name}"] = p_val
+        norm_data = self.logging_data["norm_values"]
+        for norm_name, norm_val in norm_data.items():
+            metrics[f"norm/{norm_name}"] = norm_val
 
-        # Log DAG scale if present
-        if hasattr(model, "dag_scale"):
-            metrics["dag_scale"] = model.dag_scale.item()
+        if "op_probs" not in self.logging_data:
+            raise RuntimeError("op_probs not in logging data")
+
+        for op_name, p_val in self.logging_data["op_probs"].items():
+            metrics[f"op_prob/{op_name}"] = p_val
+
+        if "last_gate" not in self.logging_data:
+            raise RuntimeError("last_gate not in logging data")
+        if model.last_gate is None:
+            raise RuntimeError("last_gate is None")
+
+        metrics["gate_mean"] = model.last_gate.mean().item()
 
         return metrics
 
@@ -236,18 +251,16 @@ class DAGLogger:
         if model.config.dag_depth == 0:
             return []
 
-        assert hasattr(
-            model, "last_values_list"
-        ), "Model missing last_values_list attribute"
-        assert model.last_values_list is not None, "last_values_list is None"
+        assert hasattr(model, "final_values"), "Model missing final_values attribute"
+        assert model.final_values is not None, "final_values is None"
 
         # Extract values from the stored tensor
         assert isinstance(
-            model.last_values_list, torch.Tensor
-        ), "last_values_list must be a tensor"
+            model.final_values, torch.Tensor
+        ), "final_values must be a tensor"
 
-        if model.last_values_list.dim() == 3:  # (B, scratch_nodes, T)
-            B, scratch_nodes, T = model.last_values_list.shape
+        if model.final_values.dim() == 3:  # (B, scratch_nodes, T)
+            B, scratch_nodes, T = model.final_values.shape
             # Get the final slot for each token (most recent computation)
             final_slot = (
                 (model.config.dag_depth - 1) % scratch_nodes
@@ -255,10 +268,10 @@ class DAGLogger:
                 else 1
             )
             # Extract values from the final slot and average across batch
-            final_values = model.last_values_list[:, final_slot, :]  # (B, T)
+            final_values = model.final_values[:, final_slot, :]  # (B, T)
             return [val.mean().item() for val in final_values.transpose(0, 1)]
         else:  # (B, T) format
-            return [val.mean().item() for val in model.last_values_list.transpose(0, 1)]
+            return [val.mean().item() for val in model.final_values.transpose(0, 1)]
 
     def get_detailed_node_values(self, model) -> dict:
         """
@@ -273,18 +286,16 @@ class DAGLogger:
         if model.config.dag_depth == 0:
             return {}
 
-        assert hasattr(
-            model, "last_values_list"
-        ), "Model missing last_values_list attribute"
-        assert model.last_values_list is not None, "last_values_list is None"
+        assert hasattr(model, "final_values"), "Model missing final_values attribute"
+        assert model.final_values is not None, "final_values is None"
         assert isinstance(
-            model.last_values_list, torch.Tensor
-        ), "last_values_list must be a tensor"
+            model.final_values, torch.Tensor
+        ), "final_values must be a tensor"
         assert (
-            model.last_values_list.dim() == 3
-        ), f"Expected 3D tensor, got {model.last_values_list.dim()}D"
+            model.final_values.dim() == 3
+        ), f"Expected 3D tensor, got {model.final_values.dim()}D"
 
-        B, scratch_nodes, T = model.last_values_list.shape
+        B, scratch_nodes, T = model.final_values.shape
 
         # Get values for all scratch nodes per token, averaged across batch
         values_per_token = []
@@ -294,7 +305,7 @@ class DAGLogger:
             token_values = []
             for s in range(scratch_nodes):
                 # Average across batch dimension
-                value = model.last_values_list[:, s, t].mean().item()
+                value = model.final_values[:, s, t].mean().item()
                 token_values.append(value)
 
             values_per_token.append(token_values)

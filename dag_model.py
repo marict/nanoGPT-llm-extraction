@@ -204,7 +204,7 @@ def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
 class DAGPlanPredictor(nn.Module):
     """Predicts complete DAG execution plans for all tokens in batch."""
 
-    def __init__(self, config, temperature: float = 20.0):
+    def __init__(self, config, temperature: float = 10):
         super().__init__()
         self.dag_depth = config.dag_depth
         self.temperature = temperature
@@ -377,7 +377,7 @@ class DifferentiableDAG(nn.Module):
         self.final_hidden = final_hidden
         self.final_values = torch.stack(scratch_values_list, dim=1)  # (B,S,T)
 
-        return final_hidden, None, self.final_values
+        return final_hidden
 
 
 # ---------------------------------------------------------------------------
@@ -435,8 +435,11 @@ class GPT(nn.Module):
         if config.dag_depth > 0:
             self.dag = DifferentiableDAG(config)
 
-            # Learnable scaling of DAG contribution after normalization
-            self.dag_scale = nn.Parameter(torch.tensor(0.1, dtype=torch.float32))
+            # Initialise gate closed (~0.12 after sigmoid)
+            self.gate_w_d = nn.Parameter(torch.full((config.n_embd,), -2.0))
+            self.gate_w_o = nn.Parameter(torch.full((config.n_embd,), -2.0))
+            # Bias so gate can open even if means are near zero
+            self.gate_b = nn.Parameter(torch.tensor(-2.0))
 
         # init all weights
         self.apply(self._init_weights)
@@ -524,17 +527,29 @@ class GPT(nn.Module):
         self.last_original_hidden = original_hidden
 
         # Run DAG processing (handles everything internally)
-        dag_hidden, final_embeds, final_values = self.dag(original_hidden)
+        dag_hidden = self.dag(original_hidden)
 
         # Store complete tensor for detailed analysis
-        self.last_values_list = (
-            final_values  # Store full tensor (B, scratch_nodes, T) or (B, T)
+        self.final_values = self.dag.final_values
+
+        # ------------------------------------------------------------------ #
+        # Per-token gating mechanism
+        # gate_{B,T,1} = σ( mean_dag + mean_orig ) where
+        #   mean_dag  = ⟨dag_hidden * w_d⟩_H
+        #   mean_orig = ⟨original_hidden * w_o⟩_H
+        # Both w_d and w_o are learnable vectors of size H.
+        # ------------------------------------------------------------------ #
+        gate_logits = (
+            (dag_hidden * self.gate_w_d).mean(-1, keepdim=True)
+            + (original_hidden * self.gate_w_o).mean(-1, keepdim=True)
+            + self.gate_b
         )
+        gate = torch.sigmoid(gate_logits)  # (B,T,1) in (0,1)
 
-        # Normalize DAG hidden and apply learnable scale
-        dag_hidden_norm = dag_hidden * self.dag_scale
+        # Store gate for logging
+        self.last_gate = gate
 
-        mixed_hidden = original_hidden + dag_hidden_norm
+        mixed_hidden = original_hidden + gate * dag_hidden
 
         # Store mixed hidden states for logging
         self.last_mixed_hidden = mixed_hidden
