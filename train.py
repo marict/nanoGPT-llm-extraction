@@ -56,13 +56,19 @@ def generate_run_name(cfg) -> str:
 
     if runpod_id and runpod_id.strip():
         # Use RunPod identifier
-        return runpod_id
+        base = runpod_id
     else:
         # Generate local identifier with random string
         random_str = "".join(
             random.choices(string.ascii_lowercase + string.digits, k=12)
         )
-        return f"local_{random_str}"
+        base = f"local_{random_str}"
+
+    # Append note if provided
+    note_val = getattr(cfg, "note", None)
+    if note_val:
+        return f"{base} - {note_val}"
+    return base
 
 
 @dataclass
@@ -120,6 +126,9 @@ class TrainConfig:
     )
     compile: bool = True
     keep_alive: bool = False  # Keep pod alive after training (disables auto-stop)
+
+    # Optional run note (appended to run name)
+    note: str | None = None
 
     # Fine-tuning options
     freeze_gpt: bool = False  # If True, freeze GPT backbone and train DAG layers only
@@ -944,9 +953,9 @@ def main() -> None:
     if args.keep_alive:
         cfg.keep_alive = args.keep_alive
 
-    # Append CLI-provided note to config name (if any)
+    # Store note separately without altering project name
     if args.note:
-        cfg.name = f"{cfg.name} - {args.note}"
+        cfg.note = args.note
     print(
         f"[{time.time() - main_start:.2f}s] Configuration setup completed in {time.time() - config_start:.2f}s"
     )

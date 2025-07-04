@@ -201,6 +201,24 @@ def start_cloud_training(
     pod_id = pod.get("id")
     if not pod_id:
         raise RunPodError("RunPod API did not return a pod id")
+
+    # ------------------------------------------------------------------ #
+    #  Update W&B run name to the pod id (plus optional note) so that
+    #  the run name matches the actual instance identifier. This occurs
+    #  *after* pod creation because we need the id first. The remote
+    #  training job will resume the run by its id, so changing the name
+    #  here is safe and ensures consistent naming across local/remote.
+    # ------------------------------------------------------------------ #
+    try:
+        if wandb_result:
+            run = wandb.run  # The current run initialised earlier
+            if run is not None:
+                new_run_name = pod_id if not note else f"{pod_id} - {note}"
+                run.name = new_run_name
+                run.save()
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: Failed to update wandb run name: {exc}")
+
     print(f"Starting training job '{pod_name}' (pod {pod_id}) on {gpu_type}. ")
 
     return pod_id

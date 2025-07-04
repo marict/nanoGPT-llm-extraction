@@ -267,7 +267,7 @@ class DAGPlanPredictor(nn.Module):
         operand2_logits = safe_clamp(operand2_logits)
         operation_logits = safe_clamp(operation_logits)
 
-        # Softmax (temperature-scaled)
+        # Standard softmax with temperature scaling
         operand1_probs = F.softmax(operand1_logits / self.temperature, dim=-1)
         operand2_probs = F.softmax(operand2_logits / self.temperature, dim=-1)
         operation_probs = F.softmax(operation_logits / self.temperature, dim=-1)
@@ -294,7 +294,7 @@ class DifferentiableDAG(nn.Module):
         self.dag_depth = config.dag_depth
         self.num_scratch_nodes = config.dag_depth + 1
         self.scalar_to_embed = scalar_to_embed
-        self.temperature = config.gumbel_temperature
+        self.temperature = config.softmax_temperature
 
         self.pre_dag = Block(config)
 
@@ -376,7 +376,7 @@ class GPTConfig:
         True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     )
     dag_depth: int = 4  # 0 = standard GPT, >0 = DAG-augmented GPT
-    gumbel_temperature: float = 20.0
+    softmax_temperature: float = 20.0
 
 
 # ---------------------------------------------------------------------------

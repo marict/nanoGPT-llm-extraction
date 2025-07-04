@@ -1,7 +1,7 @@
 """Minimal CPU configuration used by default when running ``train.py``."""
 
 # evaluate every step and run a single iteration by default
-eval_interval = 5
+eval_interval = 3
 log_interval = 1
 eval_iters = 1
 eval_only = False
@@ -30,7 +30,7 @@ bias = False
 dag_depth = 16
 
 learning_rate = 6e-4
-max_iters = 10
+max_iters = 6
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95

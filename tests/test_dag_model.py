@@ -113,7 +113,7 @@ def test_op_functions():
 
 # ---------------------------------------------------------------------
 # initial-node materialisation tests
-# ---------------------------------------------------------------------
+# --------------------------------------------------------------------- #
 def test_dag_initial_nodes_all_tokens(monkeypatch):
     """Every token should contribute exactly one *initial* DAG value."""
     tokens = [0, 1, 2, 3]
@@ -149,7 +149,7 @@ def test_dag_initial_nodes_all_tokens(monkeypatch):
 
 # ---------------------------------------------------------------------
 # single-token zero-padding        (fixed recursion)
-# ---------------------------------------------------------------------
+# --------------------------------------------------------------------- #
 def test_zero_padding_single_token(monkeypatch):
     cfg = GPTConfig(
         vocab_size=10, block_size=1, n_layer=1, n_head=1, n_embd=8, dag_depth=1
@@ -191,7 +191,7 @@ def test_daggpt_config_creation():
 
 # ---------------------------------------------------------------------
 # extra-vals entropy / grad check  (robust to dimensionality)
-# ---------------------------------------------------------------------
+# --------------------------------------------------------------------- #
 def test_extra_vals_daggpt():
     """Test GPT's logging functionality using DAGLogger with gradient computation."""
     cfg = GPTConfig(
@@ -435,7 +435,7 @@ def test_hook_behavior_no_grad_context():
 
 # ---------------------------------------------------------------------
 # Gradient health tests for DAG components
-# ---------------------------------------------------------------------
+# --------------------------------------------------------------------- #
 def test_dag_gradient_health():
     """Test that DAG gradients remain healthy across multiple backward passes."""
     torch.manual_seed(42)
@@ -447,7 +447,7 @@ def test_dag_gradient_health():
         n_head=1,
         n_embd=16,
         dag_depth=16,  # Enough dag steps to actually get a gradient
-        gumbel_temperature=2.0,
+        softmax_temperature=2.0,
     )
     model = GPT(cfg)
 
@@ -501,7 +501,7 @@ def test_dag_gradient_flow_vs_temperature():
     gradient_norms = []
 
     for temp in temperatures:
-        cfg = GPTConfig(**{**cfg_base.__dict__, "gumbel_temperature": temp})
+        cfg = GPTConfig(**{**cfg_base.__dict__, "softmax_temperature": temp})
         model = GPT(cfg)
 
         model.zero_grad()
@@ -555,7 +555,7 @@ def test_dag_gumbel_outputs_are_discrete():
         n_head=1,
         n_embd=16,
         dag_depth=2,
-        gumbel_temperature=0.05,  # Further lower temp for more discrete outputs
+        softmax_temperature=0.001,  # Lower temp for more discrete outputs
     )
     model = GPT(cfg)
 
@@ -622,7 +622,7 @@ def test_dag_gradients_multiple_backward_passes():
         n_head=1,
         n_embd=16,
         dag_depth=2,
-        gumbel_temperature=2.0,
+        softmax_temperature=2.0,
     )
     model = GPT(cfg)
 
