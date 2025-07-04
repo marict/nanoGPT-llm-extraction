@@ -40,6 +40,14 @@ from python_version_check import check_python_version
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
 CUDA_AVAILABLE = torch.cuda.is_available()
 
+# Require safetensors – abort early if missing
+try:
+    import safetensors.torch as _st  # type: ignore
+except ModuleNotFoundError as exc:  # pragma: no cover
+    raise ImportError(
+        "The 'safetensors' package is required for checkpoint saving. Install via 'pip install safetensors'."
+    ) from exc
+
 
 # --------------------------------------------------------------------------- #
 # Safe checkpoint saving with retry
@@ -52,9 +60,13 @@ class CheckpointSaveError(Exception):
 
 def _safe_torch_save(obj, path: Path, retries: int = 1) -> None:
     """Save <obj> to <path> with retry; raise CheckpointSaveError on failure."""
+    tmp_path = path.with_suffix(".tmp.safetensors")
+
     for attempt in range(retries + 1):
         try:
-            torch.save(obj, path)
+            _st.save_file(obj, str(tmp_path))
+
+            tmp_path.replace(path)
             return
         except Exception as exc:  # noqa: BLE001
             if attempt >= retries:

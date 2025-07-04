@@ -174,21 +174,21 @@ def min_op(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return torch.minimum(x, y)
 
 
-op_funcs = [add, identity, multiply, subtract, divide, power, log, max_op, min_op]
-op_names = [
-    "add",
-    "identity",
-    "multiply",
-    "subtract",
-    "divide",
-    "power",
-    "log",
-    "max_op",
-    "min_op",
-]
+# op_funcs = [add, identity, multiply, subtract, divide, power, log, max_op, min_op]
+# op_names = [
+#     "add",
+#     "identity",
+#     "multiply",
+#     "subtract",
+#     "divide",
+#     "power",
+#     "log",
+#     "max_op",
+#     "min_op",
+# ]
 # # Minimal set of ops for testing
-# op_funcs = [add, identity, multiply, subtract]
-# op_names = ["add", "identity", "multiply", "subtract"]
+op_funcs = [add, identity, multiply, subtract]
+op_names = ["add", "identity", "multiply", "subtract"]
 
 
 def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
@@ -278,9 +278,10 @@ class DAGPlanPredictor(nn.Module):
         operation_logits = safe_clamp(operation_logits)
 
         # Standard softmax with temperature scaling
-        operand1_probs = F.softmax(operand1_logits / self.temperature, dim=-1)
-        operand2_probs = F.softmax(operand2_logits / self.temperature, dim=-1)
-        operation_probs = F.softmax(operation_logits / self.temperature, dim=-1)
+        scale = math.sqrt(self.n_ops)  # or math.log(self.n_ops)
+        operand1_probs = F.softmax(operand1_logits * scale / self.temperature, dim=-1)
+        operand2_probs = F.softmax(operand2_logits * scale / self.temperature, dim=-1)
+        operation_probs = F.softmax(operation_logits * scale / self.temperature, dim=-1)
 
         # Cache tensors for external logging/debugging
         self.last_operation_probs_full = operation_probs
