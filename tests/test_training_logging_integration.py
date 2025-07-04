@@ -22,7 +22,7 @@ def test_text_generation_logging_integration(small_model):
 
     dag_logger = DAGLogger()
 
-    sample_prompt = "Two plus 5 is equal to: "
+    sample_prompt = "Two plus 5 = "
     encoded = mock_encode(sample_prompt)
     prompt_ids = torch.tensor(encoded, dtype=torch.long).unsqueeze(0)
 

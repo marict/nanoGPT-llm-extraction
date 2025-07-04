@@ -706,7 +706,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                         raise ValueError("No tokenizer available")
                     try:
                         # Simple prompt for generation
-                        sample_prompt = "Two plus 5 is equal to: "
+                        sample_prompt = "Two plus 5 = "
                         encoded = encode(sample_prompt)
                         prompt_ids = torch.tensor(
                             encoded, dtype=torch.long, device=device
