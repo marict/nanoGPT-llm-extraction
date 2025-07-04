@@ -189,7 +189,6 @@ def start_cloud_training(
     try:
         final_name = pod_id if not note else f"{pod_id} - {note}"
         wandb.run.name = final_name
-        wandb.run.save()
         print(f"W&B run renamed to: {final_name}")
         print(f"Remote training will resume W&B run: {wandb_run_id}")
     except Exception as exc:  # noqa: BLE001
