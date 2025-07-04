@@ -16,8 +16,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
-from rff.layers import \
-    BasicEncoding  # or GaussianEncoding / PositionalEncoding
+from rff.layers import PositionalEncoding
 from torch.nn import functional as F
 
 
@@ -294,9 +293,9 @@ class DAGPlanPredictor(nn.Module):
 class ScalarToEmbed(nn.Module):
     """Scalar → H-dim embedding using fixed Fourier bases."""
 
-    def __init__(self, hidden: int, feat_dim: int = 32):
+    def __init__(self, hidden: int, sigma=1.0, feat_dim: int = 32):
         super().__init__()
-        self.ff = BasicEncoding(encoded_size=feat_dim)  # (…,1) → (…,2*feat_dim)
+        self.ff = PositionalEncoding(sigma, feat_dim)
         self.proj = nn.Linear(2 * feat_dim + 2, hidden)  # +2 for sign & log|s|
 
     def forward(self, s: torch.Tensor) -> torch.Tensor:  # (B,T,1)
