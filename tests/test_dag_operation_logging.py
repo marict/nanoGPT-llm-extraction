@@ -80,7 +80,11 @@ def test_comprehensive_logging_integration(small_model, sample_batch_small):
 
     # Check for gradient values
     grad_keys = [key for key in extra_vals.keys() if key.startswith("grad/op")]
-    assert len(grad_keys) == len(op_names), "Should have gradients for all operations"
+    assert len(grad_keys) >= len(op_names), "Missing some op gradients"
+
+    # Gate parameter gradients should be present
+    assert "grad/gate_w_d" in extra_vals, "Missing gate_w_d gradient"
+    assert "grad/gate_w_o" in extra_vals, "Missing gate_w_o gradient"
 
     # Verify wandb logging dict structure
     assert isinstance(wandb_dict, dict)

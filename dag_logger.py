@@ -103,6 +103,24 @@ class DAGLogger:
         hook = model.last_original_hidden.register_hook(save_orig_hidden_grad)
         self.gradient_hooks.append(hook)
 
+        assert hasattr(model, "gate_w_d"), "Model missing gate_w_d attribute"
+        assert hasattr(model, "gate_w_o"), "Model missing gate_w_o attribute"
+        assert isinstance(model.gate_w_d, torch.Tensor), "gate_w_d should be a tensor"
+        assert isinstance(model.gate_w_o, torch.Tensor), "gate_w_o should be a tensor"
+
+        # Capture gradients for gate parameters
+        def save_gate_w_d_grad(grad):
+            self.captured_gradients["grad/gate_w_d"] = grad.detach().norm().item()
+
+        hook = model.gate_w_d.register_hook(save_gate_w_d_grad)
+        self.gradient_hooks.append(hook)
+
+        def save_gate_w_o_grad(grad):
+            self.captured_gradients["grad/gate_w_o"] = grad.detach().norm().item()
+
+        hook = model.gate_w_o.register_hook(save_gate_w_o_grad)
+        self.gradient_hooks.append(hook)
+
     def update_gradient_tracking(self, model):
         """Update gradient tracking after forward pass when tensors are available."""
         # Set up operation gradient tracking now that tensors exist
@@ -145,6 +163,7 @@ class DAGLogger:
         dag_hidden = model.dag.final_hidden
         mixed_hidden = model.last_mixed_hidden
         final_values = model.final_values
+        last_gate = model.last_gate
 
         if original_hidden is None:
             raise RuntimeError("model should contain original_hidden")
@@ -154,11 +173,14 @@ class DAGLogger:
             raise RuntimeError("model should contain last_mixed_hidden")
         if final_values is None:
             raise RuntimeError("model should contain final_values")
+        if last_gate is None:
+            raise RuntimeError("model should contain last_gate")
 
         hidden_norm = original_hidden[:, -1].norm(dim=-1).mean().detach().item()
         dag_norm = dag_hidden[:, -1].norm(dim=-1).mean().detach().item()
         fused_norm = mixed_hidden[:, -1].norm(dim=-1).mean().detach().item()
         final_values_norm = final_values.norm(dim=-1).mean().detach().item()
+        last_gate_norm = last_gate.norm(dim=-1).mean().detach().item()
 
         norm_values = {
             "hidden": hidden_norm,
@@ -166,8 +188,18 @@ class DAGLogger:
             "fused": fused_norm,
             "dag_to_orig_ratio": dag_norm / (hidden_norm + 1e-8),
             "final_values": final_values_norm,
+            "last_gate": last_gate_norm,
         }
         self.logging_data["norm_values"] = norm_values
+
+        # Other gate values
+        gate_mean = last_gate.mean().item()
+        gate_max = last_gate.max().item()
+        self.logging_data["gate_mean"] = gate_mean
+        self.logging_data["gate_max"] = gate_max
+
+        # Store last_gate tensor for downstream retrieval
+        self.logging_data["last_gate"] = last_gate.detach().clone()
 
         # Operation probability statistics (average over batch, time and DAG steps)
         with torch.no_grad():
