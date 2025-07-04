@@ -134,7 +134,7 @@ def start_cloud_training(
     # ------------------------------------------------------------------ #
     # 1. Create a local W&B run FIRST to obtain run_id
     # ------------------------------------------------------------------ #
-    placeholder_name = f"prelaunch{'-' + note if note else ''}"
+    placeholder_name = f"pod-id-pending{'-' + note if note else ''}"
     wandb_result = init_local_wandb_and_open_browser(project_name, placeholder_name)
     wandb_run_id: str | None = None
     if wandb_result:
