@@ -701,7 +701,6 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                     losses = estimate_loss(model, cfg.eval_iters, get_batch, ctx)
 
                     # Generate a sample sentence to track generation quality
-                    generated_sample = ""
                     if encode is None or decode is None:
                         raise ValueError("No tokenizer available")
                     try:
@@ -950,7 +949,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
 
 # --------------------------------------------------------------------------- #
 # Entry point
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
 def main() -> None:
     main_start = time.time()
     print(f"[{time.time() - main_start:.2f}s] Starting main function")

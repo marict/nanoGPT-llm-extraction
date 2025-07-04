@@ -6,10 +6,9 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from test_common import (SMALL_CONFIG, assert_valid_forward_pass,
-                         assert_valid_logging, assert_valid_node_values,
-                         mock_decode, mock_encode, sample_batch_small,
-                         setup_gradient_tracking_test, small_model, tiny_model)
+from test_common import (assert_valid_logging, assert_valid_node_values,
+                         mock_decode, mock_encode,
+                         setup_gradient_tracking_test)
 
 from dag_logger import DAGLogger
 from dag_model import GPT, GPTConfig, op_names
@@ -45,7 +44,6 @@ def test_text_generation_logging_integration(small_model):
 def test_comprehensive_training_logging(small_model, sample_batch_small):
     """Test comprehensive logging during training scenario."""
     model, config = small_model
-    input_ids, target_ids = sample_batch_small
 
     # Set up gradient tracking test and compute statistics
     logger, loss, _, _ = setup_gradient_tracking_test(model, config)
