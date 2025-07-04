@@ -16,6 +16,8 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
+from rff.layers import \
+    BasicEncoding  # or GaussianEncoding / PositionalEncoding
 from torch.nn import functional as F
 
 
@@ -218,7 +220,7 @@ class DAGPlanPredictor(nn.Module):
 
         # Predictor: hidden_state -> full DAG plan (no separate output-selection logits)
         self.predictor = nn.Sequential(
-            nn.Linear(config.n_embd, config.n_embd),
+            nn.Linear(config.n_embd + 1, config.n_embd),
             nn.GELU(),
             nn.Linear(config.n_embd, config.dag_depth * self.plan_dim),
         )
@@ -228,12 +230,13 @@ class DAGPlanPredictor(nn.Module):
         self.last_operand1_probs: torch.Tensor | None = None
         self.last_operand2_probs: torch.Tensor | None = None
 
-    def forward(self, hidden_states: torch.Tensor):
+    def forward(self, hidden_states: torch.Tensor, initial_values: torch.Tensor):
         """
         Predict complete DAG plans for all tokens, maintaining causality.
 
         Args:
             hidden_states: (B, T, H) - hidden states for all tokens
+            initial_values: (B, T) - initial values for all tokens
 
         Returns:
             operand1_probs: (B, T, dag_depth, max_nodes) - probabilities for operand 1
@@ -242,11 +245,19 @@ class DAGPlanPredictor(nn.Module):
         """
         # Vectorised forward pass (no explicit Python loop over tokens)
         B, T, H = hidden_states.shape
-        device = hidden_states.device
 
-        # Run predictor across batch and time in one pass
-        hidden_flat = hidden_states.reshape(B * T, H)  # (B*T, H)
-        raw_plan = self.predictor(hidden_flat)  # (B*T, total_plan_dim)
+        # --- scale and clamp the seed value ---------------------------------
+        logmag_seed = torch.log1p(initial_values.abs())  # (B,T)
+        signed_seed = initial_values.sign() * logmag_seed  # keep sign info
+        safe_seed = torch.clamp(signed_seed, -20.0, 20.0)  # cap extremes
+
+        # --- concatenate with hidden state ----------------------------------
+        init_feat = safe_seed.unsqueeze(-1)  # (B,T,1)
+        mixed = torch.cat([hidden_states, init_feat], dim=-1)  # (B,T,H+1)
+
+        # Since B x T is processed independantly, this doesn't leak causality.
+        mixed = mixed.reshape(B * T, H + 1)
+        raw_plan = self.predictor(mixed)
         raw_plan = raw_plan.view(
             B, T, self.dag_depth, self.plan_dim
         )  # (B, T, D, plan_dim)
@@ -280,6 +291,21 @@ class DAGPlanPredictor(nn.Module):
         return operand1_probs, operand2_probs, operation_probs
 
 
+class ScalarToEmbed(nn.Module):
+    """Scalar → H-dim embedding using fixed Fourier bases."""
+
+    def __init__(self, hidden: int, feat_dim: int = 32):
+        super().__init__()
+        self.ff = BasicEncoding(encoded_size=feat_dim)  # (…,1) → (…,2*feat_dim)
+        self.proj = nn.Linear(2 * feat_dim + 2, hidden)  # +2 for sign & log|s|
+
+    def forward(self, s: torch.Tensor) -> torch.Tensor:  # (B,T,1)
+        logmag = torch.log1p(s.abs())  # compress range
+        trig = self.ff(logmag)  # periodic features
+        feats = torch.cat((s.sign(), logmag, trig), dim=-1)  # (B,T,2*feat_dim+2)
+        return self.proj(feats)  # (B,T,H)
+
+
 # ---------------------------------------------------------------------------
 # DAG computation
 # ---------------------------------------------------------------------------
@@ -287,35 +313,26 @@ class DifferentiableDAG(nn.Module):
     def __init__(
         self,
         config,
-        scalar_to_embed: nn.Module,
     ):
         super().__init__()
         self.hidden_dim = config.n_embd
         self.dag_depth = config.dag_depth
         self.num_scratch_nodes = config.dag_depth + 1
-        self.scalar_to_embed = scalar_to_embed
         self.temperature = config.softmax_temperature
 
         self.pre_dag = Block(config)
+        self.post_dag = Block(config)
 
         # Initialize plan predictor
         self.plan_predictor = DAGPlanPredictor(config, self.temperature)
 
-        # Tie value and embedding layers to improv reversability
-        self.value_to_embed_layer = nn.Linear(1, config.n_embd)
-        self.value_to_embed = nn.Sequential(
-            self.value_to_embed_layer, LayerNorm(config.n_embd, bias=config.bias)
-        )
+        self.scalar_to_embed = ScalarToEmbed(config.n_embd)
         self.embed_to_value = nn.Linear(config.n_embd, 1)
-        self.embed_to_value.weight = nn.Parameter(self.value_to_embed_layer.weight.T)
 
     def forward(
         self,
         original_hidden: torch.Tensor,  # (B, T, H) - batch, time, hidden
     ):
-        B, T, H = original_hidden.shape
-        device = original_hidden.device
-
         # Pre-process hidden states before value extraction
         incoming_hidden = self.pre_dag(original_hidden)
 
@@ -328,7 +345,7 @@ class DifferentiableDAG(nn.Module):
 
         # Generate DAG plan (vectorised)
         operand1_probs, operand2_probs, operation_probs = self.plan_predictor(
-            incoming_hidden
+            incoming_hidden, initial_values
         )
 
         for step in range(self.dag_depth):
@@ -350,9 +367,12 @@ class DifferentiableDAG(nn.Module):
 
         final_scalars = scratch_values_list[-1]
 
+        # Convert final nodes to hidden states.
         final_hidden = self.scalar_to_embed(final_scalars.unsqueeze(-1))  # (B,T,H)
+        # Mix token information via post dag block.
+        final_hidden = self.post_dag(final_hidden)
 
-        # Cache for logging (transpose to old shape for compatibility)
+        # Cache for logging
         self.final_hidden = final_hidden
         self.final_values = torch.stack(scratch_values_list, dim=1)  # (B,S,T)
 
@@ -412,8 +432,7 @@ class GPT(nn.Module):
 
         # DAG-specific components (only if dag_depth > 0)
         if config.dag_depth > 0:
-            self.scalar_to_embed = nn.Linear(1, config.n_embd)
-            self.dag = DifferentiableDAG(config, self.scalar_to_embed)
+            self.dag = DifferentiableDAG(config)
 
             # Learnable scaling of DAG contribution after normalization
             self.dag_scale = nn.Parameter(torch.tensor(0.1, dtype=torch.float32))

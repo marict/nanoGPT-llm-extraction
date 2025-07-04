@@ -823,6 +823,16 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                         _, loss = model(X, Y)
                         # Immediately abort training if loss becomes NaN or Inf
                         if not torch.isfinite(loss):
+                            # Log one last time
+                            # Prepare logging dict
+                            base_dict = {"iter": iter_num, **extra_vals}
+                            log_dict = (
+                                dag_logger.get_wandb_logging_dict(raw_model, base_dict)
+                                if dag_logger
+                                else base_dict
+                            )
+                            wandb.log(log_dict, step=iter_num, commit=True)
+
                             raise RuntimeError(
                                 f"Non-finite loss detected (value={loss.item()}) at iteration {iter_num}. Aborting training."
                             )
