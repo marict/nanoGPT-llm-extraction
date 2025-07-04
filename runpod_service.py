@@ -1,9 +1,8 @@
 import argparse
-import json
 import os
 import re
+import shlex
 import subprocess
-import time
 
 import requests
 import runpod
@@ -133,13 +132,7 @@ def start_cloud_training(
     initial_command = _build_training_command(train_args, keep_alive, note, None)
     docker_script = _create_docker_script(initial_command)
 
-    print(f"DEBUG: pod_name = '{pod_name}'")
-    print(f"DEBUG: docker_script = '{docker_script}'")
-
-    import shlex
-
     final_docker_args = f"bash -c {shlex.quote(docker_script)}"
-    print(f"DEBUG: final_docker_args = '{final_docker_args}'")
 
     try:
         pod = runpod.create_pod(
