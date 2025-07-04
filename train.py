@@ -40,13 +40,13 @@ from python_version_check import check_python_version
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
 CUDA_AVAILABLE = torch.cuda.is_available()
 
-# Require safetensors – abort early if missing
+# Optional safetensors for pure-tensor checkpoints
 try:
     import safetensors.torch as _st  # type: ignore
-except ModuleNotFoundError as exc:  # pragma: no cover
-    raise ImportError(
-        "The 'safetensors' package is required for checkpoint saving. Install via 'pip install safetensors'."
-    ) from exc
+
+    _HAVE_ST = True
+except ModuleNotFoundError:
+    _HAVE_ST = False
 
 
 # --------------------------------------------------------------------------- #
@@ -60,11 +60,17 @@ class CheckpointSaveError(Exception):
 
 def _safe_torch_save(obj, path: Path, retries: int = 1) -> None:
     """Save <obj> to <path> with retry; raise CheckpointSaveError on failure."""
-    tmp_path = path.with_suffix(".tmp.safetensors")
+    tmp_path = path.with_suffix(".tmp")
 
     for attempt in range(retries + 1):
         try:
-            _st.save_file(obj, str(tmp_path))
+            if _HAVE_ST and _all_tensors(obj):
+                _st.save_file(obj, str(tmp_path.with_suffix(".safetensors")))
+                tmp_path = tmp_path.with_suffix(".safetensors")
+            else:
+                fallback_path = tmp_path.with_suffix(".pt")
+                torch.save(obj, fallback_path, _use_new_zipfile_serialization=False)
+                tmp_path = fallback_path
 
             tmp_path.replace(path)
             return
@@ -76,6 +82,19 @@ def _safe_torch_save(obj, path: Path, retries: int = 1) -> None:
             print(
                 f"Retrying checkpoint save ({attempt+1}/{retries}) due to error: {exc}"
             )
+
+
+def _all_tensors(state):
+    """Return True if every leaf value in state dict is a torch.Tensor."""
+    import torch
+
+    for v in state.values():
+        if isinstance(v, dict):
+            if not _all_tensors(v):
+                return False
+        elif not isinstance(v, torch.Tensor):
+            return False
+    return True
 
 
 # --------------------------------------------------------------------------- #

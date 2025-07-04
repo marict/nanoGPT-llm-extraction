@@ -174,21 +174,21 @@ def min_op(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return torch.minimum(x, y)
 
 
-# op_funcs = [add, identity, multiply, subtract, divide, power, log, max_op, min_op]
-# op_names = [
-#     "add",
-#     "identity",
-#     "multiply",
-#     "subtract",
-#     "divide",
-#     "power",
-#     "log",
-#     "max_op",
-#     "min_op",
-# ]
-# # Minimal set of ops for testing
-op_funcs = [add, identity, multiply, subtract]
-op_names = ["add", "identity", "multiply", "subtract"]
+op_funcs = [add, identity, multiply, subtract, divide, power, log, max_op, min_op]
+op_names = [
+    "add",
+    "identity",
+    "multiply",
+    "subtract",
+    "divide",
+    "power",
+    "log",
+    "max_op",
+    "min_op",
+]
+# # # Minimal set of ops for testing
+# op_funcs = [add, identity, multiply, subtract]
+# op_names = ["add", "identity", "multiply", "subtract"]
 
 
 def safe_clamp(logits: torch.Tensor) -> torch.Tensor:

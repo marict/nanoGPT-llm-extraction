@@ -16,7 +16,8 @@ def test_safe_torch_save_retry(monkeypatch, tmp_path):
             raise RuntimeError("unexpected pos 10 vs 9")
         Path(path).write_text("ok")
 
-    monkeypatch.setattr(train, "_st", SimpleNamespace(save_file=flaky_save))
+    monkeypatch.setattr(train, "_HAVE_ST", False, raising=False)
+    monkeypatch.setattr(train, "torch", SimpleNamespace(save=flaky_save))
 
     out_path = tmp_path / "ckpt.pt"
     train._safe_torch_save({"a": 1}, out_path, retries=1)
@@ -28,6 +29,7 @@ def test_safe_torch_save_failure(monkeypatch, tmp_path):
     def always_fail(obj, path, **kwargs):
         raise RuntimeError("disk full?")
 
-    monkeypatch.setattr(train, "_st", SimpleNamespace(save_file=always_fail))
+    monkeypatch.setattr(train, "_HAVE_ST", False, raising=False)
+    monkeypatch.setattr(train, "torch", SimpleNamespace(save=always_fail))
     with pytest.raises(train.CheckpointSaveError):
         train._safe_torch_save({"a": 1}, tmp_path / "ckpt.pt", retries=1)
