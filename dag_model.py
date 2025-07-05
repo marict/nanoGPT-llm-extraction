@@ -143,8 +143,8 @@ def _rms_rescale(log_stack: list[torch.Tensor]) -> None:
     rms = torch.sqrt((logs**2).mean(dim=-1, keepdim=True) + 1e-6)
     scale = (LOG_LIM / rms).clamp(max=1.0)  # only scale down
     # Apply scaling only to the most recent entry to avoid in-place ops on saved tensors
-    if scale.max() < 1.0:  # scaling required
-        log_stack[-1].mul_(scale.squeeze(-1))
+    if (scale < 1).any():  # scale is (B,T,1)
+        log_stack[-1] = log_stack[-1] * scale.squeeze(-1)
 
 
 # ---------------------------------------------------------------------------
@@ -153,16 +153,54 @@ def _rms_rescale(log_stack: list[torch.Tensor]) -> None:
 
 
 def _debug_check(op_name: str, *tensors: torch.Tensor):
-    """Print a warning if any tensor contains NaN or inf (for cloud debugging)."""
-    for t in tensors:
-        if not torch.isfinite(t).all():
-            nan_mask = torch.isnan(t)
-            inf_mask = torch.isinf(t)
-            print(
-                f"[DEBUG] {op_name}: detected non-finite values -> "
-                f"NaN: {nan_mask.sum().item()}  Inf: {inf_mask.sum().item()}"
+    """Verbose debug checker.
+    Prints detailed information (shape, dtype, min/mean/max, and a handful of offending
+    indices/values) the moment a non-finite value is detected in *any* of the provided
+    tensors. This makes it easier to pinpoint the precise source of NaNs/Infs during
+    training without flooding the log with entire tensor dumps.
+    """
+    for idx, t in enumerate(tensors):
+        # Skip None entries just in case
+        if t is None:
+            continue
+
+        # Fast path: only continue if something is non-finite
+        if torch.isfinite(t).all():
+            continue
+
+        nan_mask = torch.isnan(t)
+        inf_mask = torch.isinf(t)
+        nan_cnt = int(nan_mask.sum())
+        inf_cnt = int(inf_mask.sum())
+
+        # Basic tensor meta
+        print(
+            f"[DEBUG] {op_name}: tensor#{idx} shape={tuple(t.shape)} dtype={t.dtype} "
+            f"-> NaN: {nan_cnt}  Inf: {inf_cnt}"
+        )
+
+        # Compute simple stats on finite values (cast to fp32 for safety)
+        finite_vals = t[torch.isfinite(t)].float()
+        if finite_vals.numel() > 0:
+            stats = (
+                float(finite_vals.min()),
+                float(finite_vals.mean()),
+                float(finite_vals.max()),
             )
-            break
+            print(f"           finite stats (min/mean/max): {stats}")
+
+        # Show up to first 5 bad indices & their values for pinpointing
+        bad_idx = (~torch.isfinite(t)).nonzero(as_tuple=False)
+        for j, coord in enumerate(bad_idx[:5]):
+            coord_tuple = tuple(coord.tolist())
+            bad_val = t[coord_tuple].item()
+            print(f"           [{j}] index={coord_tuple} value={bad_val}")
+
+        # Optional: raise to stop execution immediately (uncomment if desired)
+        # raise RuntimeError("NaN/Inf detected; see logs above for details")
+
+        # Only log first offending tensor per call to reduce noise
+        break
 
 
 def multiply_log_space(
