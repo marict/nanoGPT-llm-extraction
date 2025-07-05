@@ -174,14 +174,14 @@ def min_op(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return torch.minimum(x, y)
 
 
-op_funcs = [add, identity, multiply, subtract, divide, power, log, max_op, min_op]
+# Remove power for now
+op_funcs = [add, identity, multiply, subtract, divide, log, max_op, min_op]
 op_names = [
     "add",
     "identity",
     "multiply",
     "subtract",
     "divide",
-    "power",
     "log",
     "max_op",
     "min_op",
