@@ -874,7 +874,15 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                         dag_logger.setup_gradient_tracking(raw_model)
 
                     X, Y = get_batch("train")
-                    scaler.scale(loss).backward()
+                    scaler.scale(loss).backward(retain_graph=True)
+                    for n, p in model.named_parameters():
+                        if p.grad is not None and (
+                            torch.isnan(p.grad).any() or torch.isinf(p.grad).any()
+                        ):
+                            print(
+                                f"[GRAD NAN] {n}  →  min={p.grad.min():.3e}  max={p.grad.max():.3e}"
+                            )
+                            break
 
                 # Compute logging statistics (populates non-gradient metrics)
                 dag_logger.compute_log_statistics(raw_model)
