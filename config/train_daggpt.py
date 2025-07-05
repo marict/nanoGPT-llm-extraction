@@ -1,6 +1,6 @@
 name = "daggpt"
 
-batch_size = 32
+batch_size = 16
 block_size = 512
 gradient_accumulation_steps = 4
 
@@ -36,7 +36,7 @@ dataset = "proofpile"
 
 backend = "nccl"
 dtype = "bfloat16"
-compile = True  # Currently broken for dag model
+compile = True
 
 always_save_checkpoint = True
 init_from = "scratch"
