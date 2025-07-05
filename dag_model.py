@@ -712,12 +712,10 @@ class GPT(nn.Module):
         # Run DAG processing (handles everything internally)
         dag_hidden = self.dag(original_hidden)
 
-        # clamp only the gradient flowing *out* of the DAG
+        # Clamp only the gradient flowing *out* of the DAG (helps stabilise training)
         dag_hidden.register_hook(lambda g: g.clamp_(min=-GRAD_CAP, max=GRAD_CAP))
 
-        mixed_hidden = original_hidden + gate * dag_hidden
-
-        # Store complete tensor for detailed analysis
+        # Store complete tensor for detailed analysis (before mixing)
         self.final_values = self.dag.final_values
 
         # ------------------------------------------------------------------ #
