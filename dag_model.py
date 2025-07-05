@@ -157,6 +157,8 @@ def _rms_rescale(log_stack: list[torch.Tensor]) -> None:
 # Enable expensive NaN/Inf debug checks when environment variable is set.
 # Usage: DAGGPT_DEBUG_NANS=1 python train.py ...
 ENABLE_DEBUG_NAN_CHECKS = os.getenv("DAGGPT_DEBUG_NANS", "0") == "1"
+if ENABLE_DEBUG_NAN_CHECKS:
+    print("dag_model: DEBUG_NAN_CHECKS is enabled")
 
 
 def _debug_check(op_name: str, *tensors: torch.Tensor):
