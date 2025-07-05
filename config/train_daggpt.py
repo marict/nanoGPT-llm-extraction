@@ -1,8 +1,8 @@
 name = "daggpt"
 
-batch_size = 16
+batch_size = 32
 block_size = 512
-gradient_accumulation_steps = 2
+gradient_accumulation_steps = 4
 
 # Should be enough to show saturation
 max_iters = 15_000
@@ -36,7 +36,7 @@ dataset = "proofpile"
 
 backend = "nccl"
 dtype = "bfloat16"
-compile = False  # Currently broken for dag model
+compile = True  # Currently broken for dag model
 
 always_save_checkpoint = True
 init_from = "scratch"
