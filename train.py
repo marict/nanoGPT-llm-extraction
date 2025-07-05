@@ -339,6 +339,34 @@ def find_latest_checkpoint(cfg: TrainConfig) -> Path | None:
     return latest_file
 
 
+def _check_for_nonfinite(named_tensors_iter, label: str) -> None:
+    """Scan an iterator of (name, tensor) pairs and raise if any tensor
+    contains NaN or Inf. Prints summary and a few offending indices first.
+
+    Args:
+        named_tensors_iter: iterable yielding (str, Tensor)
+        label: descriptive prefix (e.g. "GRAD", "PARAM")
+    """
+    for name, t in named_tensors_iter:
+        if t is None:
+            continue
+        if torch.isfinite(t).all():
+            continue
+        nan_cnt = int(torch.isnan(t).sum())
+        inf_cnt = int(torch.isinf(t).sum())
+        print(
+            f"[{label} NAN] {name} → NaN:{nan_cnt} Inf:{inf_cnt} shape={tuple(t.shape)}"
+        )
+
+        # Show up to five offending coordinates/values for quick diagnosis
+        bad_idx = (~torch.isfinite(t)).nonzero(as_tuple=False)[:5]
+        for j, coord in enumerate(bad_idx):
+            coord_tuple = tuple(coord.tolist())
+            bad_val = t[coord_tuple].item()
+            print(f"   [{j}] idx={coord_tuple}  val={bad_val}")
+        raise RuntimeError(f"{label} contains non-finite values (see log above)")
+
+
 # --------------------------------------------------------------------------- #
 # Core training routine
 # --------------------------------------------------------------------------- #
@@ -874,7 +902,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                         dag_logger.setup_gradient_tracking(raw_model)
 
                     X, Y = get_batch("train")
-                    scaler.scale(loss).backward(retain_graph=True)
+                    scaler.scale(loss).backward()
                     for n, p in model.named_parameters():
                         if p.grad is not None and (
                             torch.isnan(p.grad).any() or torch.isinf(p.grad).any()
@@ -892,8 +920,32 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
 
                 if cfg.grad_clip:
                     scaler.unscale_(optimizer)
+                    # Gradient sanity check BEFORE clipping so we detect raw overflows
+                    _check_for_nonfinite(
+                        (
+                            (n, p.grad)
+                            for n, p in model.named_parameters()
+                            if p.grad is not None
+                        ),
+                        "GRAD",
+                    )
                     torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+                else:
+                    # Even if we're not clipping we still want to unscale and check
+                    scaler.unscale_(optimizer)
+                    _check_for_nonfinite(
+                        (
+                            (n, p.grad)
+                            for n, p in model.named_parameters()
+                            if p.grad is not None
+                        ),
+                        "GRAD",
+                    )
                 scaler.step(optimizer)
+                # Parameter sanity check immediately after the update but before scaler.update()
+                _check_for_nonfinite(
+                    ((n, p) for n, p in model.named_parameters()), "PARAM"
+                )
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
 
