@@ -168,10 +168,6 @@ def _debug_check(op_name: str, *tensors: torch.Tensor):
     tensors. This makes it easier to pinpoint the precise source of NaNs/Infs during
     training without flooding the log with entire tensor dumps.
     """
-    # Fast exit if debug checks are globally disabled
-    if not ENABLE_DEBUG_NAN_CHECKS:
-        return
-
     for idx, t in enumerate(tensors):
         # Skip None entries just in case
         if t is None:
@@ -218,7 +214,8 @@ def multiply_log_space(
     sgn_out = sx * sy
     log_out = lx + ly
     log_out = _clip_log(log_out)
-    _debug_check("multiply_log_space", sgn_out, log_out)
+    if ENABLE_DEBUG_NAN_CHECKS:
+        _debug_check("multiply_log_space", sgn_out, log_out)
     return sgn_out, log_out
 
 
@@ -228,7 +225,8 @@ def divide_log_space(
     sgn_out = sx * sy
     log_out = lx - ly
     log_out = _clip_log(log_out)
-    _debug_check("divide_log_space", sgn_out, log_out)
+    if ENABLE_DEBUG_NAN_CHECKS:
+        _debug_check("divide_log_space", sgn_out, log_out)
     return sgn_out, log_out
 
 
@@ -308,7 +306,8 @@ def add_log_space(
         l_out = torch.where(opp_branch, new_log, l_out)
 
     l_out = _clip_log(l_out)
-    _debug_check("add_log_space", s_out, l_out)
+    if ENABLE_DEBUG_NAN_CHECKS:
+        _debug_check("add_log_space", s_out, l_out)
     return s_out, l_out
 
 
@@ -317,7 +316,8 @@ def subtract_log_space(
 ):
     # Subtraction = addition with negated second operand
     s_out, l_out = add_log_space(sx, lx, -sy, ly)
-    _debug_check("subtract_log_space", s_out, l_out)
+    if ENABLE_DEBUG_NAN_CHECKS:
+        _debug_check("subtract_log_space", s_out, l_out)
     return s_out, l_out
 
 
@@ -484,16 +484,19 @@ class DifferentiableDAG(nn.Module):
         # Pre-process hidden states before value extraction
         incoming_hidden = self.pre_dag(original_hidden)
 
-        _debug_check("incoming_hidden", incoming_hidden)
+        if ENABLE_DEBUG_NAN_CHECKS:
+            _debug_check("incoming_hidden", incoming_hidden)
 
         # Predict sign & magnitude in bounded range
         seed_h = self.seed_norm(incoming_hidden)
 
-        _debug_check("seed_h", seed_h)
+        if ENABLE_DEBUG_NAN_CHECKS:
+            _debug_check("seed_h", seed_h)
 
         signlog = self.embed_to_signlog(seed_h)  # (B,T,2)
 
-        _debug_check("signlog", signlog)
+        if ENABLE_DEBUG_NAN_CHECKS:
+            _debug_check("signlog", signlog)
         sign_logits = signlog[..., 0]
         mag_logits = signlog[..., 1]
 
@@ -503,7 +506,8 @@ class DifferentiableDAG(nn.Module):
         # Magnitude: map (−∞,∞)→(0,LOG_LIM) via sigmoid
         init_log = LOG_LIM * torch.sigmoid(mag_logits)
 
-        _debug_check("seed", init_sgn, init_log)
+        if ENABLE_DEBUG_NAN_CHECKS:
+            _debug_check("seed", init_sgn, init_log)
 
         # Signed log magnitude seed for plan predictor
         seed_feat = torch.stack((init_sgn, init_log), dim=-1)  # (B,T,2)
@@ -529,13 +533,23 @@ class DifferentiableDAG(nn.Module):
             current_sgn = torch.stack(sgn_stack, dim=-1)  # (B,T,S)
             current_log = torch.stack(log_stack, dim=-1)  # (B,T,S)
 
-            # Soft-attention may blend sign information; discretise with sign() to keep {-1,0,1}
+            # ---- Sign discretisation -------------------------------------
+            # We want forward values exactly in {−1, +1} (needed by downstream
+            # log-space ops) *but* we also want gradients to flow.  Use a
+            # straight-through estimator (STE): discrete sign in the forward
+            # pass, identity gradient in the backward pass.
+
             v1_sgn_raw = (att1_step * current_sgn).sum(-1)
             v2_sgn_raw = (att2_step * current_sgn).sum(-1)
-            v1_sgn = torch.sign(v1_sgn_raw)
-            v1_sgn = torch.where(v1_sgn == 0, torch.ones_like(v1_sgn), v1_sgn)
-            v2_sgn = torch.sign(v2_sgn_raw)
-            v2_sgn = torch.where(v2_sgn == 0, torch.ones_like(v2_sgn), v2_sgn)
+
+            def _ste_sign(x: torch.Tensor):
+                disc = torch.sign(x)
+                disc = torch.where(disc == 0, torch.ones_like(disc), disc)
+                # Straight-through: replace forward value but keep raw grad
+                return disc + (x - disc).detach()
+
+            v1_sgn = _ste_sign(v1_sgn_raw)
+            v2_sgn = _ste_sign(v2_sgn_raw)
 
             # Log magnitudes are mixed linearly; this is a heuristic but preserves differentiability
             v1_log = (att1_step * current_log).sum(-1)
@@ -722,7 +736,8 @@ class GPT(nn.Module):
         # Store original hidden states for logging
         self.last_original_hidden = original_hidden
 
-        _debug_check("original_hidden", original_hidden)
+        if ENABLE_DEBUG_NAN_CHECKS:
+            _debug_check("original_hidden", original_hidden)
 
         # Run DAG processing (handles everything internally)
         dag_hidden = self.dag(original_hidden)
