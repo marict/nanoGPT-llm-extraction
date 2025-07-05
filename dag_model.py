@@ -421,8 +421,13 @@ class DifferentiableDAG(nn.Module):
         log_raw = signlog[..., 1]
 
         # Soft sign with controllable sharpness; differentiable everywhere
+        RAW_LIM = 15.0  # same scale as LOG_LIM
+        sign_logits = sign_logits.clamp(min=-RAW_LIM, max=RAW_LIM)
         init_sgn = torch.tanh(sign_logits * SIGN_SCALE)
-        init_log = _clip_log(F.softplus(log_raw) + 1e-8)
+        log_raw_clamped = log_raw.clamp(min=-RAW_LIM, max=RAW_LIM).float()  # fp32 math
+        init_log = _clip_log(torch.softplus(log_raw_clamped) + 1e-6).to(log_raw.dtype)
+        # after init_log is computed
+        _debug_check("seed", init_sgn, init_log)
 
         # Signed log magnitude seed for plan predictor
         seed_feat = torch.stack((init_sgn, init_log), dim=-1)  # (B,T,2)
