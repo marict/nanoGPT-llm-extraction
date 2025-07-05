@@ -321,8 +321,7 @@ op_funcs = [
     divide_log_space,
     identity_log_space,
 ]
-# op_names = ["add", "subtract", "multiply", "divide", "identity"]
-op_names = ["add", "multiply", "divide", "identity"]
+op_names = ["add", "subtract", "multiply", "divide", "identity"]
 
 
 def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
