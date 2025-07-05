@@ -56,13 +56,14 @@ class DAGLogger:
 
         def save_dag_output_grad(grad):
             if grad is None:
-                grad_norm = 0
-                grad_mean = 0
-                grad_std = 0
-            else:
-                grad_norm = grad.detach().norm().item()
-                grad_mean = grad.detach().mean().item()
-                grad_std = grad.detach().std().item()
+                # Log zero so dashboards remain continuous even when gate closes
+                self.captured_gradients["grad/dag_output_norm"] = 0.0
+                self.captured_gradients["grad/dag_output_mean"] = 0.0
+                self.captured_gradients["grad/dag_output_std"] = 0.0
+                return
+            grad_norm = grad.detach().norm().item()
+            grad_mean = grad.detach().mean().item()
+            grad_std = grad.detach().std().item()
 
             self.captured_gradients["grad/dag_output_norm"] = grad_norm
             self.captured_gradients["grad/dag_output_mean"] = grad_mean
@@ -80,11 +81,11 @@ class DAGLogger:
 
         def save_dag_scratch_grad(grad):
             if grad is None:
-                grad_norm = 0
-                grad_mean = 0
-            else:
-                grad_norm = grad.detach().norm().item()
-                grad_mean = grad.detach().mean().item()
+                self.captured_gradients["grad/dag_scratch_norm"] = 0.0
+                self.captured_gradients["grad/dag_scratch_mean"] = 0.0
+                return
+            grad_norm = grad.detach().norm().item()
+            grad_mean = grad.detach().mean().item()
 
             self.captured_gradients["grad/dag_scratch_norm"] = grad_norm
             self.captured_gradients["grad/dag_scratch_mean"] = grad_mean
@@ -107,9 +108,9 @@ class DAGLogger:
 
         def save_orig_hidden_grad(grad):
             if grad is None:
-                grad_mean = 0
-            else:
-                grad_mean = grad.detach().mean().item()
+                self.captured_gradients["grad/orig_hidden_mean"] = 0.0
+                return
+            grad_mean = grad.detach().mean().item()
             self.captured_gradients["grad/orig_hidden_mean"] = grad_mean
 
         hook = model.last_original_hidden.register_hook(save_orig_hidden_grad)
@@ -123,9 +124,9 @@ class DAGLogger:
         # Capture gradients for gate parameters
         def save_gate_w_d_grad(grad):
             if grad is None:
-                grad_norm = 0
-            else:
-                grad_norm = grad.detach().norm().item()
+                self.captured_gradients["grad/gate_w_d"] = 0.0
+                return
+            grad_norm = grad.detach().norm().item()
             self.captured_gradients["grad/gate_w_d"] = grad_norm
 
         hook = model.gate_w_d.register_hook(save_gate_w_d_grad)
@@ -133,9 +134,9 @@ class DAGLogger:
 
         def save_gate_w_o_grad(grad):
             if grad is None:
-                grad_norm = 0
-            else:
-                grad_norm = grad.detach().norm().item()
+                self.captured_gradients["grad/gate_w_o"] = 0.0
+                return
+            grad_norm = grad.detach().norm().item()
             self.captured_gradients["grad/gate_w_o"] = grad_norm
 
         hook = model.gate_w_o.register_hook(save_gate_w_o_grad)
@@ -460,10 +461,12 @@ class DAGLogger:
 
         def save_op_grad(grad):
             if grad is None:
-                grad_mean = 0
-                op_grads = np.zeros(len(op_names))
-            else:
-                grad_mean = grad.detach().mean().item()
+                # Log zeros for all operation gradients to keep time-series complete
+                self.captured_gradients["op_logits_mean"] = 0.0
+                for op_name in op_names:
+                    self.captured_gradients[f"grad/op/{op_name}"] = 0.0
+                return
+            grad_mean = grad.detach().mean().item()
             op_grads = grad.detach().mean(dim=(0, 1, 2)).cpu().numpy()  # (n_ops,)
 
             self.captured_gradients["op_logits_mean"] = grad_mean
