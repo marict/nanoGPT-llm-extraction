@@ -42,7 +42,7 @@ pip install -q -r requirements-dev.txt
 # debugging env vars
 #---------------------------------------------------------------------------#
 export CUDA_LAUNCH_BLOCKING=1  # helpful for catching async CUDA errors
-#export TORCHINDUCTOR_AUTOTUNE=0 # disable autotune since it's buggy
+export TORCHINDUCTOR_AUTOTUNE=0 # disable autotune since it's buggy
 
 #---------------------------------------------------------------------------#
 # training
