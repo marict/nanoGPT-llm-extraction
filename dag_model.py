@@ -200,7 +200,8 @@ def add_log_space(
         small_log = torch.where(bigger_is_x, ly, lx)
         big_sgn = torch.where(bigger_is_x, sx, sy)
 
-        diff = torch.log1p(-torch.exp(small_log - big_log))
+        delta = torch.clamp(small_log - big_log, max=15.0)
+        diff = torch.log1p(-torch.exp(delta))
         # Perfect cancellation when operands equal magnitude but opposite sign
         zero_res = small_log == big_log
         new_log = big_log + diff
@@ -391,7 +392,7 @@ class DifferentiableDAG(nn.Module):
 
         # Soft sign with controllable sharpness; differentiable everywhere
         init_sgn = torch.tanh(sign_logits * SIGN_SCALE)
-        init_log = _clip_log(F.softplus(log_raw))  # >=0, clipped
+        init_log = _clip_log(F.softplus(log_raw) + 1e-8)
 
         # Signed log magnitude seed for plan predictor
         seed_feat = torch.stack((init_sgn, init_log), dim=-1)  # (B,T,2)
@@ -421,7 +422,9 @@ class DifferentiableDAG(nn.Module):
             v1_sgn_raw = (att1_step * current_sgn).sum(-1)
             v2_sgn_raw = (att2_step * current_sgn).sum(-1)
             v1_sgn = torch.sign(v1_sgn_raw)
+            v1_sgn = torch.where(v1_sgn == 0, torch.ones_like(v1_sgn), v1_sgn)
             v2_sgn = torch.sign(v2_sgn_raw)
+            v2_sgn = torch.where(v2_sgn == 0, torch.ones_like(v2_sgn), v2_sgn)
 
             # Log magnitudes are mixed linearly; this is a heuristic but preserves differentiability
             v1_log = (att1_step * current_log).sum(-1)
