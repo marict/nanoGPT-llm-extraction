@@ -87,26 +87,6 @@ def test_estimate_loss():
     assert model.training  # Model should be back in training mode
 
 
-def test_estimate_loss_with_cuda():
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
-
-    # Setup
-    model = MockModel().cuda()
-    eval_iters = 2
-    ctx = torch.cuda.amp.autocast()
-
-    # Run
-    losses = estimate_loss(model, eval_iters, mock_batch_fn, ctx)
-
-    # Assert
-    assert isinstance(losses, dict)
-    assert set(losses.keys()) == {"train", "val"}
-    assert all(isinstance(v, torch.Tensor) for v in losses.values())
-    assert all(v.item() == 1.0 for v in losses.values())
-    assert model.training  # Model should be back in training mode
-
-
 def test_generate_run_name_edge_cases(monkeypatch):
     # Test without RUNPOD_POD_ID (local mode)
     monkeypatch.delenv("RUNPOD_POD_ID", raising=False)

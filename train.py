@@ -718,11 +718,8 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
 
     compile_start = time.time()
     if cfg.compile:
-        import torch._inductor.config as cfg
-
-        cfg.triton.mm_max_autotune = False  # safest
         print(f"[{time.time() - setup_start:.2f}s] Compiling model")
-        model = torch.compile(model)
+        model = torch.compile(model, fullgraph=True)
         print(
             f"[{time.time() - setup_start:.2f}s] Model compilation completed in {time.time() - compile_start:.2f}s"
         )

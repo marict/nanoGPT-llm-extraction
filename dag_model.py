@@ -244,16 +244,10 @@ def add_log_space(
     sx: torch.Tensor, lx: torch.Tensor, sy: torch.Tensor, ly: torch.Tensor
 ):
     """Addition in log-space with sign handling (vectorised).
-    Args:
-        sx: (B,T) - signed log magnitudes of first operand
-        lx: (B,T) - log magnitudes of first operand
-        sy: (B,T) - signed log magnitudes of second operand
-        ly: (B,T) - log magnitudes of second operand
-
-    Returns:
-        s_out: (B,T) - signed log magnitudes of result
-        l_out: (B,T) - log magnitudes of result
+    Re-written without data-dependent Python control-flow so Torch Dynamo can
+    capture it. All decisions are expressed with tensor operations.
     """
+
     zero_x = sx == 0
     zero_y = sy == 0
 
@@ -261,7 +255,7 @@ def add_log_space(
     s_out = torch.zeros_like(sx)
     l_out = torch.zeros_like(lx)
 
-    # Only-x / only-y cases
+    # Only-x / only-y shortcuts ------------------------------------------------
     only_x = (~zero_x) & zero_y
     only_y = zero_x & (~zero_y)
     s_out = torch.where(only_x, sx, s_out)
@@ -269,42 +263,39 @@ def add_log_space(
     s_out = torch.where(only_y, sy, s_out)
     l_out = torch.where(only_y, ly, l_out)
 
-    # Both non-zero
+    # Both non-zero branch -----------------------------------------------------
     both_nz = (~zero_x) & (~zero_y)
     same_sign = (sx * sy) > 0
+
+    # --- Same-sign path (addition of magnitudes) -----------------------------
     same_branch = both_nz & same_sign
-    if same_branch.any():
-        # Use a single shared sign to guard against rare numerical mismatch
-        common_sgn = torch.sign(sx)  # sx and sy have same sign in this branch
-        s_same, l_same = _add_logs_same_sign(common_sgn, lx, ly)
-        s_out = torch.where(same_branch, s_same, s_out)
-        l_out = torch.where(same_branch, l_same, l_out)
+    # Use a common sign (either +1 or -1) – sx and sy have identical sign here
+    common_sgn = torch.sign(sx)
+    s_same, l_same = _add_logs_same_sign(common_sgn, lx, ly)
+    s_out = torch.where(same_branch, s_same, s_out)
+    l_out = torch.where(same_branch, l_same, l_out)
 
-    # Opposite sign branch
+    # --- Opposite-sign path (subtraction of magnitudes) ----------------------
     opp_branch = both_nz & (~same_sign)
-    if opp_branch.any():
-        bigger_is_x = lx >= ly
-        big_log = torch.where(bigger_is_x, lx, ly)
-        small_log = torch.where(bigger_is_x, ly, lx)
-        big_sgn = torch.where(bigger_is_x, sx, sy)
+    bigger_is_x = lx >= ly
+    big_log = torch.where(bigger_is_x, lx, ly)
+    small_log = torch.where(bigger_is_x, ly, lx)
+    big_sgn = torch.where(bigger_is_x, sx, sy)
 
-        # Ensure delta is sufficiently negative so that exp(delta) < 1 but also
-        # not *too* close to zero, where the derivative of log1p(-exp(delta))
-        # explodes and causes huge gradients. A small safe margin (-1e-3)
-        # prevents this while introducing only <0.1% relative error.
-        delta32 = (small_log - big_log).float().clamp(max=-1e-3, min=-LOG_LIM)
-        diff32 = torch.log1p(-torch.exp(delta32))  # safe in fp32
-        diff = diff32.to(lx.dtype)
-        # Perfect cancellation when operands equal magnitude but opposite sign
-        zero_res = small_log == big_log
-        new_log = big_log + diff
-        new_sgn = big_sgn
-        new_sgn = torch.where(zero_res, torch.zeros_like(new_sgn), new_sgn)
-        new_log = torch.where(zero_res, torch.zeros_like(new_log), new_log)
+    # Ensure delta < -1e-3 to keep gradients bounded
+    delta32 = (small_log - big_log).float().clamp(max=-1e-3, min=-LOG_LIM)
+    diff32 = torch.log1p(-torch.exp(delta32))  # safe in fp32
+    diff = diff32.to(lx.dtype)
 
-        s_out = torch.where(opp_branch, new_sgn, s_out)
-        l_out = torch.where(opp_branch, new_log, l_out)
+    # Perfect cancellation case
+    zero_res = small_log == big_log
+    new_log = torch.where(zero_res, torch.zeros_like(big_log), big_log + diff)
+    new_sgn = torch.where(zero_res, torch.zeros_like(big_sgn), big_sgn)
 
+    s_out = torch.where(opp_branch, new_sgn, s_out)
+    l_out = torch.where(opp_branch, new_log, l_out)
+
+    # Final clip & (optional) debug ------------------------------------------
     l_out = _clip_log(l_out)
     if ENABLE_DEBUG_NAN_CHECKS:
         _debug_check("add_log_space", s_out, l_out)

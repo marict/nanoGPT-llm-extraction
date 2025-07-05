@@ -39,6 +39,12 @@ log "installing python deps"
 pip install -q -r requirements-dev.txt
 
 #---------------------------------------------------------------------------#
+# debugging env vars
+#---------------------------------------------------------------------------#
+export CUDA_LAUNCH_BLOCKING=1  # helpful for catching async CUDA errors
+export TORCHINDUCTOR_AUTOTUNE=0 # disable autotune since it's buggy
+
+#---------------------------------------------------------------------------#
 # training
 #---------------------------------------------------------------------------#
 log_file="/runpod-volume/train_$(date +%Y%m%d_%H%M%S).log"
