@@ -12,6 +12,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 
 import inspect
 import math
+import os
 from dataclasses import dataclass
 
 import torch
@@ -153,6 +154,11 @@ def _rms_rescale(log_stack: list[torch.Tensor]) -> None:
 # ---------------------------------------------------------------------------
 
 
+# Enable expensive NaN/Inf debug checks when environment variable is set.
+# Usage: DAGGPT_DEBUG_NANS=1 python train.py ...
+ENABLE_DEBUG_NAN_CHECKS = os.getenv("DAGGPT_DEBUG_NANS", "0") == "1"
+
+
 def _debug_check(op_name: str, *tensors: torch.Tensor):
     """Verbose debug checker.
     Prints detailed information (shape, dtype, min/mean/max, and a handful of offending
@@ -160,6 +166,10 @@ def _debug_check(op_name: str, *tensors: torch.Tensor):
     tensors. This makes it easier to pinpoint the precise source of NaNs/Infs during
     training without flooding the log with entire tensor dumps.
     """
+    # Fast exit if debug checks are globally disabled
+    if not ENABLE_DEBUG_NAN_CHECKS:
+        return
+
     for idx, t in enumerate(tensors):
         # Skip None entries just in case
         if t is None:
@@ -714,9 +724,6 @@ class GPT(nn.Module):
 
         # Run DAG processing (handles everything internally)
         dag_hidden = self.dag(original_hidden)
-
-        # Clamp only the gradient flowing *out* of the DAG (helps stabilise training)
-        dag_hidden.register_hook(lambda g: g.clamp_(min=-GRAD_CAP, max=GRAD_CAP))
 
         # Store complete tensor for detailed analysis (before mixing)
         self.final_values = self.dag.final_values

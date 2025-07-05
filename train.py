@@ -1077,6 +1077,7 @@ def main() -> None:
     cfg = TrainConfig()
     update_config(cfg, load_config_file(args.config))
     apply_overrides(cfg, overrides)
+
     if args.subset is not None:
         cfg.subset = args.subset
     if args.dag_depth is not None:
