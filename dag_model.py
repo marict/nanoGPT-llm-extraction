@@ -468,9 +468,16 @@ class DifferentiableDAG(nn.Module):
         # Pre-process hidden states before value extraction
         incoming_hidden = self.pre_dag(original_hidden)
 
+        _debug_check("incoming_hidden", incoming_hidden)
+
         # Predict sign & magnitude in bounded range
         seed_h = self.seed_norm(incoming_hidden)
+
+        _debug_check("seed_h", seed_h)
+
         signlog = self.embed_to_signlog(seed_h)  # (B,T,2)
+
+        _debug_check("signlog", signlog)
         sign_logits = signlog[..., 0]
         mag_logits = signlog[..., 1]
 
