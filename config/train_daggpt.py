@@ -1,18 +1,18 @@
 name = "daggpt"
 
-batch_size = 64
+batch_size = 256
 block_size = 512
-gradient_accumulation_steps = 4
+gradient_accumulation_steps = 1
 
 # Should be enough to show saturation
 max_iters = 15_000
 lr_decay_iters = 15_000
 
-eval_interval = 1000
+eval_interval = 500
 eval_iters = 20
 log_interval = 50
 
-weight_decay = 1e-1
+weight_decay = 0.05
 
 dag_depth = 4
 
@@ -20,7 +20,7 @@ dag_depth = 4
 n_layer = 12
 n_head = 12
 n_embd = 768
-dropout = 0.1
+dropout = 0.01
 bias = True
 
 learning_rate = 3e-4
@@ -29,7 +29,7 @@ beta2 = 0.95
 grad_clip = 1.0
 
 decay_lr = True
-warmup_iters = 10000
+warmup_iters = 2_000
 min_lr = 3e-5
 
 dataset = "proofpile"
