@@ -316,7 +316,7 @@ def identity_log_space(sx: torch.Tensor, lx: torch.Tensor, *_):
 # Replace op list with log-space versions (order important for op_names)
 op_funcs = [
     add_log_space,
-    # subtract_log_space,
+    subtract_log_space,
     multiply_log_space,
     divide_log_space,
     identity_log_space,
