@@ -184,6 +184,9 @@ class TrainConfig:
     compile: bool = True
     keep_alive: bool = False  # Keep pod alive after training (disables auto-stop)
 
+    # Debugging flag: if True, run expensive NaN/Inf checks on gradients & params
+    check_nans: bool = False
+
     # Optional run note (appended to run name)
     note: str | None = None
 
@@ -921,31 +924,33 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                 if cfg.grad_clip:
                     scaler.unscale_(optimizer)
                     # Gradient sanity check BEFORE clipping so we detect raw overflows
-                    _check_for_nonfinite(
-                        (
-                            (n, p.grad)
-                            for n, p in model.named_parameters()
-                            if p.grad is not None
-                        ),
-                        "GRAD",
-                    )
+                    if cfg.check_nans:
+                        _check_for_nonfinite(
+                            (
+                                (n, p.grad)
+                                for n, p in model.named_parameters()
+                                if p.grad is not None
+                            ),
+                            "GRAD",
+                        )
                     torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
                 else:
-                    # Even if we're not clipping we still want to unscale and check
                     scaler.unscale_(optimizer)
-                    _check_for_nonfinite(
-                        (
-                            (n, p.grad)
-                            for n, p in model.named_parameters()
-                            if p.grad is not None
-                        ),
-                        "GRAD",
-                    )
+                    if cfg.check_nans:
+                        _check_for_nonfinite(
+                            (
+                                (n, p.grad)
+                                for n, p in model.named_parameters()
+                                if p.grad is not None
+                            ),
+                            "GRAD",
+                        )
                 scaler.step(optimizer)
                 # Parameter sanity check immediately after the update but before scaler.update()
-                _check_for_nonfinite(
-                    ((n, p) for n, p in model.named_parameters()), "PARAM"
-                )
+                if cfg.check_nans:
+                    _check_for_nonfinite(
+                        ((n, p) for n, p in model.named_parameters()), "PARAM"
+                    )
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
 

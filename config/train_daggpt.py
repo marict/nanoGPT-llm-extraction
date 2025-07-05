@@ -40,3 +40,4 @@ compile = False  # Currently broken for dag model
 
 always_save_checkpoint = True
 init_from = "scratch"
+check_nans = True
