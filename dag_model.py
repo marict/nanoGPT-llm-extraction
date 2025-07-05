@@ -706,6 +706,8 @@ class GPT(nn.Module):
         # Store original hidden states for logging
         self.last_original_hidden = original_hidden
 
+        _debug_check("original_hidden", original_hidden)
+
         # Run DAG processing (handles everything internally)
         dag_hidden = self.dag(original_hidden)
 
