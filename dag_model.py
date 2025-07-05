@@ -196,11 +196,7 @@ def _debug_check(op_name: str, *tensors: torch.Tensor):
             bad_val = t[coord_tuple].item()
             print(f"           [{j}] index={coord_tuple} value={bad_val}")
 
-        # Optional: raise to stop execution immediately (uncomment if desired)
-        # raise RuntimeError("NaN/Inf detected; see logs above for details")
-
-        # Only log first offending tensor per call to reduce noise
-        break
+        raise RuntimeError("NaN/Inf detected; see logs above for details")
 
 
 def multiply_log_space(
