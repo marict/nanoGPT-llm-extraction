@@ -143,10 +143,9 @@ def _rms_rescale(log_stack: list[torch.Tensor]) -> None:
     # Compute rms over current stack (B,T)
     logs = torch.stack(log_stack, dim=-1)  # (B,T,S)
     rms = torch.sqrt((logs**2).mean(dim=-1, keepdim=True) + 1e-6)
-    scale = (LOG_LIM / rms).clamp(max=1.0)  # only scale down
-    # Apply scaling only to the most recent entry to avoid in-place ops on saved tensors
-    if (scale < 1).any():  # scale is (B,T,1)
-        log_stack[-1] = log_stack[-1] * scale.squeeze(-1)
+    scale = (LOG_LIM / rms).clamp(max=1.0)  # (B,T,1) ≤ 1
+    # Always apply scaling; when scale==1 this is a no-op, so no Python branch.
+    log_stack[-1] = log_stack[-1] * scale.squeeze(-1)
 
 
 # ---------------------------------------------------------------------------
