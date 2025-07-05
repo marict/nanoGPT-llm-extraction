@@ -129,12 +129,32 @@ def _clip_log(log_t: torch.Tensor) -> torch.Tensor:
     return torch.tanh(log_t / LOG_LIM) * LOG_LIM
 
 
+# ---------------------------------------------------------------------------
+# Debug utility
+# ---------------------------------------------------------------------------
+
+
+def _debug_check(op_name: str, *tensors: torch.Tensor):
+    """Print a warning if any tensor contains NaN or inf (for cloud debugging)."""
+    for t in tensors:
+        if not torch.isfinite(t).all():
+            nan_mask = torch.isnan(t)
+            inf_mask = torch.isinf(t)
+            print(
+                f"[DEBUG] {op_name}: detected non-finite values -> "
+                f"NaN: {nan_mask.sum().item()}  Inf: {inf_mask.sum().item()}"
+            )
+            break
+
+
 def multiply_log_space(
     sx: torch.Tensor, lx: torch.Tensor, sy: torch.Tensor, ly: torch.Tensor
 ):
     sgn_out = sx * sy
     log_out = lx + ly
-    return sgn_out, _clip_log(log_out)
+    log_out = _clip_log(log_out)
+    _debug_check("multiply_log_space", sgn_out, log_out)
+    return sgn_out, log_out
 
 
 def divide_log_space(
@@ -142,7 +162,9 @@ def divide_log_space(
 ):
     sgn_out = sx * sy
     log_out = lx - ly
-    return sgn_out, _clip_log(log_out)
+    log_out = _clip_log(log_out)
+    _debug_check("divide_log_space", sgn_out, log_out)
+    return sgn_out, log_out
 
 
 # Helper when operands share the same sign
@@ -214,6 +236,7 @@ def add_log_space(
         l_out = torch.where(opp_branch, new_log, l_out)
 
     l_out = _clip_log(l_out)
+    _debug_check("add_log_space", s_out, l_out)
     return s_out, l_out
 
 
@@ -221,7 +244,9 @@ def subtract_log_space(
     sx: torch.Tensor, lx: torch.Tensor, sy: torch.Tensor, ly: torch.Tensor
 ):
     # Subtraction = addition with negated second operand
-    return add_log_space(sx, lx, -sy, ly)
+    s_out, l_out = add_log_space(sx, lx, -sy, ly)
+    _debug_check("subtract_log_space", s_out, l_out)
+    return s_out, l_out
 
 
 def identity_log_space(sx: torch.Tensor, lx: torch.Tensor, *_):
