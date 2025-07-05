@@ -54,6 +54,8 @@ class DAGLogger:
         ), "dag.final_hidden does not require gradients"
 
         def save_dag_output_grad(grad):
+            if grad is None:
+                raise RuntimeError("dag output grad is None")
             grad_norm = grad.detach().norm().item()
             grad_mean = grad.detach().mean().item()
             grad_std = grad.detach().std().item()
@@ -73,6 +75,8 @@ class DAGLogger:
         ), "dag.final_values does not require gradients"
 
         def save_dag_scratch_grad(grad):
+            if grad is None:
+                raise RuntimeError("dag scratch grad is None")
             grad_norm = grad.detach().norm().item()
             grad_mean = grad.detach().mean().item()
 
@@ -96,6 +100,8 @@ class DAGLogger:
         ), "last_original_hidden does not require gradients"
 
         def save_orig_hidden_grad(grad):
+            if grad is None:
+                raise RuntimeError("orig hidden grad is None")
             self.captured_gradients["grad/orig_hidden_mean"] = (
                 grad.detach().mean().item()
             )
@@ -110,12 +116,16 @@ class DAGLogger:
 
         # Capture gradients for gate parameters
         def save_gate_w_d_grad(grad):
+            if grad is None:
+                raise RuntimeError("gate_w_d grad is None")
             self.captured_gradients["grad/gate_w_d"] = grad.detach().norm().item()
 
         hook = model.gate_w_d.register_hook(save_gate_w_d_grad)
         self.gradient_hooks.append(hook)
 
         def save_gate_w_o_grad(grad):
+            if grad is None:
+                raise RuntimeError("gate_w_o grad is None")
             self.captured_gradients["grad/gate_w_o"] = grad.detach().norm().item()
 
         hook = model.gate_w_o.register_hook(save_gate_w_o_grad)
@@ -437,6 +447,8 @@ class DAGLogger:
         ), "last_operation_probs_full does not require gradients"
 
         def save_op_grad(grad):
+            if grad is None:
+                raise RuntimeError("op grad is None")
             # grad shape: (B, T, dag_depth, n_ops)
             self.captured_gradients["op_logits_mean"] = grad.detach().mean().item()
             # Average over batch, time, and steps to get per-operation gradients
