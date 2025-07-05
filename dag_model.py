@@ -122,6 +122,7 @@ class Block(nn.Module):
 # ---------------------------------------------------------------------------
 LOG_LIM = 15.0  # Bound on log-magnitudes to avoid numerical instabilities
 SIGN_SCALE = 5.0  # Controls softness of sign prediction at intake
+GRAD_CAP = 1.0  # try 0.1–10.0 depending on bfloat16/float16 range
 
 
 def _clip_log(log_t: torch.Tensor) -> torch.Tensor:
@@ -711,6 +712,11 @@ class GPT(nn.Module):
         # Run DAG processing (handles everything internally)
         dag_hidden = self.dag(original_hidden)
 
+        # clamp only the gradient flowing *out* of the DAG
+        dag_hidden.register_hook(lambda g: g.clamp_(min=-GRAD_CAP, max=GRAD_CAP))
+
+        mixed_hidden = original_hidden + gate * dag_hidden
+
         # Store complete tensor for detailed analysis
         self.final_values = self.dag.final_values
 
@@ -854,7 +860,7 @@ class GPT(nn.Module):
         use_fused = fused_available and device_type == "cuda"
         extra_args = dict(fused=True) if use_fused else dict()
         optimizer = torch.optim.AdamW(
-            optim_groups, lr=learning_rate, betas=betas, foreach=True, **extra_args
+            optim_groups, lr=learning_rate, betas=betas, **extra_args
         )
         print(f"using fused AdamW: {use_fused}")
 
