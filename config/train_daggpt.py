@@ -1,6 +1,6 @@
 name = "daggpt"
 
-batch_size = 16
+batch_size = 64
 block_size = 512
 gradient_accumulation_steps = 4
 
@@ -14,7 +14,7 @@ log_interval = 50
 
 weight_decay = 1e-1
 
-dag_depth = 8
+dag_depth = 4
 
 # n_embed must be divisible by n_head
 n_layer = 12
@@ -36,7 +36,7 @@ dataset = "proofpile"
 
 backend = "nccl"
 dtype = "bfloat16"
-compile = False
+compile = True
 
 always_save_checkpoint = True
 init_from = "scratch"
