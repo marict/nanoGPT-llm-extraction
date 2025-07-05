@@ -223,6 +223,8 @@ class DAGLogger:
 
         # Operation probability statistics (average over batch, time and DAG steps)
         with torch.no_grad():
+            if model.dag.plan_predictor.last_operation_probs_full is None:
+                raise RuntimeError("last_operation_probs_full is None")
             probs = model.dag.plan_predictor.last_operation_probs_full.detach()
             mean_probs = probs.mean(dim=(0, 1, 2))  # (n_ops,)
             self.logging_data["op_probs"] = {
