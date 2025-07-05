@@ -136,16 +136,23 @@ def _clip_log(log_t: torch.Tensor) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 
-def _rms_rescale(log_stack: list[torch.Tensor]) -> None:
-    """In-place rescale of the *last* entry in log_stack so that the running RMS
-    over the stack equals LOG_LIM. Works per-token, keeps gradients."""
+def _rms_rescale(log_buf: torch.Tensor, k: int):
+    """In-place rescale of ``log_buf[..., k]`` so that the RMS over
+    ``log_buf[..., : k + 1]`` equals ``LOG_LIM``.
 
-    # Compute rms over current stack (B,T)
-    logs = torch.stack(log_stack, dim=-1)  # (B,T,S)
-    rms = torch.sqrt((logs**2).mean(dim=-1, keepdim=True) + 1e-6)
-    scale = (LOG_LIM / rms).clamp(max=1.0)  # (B,T,1) ≤ 1
-    # Always apply scaling; when scale==1 this is a no-op, so no Python branch.
-    log_stack[-1] = log_stack[-1] * scale.squeeze(-1)
+    This implementation works directly on a pre-allocated scratch buffer
+    (B, T, S) without constructing intermediate stacks, making it friendly
+    to autograd versioning and Torch Dynamo tracing.
+
+    Args:
+        log_buf: Tensor of shape (B, T, S) containing per-token log magnitudes.
+        k:       Integer index (0-based) of the most recently written slot.
+    """
+
+    slice_ = log_buf[..., : k + 1]
+    rms = torch.sqrt((slice_**2).mean(dim=-1, keepdim=True) + 1e-6)
+    scale = (LOG_LIM / rms).clamp(max=1.0)  # ≤ 1
+    log_buf[..., k] *= scale.squeeze(-1)
 
 
 # ---------------------------------------------------------------------------
@@ -502,9 +509,16 @@ class DifferentiableDAG(nn.Module):
         # Signed log magnitude seed for plan predictor
         seed_feat = torch.stack((init_sgn, init_log), dim=-1)  # (B,T,2)
 
-        # Scratch stacks (append-only)
-        sgn_stack = [init_sgn]
-        log_stack = [init_log]
+        # ------------------------------------------------------------------ #
+        # Scratch value buffers (B,T,S)  with S = dag_depth+1
+        # We avoid repeated torch.stack() calls by pre-allocating the full
+        # buffer and writing in-place. k tracks the index of the last valid
+        # entry (0-based).
+        # ------------------------------------------------------------------ #
+
+        # Start buffers with initial seed, will grow via torch.cat each step
+        sgn_buf = init_sgn.unsqueeze(-1)  # (B,T,1)
+        log_buf = init_log.unsqueeze(-1)  # (B,T,1)
 
         # Generate DAG plan (vectorised) using signed-log seed
         operand1_probs, operand2_probs, operation_probs = self.plan_predictor(
@@ -516,12 +530,12 @@ class DifferentiableDAG(nn.Module):
             att2 = operand2_probs[:, :, step, :]
             op_w = operation_probs[:, :, step, :]  # (B,T,n_ops)
 
-            S_curr = len(sgn_stack)
+            S_curr = sgn_buf.size(-1)
             att1_step = att1[..., :S_curr]
             att2_step = att2[..., :S_curr]
 
-            current_sgn = torch.stack(sgn_stack, dim=-1)  # (B,T,S)
-            current_log = torch.stack(log_stack, dim=-1)  # (B,T,S)
+            current_sgn = sgn_buf  # already (B,T,S)
+            current_log = log_buf
 
             # ---- Sign discretisation -------------------------------------
             # We want forward values exactly in {−1, +1} (needed by downstream
@@ -533,9 +547,10 @@ class DifferentiableDAG(nn.Module):
             v2_sgn_raw = (att2_step * current_sgn).sum(-1)
 
             def _ste_sign(x: torch.Tensor):
+                """Straight-through estimator for sign."""
                 disc = torch.sign(x)
                 disc = torch.where(disc == 0, torch.ones_like(disc), disc)
-                # Straight-through: replace forward value but keep raw grad
+                # Replace forward value but keep raw grad
                 return disc + (x - disc).detach()
 
             v1_sgn = _ste_sign(v1_sgn_raw)
@@ -554,14 +569,17 @@ class DifferentiableDAG(nn.Module):
             new_sgn = (op_w * outs_sgn_t).sum(-1)
             new_log = (op_w * outs_log_t).sum(-1)
 
-            sgn_stack.append(new_sgn)
-            log_stack.append(new_log)
+            # Use helper to compute scaled value without in-place interfering
+            tmp_buf = torch.cat((log_buf, new_log.unsqueeze(-1)), dim=-1).clone()
+            _rms_rescale(tmp_buf, tmp_buf.size(-1) - 1)
+            new_log_scaled = tmp_buf[..., -1]
 
-            # Smoothly rescale logs to keep RMS within bounds (in-place)
-            _rms_rescale(log_stack)
+            # Append values to buffers (out-of-place concat)
+            sgn_buf = torch.cat((sgn_buf, new_sgn.unsqueeze(-1)), dim=-1)
+            log_buf = torch.cat((log_buf, new_log_scaled.unsqueeze(-1)), dim=-1)
 
-        final_sgn = sgn_stack[-1]
-        final_log = log_stack[-1]
+        final_sgn = sgn_buf[..., -1]
+        final_log = log_buf[..., -1]
 
         final_feat = torch.stack((final_sgn, final_log), dim=-1)  # (B,T,2)
 
@@ -574,8 +592,7 @@ class DifferentiableDAG(nn.Module):
         # Cache for logging
         self.final_hidden = final_hidden
         # Store signed-log for logging compatibility
-        z_stack = [sgn_stack[i] * log_stack[i] for i in range(len(sgn_stack))]
-        self.final_values = torch.stack(z_stack, dim=1)  # (B,S,T)
+        self.final_values = (sgn_buf * log_buf).permute(0, 2, 1).contiguous()  # (B,S,T)
 
         return final_hidden
 

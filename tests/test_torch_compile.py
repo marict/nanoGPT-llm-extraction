@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from dag_model import GPT, GPTConfig
+from dag_model import GPT, GPTConfig, _rms_rescale
 
 
 def test_torch_compile_forward():
@@ -54,12 +54,11 @@ def test_torch_compile_forward_backward():
 
 
 def test_rms_rescale_compile():
-    from dag_model import _rms_rescale
-
     def fn(x):
-        stack = [x.clone(), x.clone()]
-        _rms_rescale(stack)
-        return stack[-1]
+        # Build a simple (B,T,S) buffer with S=2
+        buf = torch.stack([x.clone(), x.clone()], dim=-1)
+        _rms_rescale(buf, 1)
+        return buf[..., 1]
 
     x = torch.randn(2, 3)
     compiled_fn = torch.compile(fn, mode="reduce-overhead")
