@@ -425,7 +425,7 @@ class DifferentiableDAG(nn.Module):
         sign_logits = sign_logits.clamp(min=-RAW_LIM, max=RAW_LIM)
         init_sgn = torch.tanh(sign_logits * SIGN_SCALE)
         log_raw_clamped = log_raw.clamp(min=-RAW_LIM, max=RAW_LIM).float()  # fp32 math
-        init_log = _clip_log(torch.softplus(log_raw_clamped) + 1e-6).to(log_raw.dtype)
+        init_log = _clip_log(F.softplus(log_raw_clamped) + 1e-6).to(log_raw.dtype)
         # after init_log is computed
         _debug_check("seed", init_sgn, init_log)
 
