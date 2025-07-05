@@ -7,6 +7,7 @@ separated from the core training and inference code.
 
 from typing import Dict, List, Optional
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -458,12 +459,13 @@ class DAGLogger:
         def save_op_grad(grad):
             if grad is None:
                 grad_mean = 0
+                op_grads = np.zeros(len(op_names))
             else:
                 grad_mean = grad.detach().mean().item()
-            self.captured_gradients["op_logits_mean"] = grad_mean
-            # grad shape: (B, T, dag_depth, n_ops)
-            # Average over batch, time, and steps to get per-operation gradients
             op_grads = grad.detach().mean(dim=(0, 1, 2)).cpu().numpy()  # (n_ops,)
+
+            self.captured_gradients["op_logits_mean"] = grad_mean
+            # Average over batch, time, and steps to get per-operation gradients
             for i, op_name in enumerate(op_names):
                 self.captured_gradients[f"grad/op/{op_name}"] = float(op_grads[i])
 
