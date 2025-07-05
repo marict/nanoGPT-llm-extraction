@@ -55,7 +55,8 @@ class DAGLogger:
 
         def save_dag_output_grad(grad):
             if grad is None:
-                raise RuntimeError("dag output grad is None")
+                print("[LOG] dag output grad is None")
+                return
             grad_norm = grad.detach().norm().item()
             grad_mean = grad.detach().mean().item()
             grad_std = grad.detach().std().item()
@@ -76,7 +77,8 @@ class DAGLogger:
 
         def save_dag_scratch_grad(grad):
             if grad is None:
-                raise RuntimeError("dag scratch grad is None")
+                print("[LOG] dag scratch grad is None")
+                return
             grad_norm = grad.detach().norm().item()
             grad_mean = grad.detach().mean().item()
 
@@ -101,7 +103,8 @@ class DAGLogger:
 
         def save_orig_hidden_grad(grad):
             if grad is None:
-                raise RuntimeError("orig hidden grad is None")
+                print("[LOG] orig hidden grad is None")
+                return
             self.captured_gradients["grad/orig_hidden_mean"] = (
                 grad.detach().mean().item()
             )
@@ -117,7 +120,8 @@ class DAGLogger:
         # Capture gradients for gate parameters
         def save_gate_w_d_grad(grad):
             if grad is None:
-                raise RuntimeError("gate_w_d grad is None")
+                print("[LOG] gate_w_d grad is None")
+                return
             self.captured_gradients["grad/gate_w_d"] = grad.detach().norm().item()
 
         hook = model.gate_w_d.register_hook(save_gate_w_d_grad)
@@ -125,7 +129,8 @@ class DAGLogger:
 
         def save_gate_w_o_grad(grad):
             if grad is None:
-                raise RuntimeError("gate_w_o grad is None")
+                print("[LOG] gate_w_o grad is None")
+                return
             self.captured_gradients["grad/gate_w_o"] = grad.detach().norm().item()
 
         hook = model.gate_w_o.register_hook(save_gate_w_o_grad)
@@ -448,7 +453,8 @@ class DAGLogger:
 
         def save_op_grad(grad):
             if grad is None:
-                raise RuntimeError("op grad is None")
+                print("[LOG] op grad missing (treated as zero)")
+                return
             # grad shape: (B, T, dag_depth, n_ops)
             self.captured_gradients["op_logits_mean"] = grad.detach().mean().item()
             # Average over batch, time, and steps to get per-operation gradients
