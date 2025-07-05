@@ -56,9 +56,10 @@ def test_torch_compile_forward_backward():
 def test_rms_rescale_compile():
     def fn(x):
         # Build a simple (B,T,S) buffer with S=2
-        buf = torch.stack([x.clone(), x.clone()], dim=-1)
-        _rms_rescale(buf, 1)
-        return buf[..., 1]
+        prev = torch.stack([x.clone(), x.clone()], dim=-1)
+        new = x.clone()
+        scaled = _rms_rescale(prev, new)
+        return scaled
 
     x = torch.randn(2, 3)
     compiled_fn = torch.compile(fn, mode="reduce-overhead")

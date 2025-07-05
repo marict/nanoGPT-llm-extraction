@@ -136,23 +136,22 @@ def _clip_log(log_t: torch.Tensor) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 
-def _rms_rescale(log_buf: torch.Tensor, k: int):
-    """In-place rescale of ``log_buf[..., k]`` so that the RMS over
-    ``log_buf[..., : k + 1]`` equals ``LOG_LIM``.
+def _rms_rescale(prev_logs: torch.Tensor, new_log: torch.Tensor) -> torch.Tensor:
+    """Return a RMS-rescaled version of *new_log* so that, when appended to
+    *prev_logs*, the running RMS equals ``LOG_LIM``.
 
-    This implementation works directly on a pre-allocated scratch buffer
-    (B, T, S) without constructing intermediate stacks, making it friendly
-    to autograd versioning and Torch Dynamo tracing.
+    No in-place mutation → avoids autograd versioning issues.
 
     Args:
-        log_buf: Tensor of shape (B, T, S) containing per-token log magnitudes.
-        k:       Integer index (0-based) of the most recently written slot.
+        prev_logs: (B,T,S) tensor with existing log magnitudes.
+        new_log:   (B,T)   tensor – the candidate log magnitude to append.
+    Returns:
+        new_log_scaled: (B,T) tensor, rescaled.
     """
-
-    slice_ = log_buf[..., : k + 1]
+    slice_ = torch.cat((prev_logs, new_log.unsqueeze(-1)), dim=-1)
     rms = torch.sqrt((slice_**2).mean(dim=-1, keepdim=True) + 1e-6)
-    scale = (LOG_LIM / rms).clamp(max=1.0)  # ≤ 1
-    log_buf[..., k] *= scale.squeeze(-1)
+    scale = (LOG_LIM / rms).clamp(max=1.0)
+    return new_log * scale.squeeze(-1)
 
 
 # ---------------------------------------------------------------------------
@@ -568,11 +567,7 @@ class DifferentiableDAG(nn.Module):
 
             new_sgn = (op_w * outs_sgn_t).sum(-1)
             new_log = (op_w * outs_log_t).sum(-1)
-
-            # Use helper to compute scaled value without in-place interfering
-            tmp_buf = torch.cat((log_buf, new_log.unsqueeze(-1)), dim=-1).clone()
-            _rms_rescale(tmp_buf, tmp_buf.size(-1) - 1)
-            new_log_scaled = tmp_buf[..., -1]
+            new_log_scaled = _rms_rescale(log_buf, new_log)
 
             # Append values to buffers (out-of-place concat)
             sgn_buf = torch.cat((sgn_buf, new_sgn.unsqueeze(-1)), dim=-1)
