@@ -229,13 +229,12 @@ def identity_log_space(sx: torch.Tensor, lx: torch.Tensor, *_):
 
 # Replace op list with log-space versions
 op_funcs = [
-    add_log_space,
     subtract_log_space,
     multiply_log_space,
     divide_log_space,
     identity_log_space,
 ]
-op_names = ["add", "subtract", "multiply", "divide", "identity"]
+op_names = ["subtract", "multiply", "divide", "identity"]
 
 
 def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
