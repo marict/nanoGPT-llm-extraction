@@ -35,7 +35,8 @@ min_lr = 3e-5
 dataset = "proofpile"
 
 backend = "nccl"
-dtype = "bfloat16"
+# dtype = "bfloat16"
+dtype = "float32"
 compile = False  # Currently broken for dag model
 
 always_save_checkpoint = True
