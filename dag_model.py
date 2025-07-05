@@ -118,77 +118,123 @@ class Block(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# DAG operations
+# DAG Log-space arithmetic utilities
 # ---------------------------------------------------------------------------
-def add(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    return x + y
+LOG_LIM = 15.0  # Bound on log-magnitudes to avoid numerical instabilities
+SIGN_SCALE = 5.0  # Controls softness of sign prediction at intake
 
 
-def identity(x: torch.Tensor, _: torch.Tensor) -> torch.Tensor:
-    return x
+def _clip_log(log_t: torch.Tensor) -> torch.Tensor:
+    """Symmetric tanh clipping for log magnitudes."""
+    return torch.tanh(log_t / LOG_LIM) * LOG_LIM
 
 
-def multiply(
-    x: torch.Tensor, y: torch.Tensor, rel_coef: float = 10.0, abs_cap: float = 1e6
+def multiply_log_space(
+    sx: torch.Tensor, lx: torch.Tensor, sy: torch.Tensor, ly: torch.Tensor
 ):
+    sgn_out = sx * sy
+    log_out = lx + ly
+    return sgn_out, _clip_log(log_out)
+
+
+def divide_log_space(
+    sx: torch.Tensor, lx: torch.Tensor, sy: torch.Tensor, ly: torch.Tensor
+):
+    sgn_out = sx * sy
+    log_out = lx - ly
+    return sgn_out, _clip_log(log_out)
+
+
+# Helper when operands share the same sign
+
+
+def _add_logs_same_sign(sgn: torch.Tensor, lx: torch.Tensor, ly: torch.Tensor):
+    return sgn, torch.logaddexp(lx, ly)
+
+
+def add_log_space(
+    sx: torch.Tensor, lx: torch.Tensor, sy: torch.Tensor, ly: torch.Tensor
+):
+    """Addition in log-space with sign handling (vectorised).
+    Args:
+        sx: (B,T) - signed log magnitudes of first operand
+        lx: (B,T) - log magnitudes of first operand
+        sy: (B,T) - signed log magnitudes of second operand
+        ly: (B,T) - log magnitudes of second operand
+
+    Returns:
+        s_out: (B,T) - signed log magnitudes of result
+        l_out: (B,T) - log magnitudes of result
     """
-    Safe x * y that still allows large-magnitude results.
+    zero_x = sx == 0
+    zero_y = sy == 0
 
-    • rel_coef sets how many times larger than the bigger operand
-      the product is allowed to be (default 10×).
-    • abs_cap is an absolute ceiling as a final back-stop.
-    """
-    prod = x * y
-    # dynamic limit: 10 × max(|x|, |y|)  (broadcasted)
-    dyn_lim = rel_coef * torch.maximum(x.abs(), y.abs())
-    lim = torch.clamp(dyn_lim, max=abs_cap)
-    return torch.clamp(prod, -lim, lim)
+    # Initialise outputs
+    s_out = torch.zeros_like(sx)
+    l_out = torch.zeros_like(lx)
+
+    # Only-x / only-y cases
+    only_x = (~zero_x) & zero_y
+    only_y = zero_x & (~zero_y)
+    s_out = torch.where(only_x, sx, s_out)
+    l_out = torch.where(only_x, lx, l_out)
+    s_out = torch.where(only_y, sy, s_out)
+    l_out = torch.where(only_y, ly, l_out)
+
+    # Both non-zero
+    both_nz = (~zero_x) & (~zero_y)
+    same_sign = (sx * sy) > 0
+    same_branch = both_nz & same_sign
+    if same_branch.any():
+        # Use a single shared sign to guard against rare numerical mismatch
+        common_sgn = torch.sign(sx)  # sx and sy have same sign in this branch
+        s_same, l_same = _add_logs_same_sign(common_sgn, lx, ly)
+        s_out = torch.where(same_branch, s_same, s_out)
+        l_out = torch.where(same_branch, l_same, l_out)
+
+    # Opposite sign branch
+    opp_branch = both_nz & (~same_sign)
+    if opp_branch.any():
+        bigger_is_x = lx >= ly
+        big_log = torch.where(bigger_is_x, lx, ly)
+        small_log = torch.where(bigger_is_x, ly, lx)
+        big_sgn = torch.where(bigger_is_x, sx, sy)
+
+        diff = torch.log1p(-torch.exp(small_log - big_log))
+        # Perfect cancellation when operands equal magnitude but opposite sign
+        zero_res = small_log == big_log
+        new_log = big_log + diff
+        new_sgn = big_sgn
+        new_sgn = torch.where(zero_res, torch.zeros_like(new_sgn), new_sgn)
+        new_log = torch.where(zero_res, torch.zeros_like(new_log), new_log)
+
+        s_out = torch.where(opp_branch, new_sgn, s_out)
+        l_out = torch.where(opp_branch, new_log, l_out)
+
+    l_out = _clip_log(l_out)
+    return s_out, l_out
 
 
-def subtract(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    return x - y
+def subtract_log_space(
+    sx: torch.Tensor, lx: torch.Tensor, sy: torch.Tensor, ly: torch.Tensor
+):
+    # Subtraction = addition with negated second operand
+    return add_log_space(sx, lx, -sy, ly)
 
 
-def divide(x: torch.Tensor, y: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-    return torch.clamp(x / (y.abs() + eps), -1e6, 1e6)
+def identity_log_space(sx: torch.Tensor, lx: torch.Tensor, *_):
+    return sx, lx
 
 
-def power(x: torch.Tensor, y: torch.Tensor, max_exp: float = 6.0) -> torch.Tensor:
-    x_safe = torch.clamp(x.abs() + 1e-8, min=1e-8, max=1e3)
-    y_safe = torch.clamp(y, min=-max_exp, max=max_exp)
-    result = (x_safe**y_safe) * torch.sign(x)
-    return torch.clamp(result, -1e6, 1e6)
-
-
-def log(
-    x: torch.Tensor, _unused: torch.Tensor = None, eps: float = 1e-8
-) -> torch.Tensor:
-    return torch.clamp(torch.log(torch.clamp(torch.abs(x) + eps, min=eps)), -20.0, 20.0)
-
-
-def max_op(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    return torch.maximum(x, y)
-
-
-def min_op(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    return torch.minimum(x, y)
-
-
-# Remove power for now
-op_funcs = [add, identity, multiply, subtract, divide, log, max_op, min_op]
-op_names = [
-    "add",
-    "identity",
-    "multiply",
-    "subtract",
-    "divide",
-    "log",
-    "max_op",
-    "min_op",
+# Replace op list with log-space versions
+op_funcs = [
+    add_log_space,
+    subtract_log_space,
+    multiply_log_space,
+    divide_log_space,
+    identity_log_space,
 ]
-# # # Minimal set of ops for testing
-# op_funcs = [add, identity, multiply, subtract]
-# op_names = ["add", "identity", "multiply", "subtract"]
+op_names = ["add", "subtract", "multiply", "divide", "identity"]
 
 
 def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
@@ -217,9 +263,9 @@ class DAGPlanPredictor(nn.Module):
         # Total plan dimensions per token per step: [operand1, operand2, operation]
         self.plan_dim = 2 * self.num_scratch_nodes + self.n_ops
 
-        # Predictor: hidden_state -> full DAG plan (no separate output-selection logits)
+        # Predictor: hidden_state (+ sign, log) -> full DAG plan
         self.predictor = nn.Sequential(
-            nn.Linear(config.n_embd + 1, config.n_embd),
+            nn.Linear(config.n_embd + 2, config.n_embd),
             nn.GELU(),
             nn.Linear(config.n_embd, config.dag_depth * self.plan_dim),
         )
@@ -229,14 +275,13 @@ class DAGPlanPredictor(nn.Module):
         self.last_operand1_probs: torch.Tensor | None = None
         self.last_operand2_probs: torch.Tensor | None = None
 
-    def forward(self, hidden_states: torch.Tensor, initial_values: torch.Tensor):
+    def forward(self, hidden_states: torch.Tensor, seed_feat: torch.Tensor):
         """
         Predict complete DAG plans for all tokens, maintaining causality.
 
         Args:
             hidden_states: (B, T, H) - hidden states for all tokens
-            initial_values: (B, T) - initial values for all tokens
-
+            seed_feat: (B, T, 2) - [sign, log] features per token (log already clipped)
         Returns:
             operand1_probs: (B, T, dag_depth, max_nodes) - probabilities for operand 1
             operand2_probs: (B, T, dag_depth, max_nodes) - probabilities for operand 2
@@ -245,17 +290,11 @@ class DAGPlanPredictor(nn.Module):
         # Vectorised forward pass (no explicit Python loop over tokens)
         B, T, H = hidden_states.shape
 
-        # --- scale and clamp the seed value ---------------------------------
-        logmag_seed = torch.log1p(initial_values.abs())  # (B,T)
-        signed_seed = initial_values.sign() * logmag_seed  # keep sign info
-        safe_seed = torch.clamp(signed_seed, -20.0, 20.0)  # cap extremes
-
-        # --- concatenate with hidden state ----------------------------------
-        init_feat = safe_seed.unsqueeze(-1)  # (B,T,1)
-        mixed = torch.cat([hidden_states, init_feat], dim=-1)  # (B,T,H+1)
+        # --- concatenate sign & log with hidden state -----------------------
+        mixed = torch.cat([hidden_states, seed_feat], dim=-1)  # (B,T,H+2)
 
         # Since B x T is processed independantly, this doesn't leak causality.
-        mixed = mixed.reshape(B * T, H + 1)
+        mixed = mixed.reshape(B * T, H + 2)
         raw_plan = self.predictor(mixed)
         raw_plan = raw_plan.view(
             B, T, self.dag_depth, self.plan_dim
@@ -272,7 +311,7 @@ class DAGPlanPredictor(nn.Module):
             2 * self.num_scratch_nodes : 2 * self.num_scratch_nodes + self.n_ops,
         ]
 
-        # Clamp logits before Gumbel-Softmax for numerical stability
+        # Clamp logits before softmax for numerical stability
         operand1_logits = safe_clamp(operand1_logits)
         operand2_logits = safe_clamp(operand2_logits)
         operation_logits = safe_clamp(operation_logits)
@@ -293,18 +332,25 @@ class DAGPlanPredictor(nn.Module):
 
 
 class ScalarToEmbed(nn.Module):
-    """Scalar → H-dim embedding using fixed Fourier bases."""
+    """Map sign & log magnitude → H-dim embedding using Fourier bases.
+
+    Expects input tensor of shape (B,T,2) where:
+       feat[...,0] = sign ∈ [-1,1]
+       feat[...,1] = log magnitude ≥ 0 (already clipped)
+    """
 
     def __init__(self, hidden: int, sigma=1.0, feat_dim: int = 32):
         super().__init__()
         self.ff = PositionalEncoding(sigma, feat_dim)
-        self.proj = nn.Linear(2 * feat_dim + 2, hidden)  # +2 for sign & log|s|
+        # +2 for sign and raw log magnitude, +2*feat_dim for periodic encodings
+        self.proj = nn.Linear(2 * feat_dim + 2, hidden)
 
-    def forward(self, s: torch.Tensor) -> torch.Tensor:  # (B,T,1)
-        logmag = torch.log1p(s.abs())  # compress range
-        trig = self.ff(logmag)  # periodic features
-        feats = torch.cat((s.sign(), logmag, trig), dim=-1)  # (B,T,2*feat_dim+2)
-        return self.proj(feats)  # (B,T,H)
+    def forward(self, feat: torch.Tensor) -> torch.Tensor:  # (B,T,2)
+        sign = feat[..., 0:1]  # preserve dims
+        logmag = feat[..., 1:2]
+        trig = self.ff(logmag)  # (B,T,2*feat_dim)
+        concat = torch.cat((sign, logmag, trig), dim=-1)  # (B,T,2*feat_dim+2)
+        return self.proj(concat)  # (B,T,H)
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +374,8 @@ class DifferentiableDAG(nn.Module):
         self.plan_predictor = DAGPlanPredictor(config, self.temperature)
 
         self.scalar_to_embed = ScalarToEmbed(config.n_embd)
-        self.embed_to_value = nn.Linear(config.n_embd, 1)
+        # Predict [sign_logits, log_raw] in a single projection (two heads)
+        self.embed_to_signlog = nn.Linear(config.n_embd, 2)
 
     def forward(
         self,
@@ -337,16 +384,25 @@ class DifferentiableDAG(nn.Module):
         # Pre-process hidden states before value extraction
         incoming_hidden = self.pre_dag(original_hidden)
 
-        # Extract scalar values from hidden states
-        initial_values = self.embed_to_value(incoming_hidden)  # (B, T, 1)
-        initial_values = initial_values.squeeze(-1)  # (B, T)
+        # Predict sign and log directly from shared projection
+        signlog = self.embed_to_signlog(incoming_hidden)  # (B,T,2)
+        sign_logits = signlog[..., 0]
+        log_raw = signlog[..., 1]
 
-        # Token-local scratch space (append-only)
-        scratch_values_list = [initial_values]  # list of (B,T) tensors
+        # Soft sign with controllable sharpness; differentiable everywhere
+        init_sgn = torch.tanh(sign_logits * SIGN_SCALE)
+        init_log = _clip_log(F.softplus(log_raw))  # >=0, clipped
 
-        # Generate DAG plan (vectorised)
+        # Signed log magnitude seed for plan predictor
+        seed_feat = torch.stack((init_sgn, init_log), dim=-1)  # (B,T,2)
+
+        # Scratch stacks (append-only)
+        sgn_stack = [init_sgn]
+        log_stack = [init_log]
+
+        # Generate DAG plan (vectorised) using signed-log seed
         operand1_probs, operand2_probs, operation_probs = self.plan_predictor(
-            incoming_hidden, initial_values
+            incoming_hidden, seed_feat
         )
 
         for step in range(self.dag_depth):
@@ -354,28 +410,52 @@ class DifferentiableDAG(nn.Module):
             att2 = operand2_probs[:, :, step, :]
             op_w = operation_probs[:, :, step, :]  # (B,T,n_ops)
 
-            S_curr = len(scratch_values_list)
+            S_curr = len(sgn_stack)
             att1_step = att1[..., :S_curr]
             att2_step = att2[..., :S_curr]
-            current_stack = torch.stack(scratch_values_list, dim=-1)
-            v1 = (att1_step * current_stack).sum(-1)
-            v2 = (att2_step * current_stack).sum(-1)
 
-            outs = torch.stack([op(v1, v2) for op in op_funcs], dim=-1)
-            new_val = (op_w * outs).sum(-1)
+            current_sgn = torch.stack(sgn_stack, dim=-1)  # (B,T,S)
+            current_log = torch.stack(log_stack, dim=-1)  # (B,T,S)
 
-            scratch_values_list.append(new_val)
+            # Soft-attention may blend sign information; discretise with sign() to keep {-1,0,1}
+            v1_sgn_raw = (att1_step * current_sgn).sum(-1)
+            v2_sgn_raw = (att2_step * current_sgn).sum(-1)
+            v1_sgn = torch.sign(v1_sgn_raw)
+            v2_sgn = torch.sign(v2_sgn_raw)
 
-        final_scalars = scratch_values_list[-1]
+            # Log magnitudes are mixed linearly; this is a heuristic but preserves differentiability
+            v1_log = (att1_step * current_log).sum(-1)
+            v2_log = (att2_step * current_log).sum(-1)
+
+            # Apply all operations in parallel in log-space
+            outs = [op(v1_sgn, v1_log, v2_sgn, v2_log) for op in op_funcs]
+            outs_sgn, outs_log = zip(*outs)  # each element (B,T)
+            outs_sgn_t = torch.stack(list(outs_sgn), dim=-1)  # (B,T,n_ops)
+            outs_log_t = torch.stack(list(outs_log), dim=-1)  # (B,T,n_ops)
+
+            new_sgn = (op_w * outs_sgn_t).sum(-1)
+            new_log = (op_w * outs_log_t).sum(-1)
+            new_log = _clip_log(new_log)
+
+            sgn_stack.append(new_sgn)
+            log_stack.append(new_log)
+
+        final_sgn = sgn_stack[-1]
+        final_log = log_stack[-1]
+
+        final_feat = torch.stack((final_sgn, final_log), dim=-1)  # (B,T,2)
 
         # Convert final nodes to hidden states.
-        final_hidden = self.scalar_to_embed(final_scalars.unsqueeze(-1))  # (B,T,H)
+        final_hidden = self.scalar_to_embed(final_feat)  # (B,T,H)
+
         # Mix token information via post dag block.
         final_hidden = self.post_dag(final_hidden)
 
         # Cache for logging
         self.final_hidden = final_hidden
-        self.final_values = torch.stack(scratch_values_list, dim=1)  # (B,S,T)
+        # Store signed-log for logging compatibility
+        z_stack = [sgn_stack[i] * log_stack[i] for i in range(len(sgn_stack))]
+        self.final_values = torch.stack(z_stack, dim=1)  # (B,S,T)
 
         return final_hidden
 
@@ -653,6 +733,7 @@ class GPT(nn.Module):
         # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
         # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
         decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+        # Add gate parameters to decay_params
         nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
         optim_groups = [
             {"params": decay_params, "weight_decay": weight_decay},

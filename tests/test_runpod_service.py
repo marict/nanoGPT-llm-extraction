@@ -207,8 +207,8 @@ def test_start_cloud_training_comprehensive(monkeypatch, tmp_path):
     assert pod_id == "pod1"
     assert len(wandb_calls) == 1
     assert wandb_calls[0]["project"] == "daggpt-train"
-    # Only the placeholder run should be created locally (prelaunch)
-    assert wandb_calls[0]["run_id"].startswith("prelaunch")
+    # Only the placeholder run should be created locally (pod-id-pending)
+    assert wandb_calls[0]["run_id"].startswith("pod-id-pending")
 
     # Ensure the wandb run id is forwarded to the remote command exactly once
     docker_args_first = created_pods[0]["docker_args"]
@@ -241,7 +241,7 @@ def test_start_cloud_training_comprehensive(monkeypatch, tmp_path):
     pod_id = rp.start_cloud_training(str(config_file))
     assert len(wandb_calls) == 1
     assert wandb_calls[0]["project"] == "custom-project-name"
-    assert wandb_calls[0]["run_id"].startswith("prelaunch")
+    assert wandb_calls[0]["run_id"].startswith("pod-id-pending")
 
 
 def test_wandb_logs_url_modification(monkeypatch):

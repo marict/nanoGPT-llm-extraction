@@ -1,4 +1,5 @@
 # tests/test_dag_model.py
+import math
 import sys
 from pathlib import Path
 
@@ -26,7 +27,7 @@ from test_common import (SMALL_CONFIG, TINY_CONFIG, assert_valid_forward_pass,
 import dag_model  # noqa: E402
 from dag_logger import DAGLogger
 from dag_model import (GPT, DAGPlanPredictor, DifferentiableDAG, GPTConfig,
-                       divide, multiply, op_names, subtract)
+                       op_names)
 
 
 # --------------------------------------------------------------------- #
@@ -100,17 +101,6 @@ def test_dag_backward_flow(small_dag_gpt):
     assert hasattr(model.dag, "plan_predictor"), "DAG should have plan_predictor"
 
 
-# --------------------------------------------------------------------- #
-# op-function sanity
-# --------------------------------------------------------------------- #
-def test_op_functions():
-    x = torch.tensor([2.0, 3.0])
-    y = torch.tensor([1.0, 2.0])
-    assert torch.allclose(multiply(x, y), x * y)
-    assert torch.allclose(subtract(x, y), x - y)
-    assert torch.allclose(divide(x, y), x / y)
-
-
 # ---------------------------------------------------------------------
 # initial-node materialisation tests
 # --------------------------------------------------------------------- #
@@ -127,12 +117,14 @@ def test_dag_initial_nodes_all_tokens(monkeypatch):
     )
     model = GPT(cfg)
 
-    # --- stub value-extractor so each token's value == 3 -------------
-    class DummyVal(nn.Module):
-        def forward(self, x):  # x : (B,T,H)
-            return torch.full((x.size(0), x.size(1)), 3.0, device=x.device)
+    # --- stub predictors so each token has sign=+1, log=log1p(3) -------------
+    class DummySignLog(nn.Module):
+        def forward(self, x):
+            sign = torch.ones((x.size(0), x.size(1), 1), device=x.device)
+            log_val = torch.full_like(sign, math.log1p(3.0))
+            return torch.cat([sign, log_val], dim=-1)
 
-    model.dag.embed_to_value = DummyVal()
+    model.dag.embed_to_signlog = DummySignLog()
 
     # Run the model and check that all node values are captured
     with torch.random.fork_rng():
