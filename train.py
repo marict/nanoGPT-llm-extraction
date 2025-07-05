@@ -719,7 +719,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     compile_start = time.time()
     if cfg.compile:
         print(f"[{time.time() - setup_start:.2f}s] Compiling model")
-        model = torch.compile(model)
+        model = torch.compile(model, mode="max-autotune")
         print(
             f"[{time.time() - setup_start:.2f}s] Model compilation completed in {time.time() - compile_start:.2f}s"
         )
