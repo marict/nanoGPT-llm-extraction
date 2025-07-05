@@ -171,7 +171,10 @@ def divide_log_space(
 
 
 def _add_logs_same_sign(sgn: torch.Tensor, lx: torch.Tensor, ly: torch.Tensor):
-    return sgn, torch.logaddexp(lx, ly)
+    # Perform high-precision accumulation to avoid bf16 overflows
+    lx32, ly32 = lx.float(), ly.float()
+    l_out = torch.logaddexp(lx32, ly32).to(lx.dtype)
+    return sgn, _clip_log(l_out)
 
 
 def add_log_space(
@@ -223,8 +226,9 @@ def add_log_space(
         big_sgn = torch.where(bigger_is_x, sx, sy)
 
         # Ensure delta ≤ 0 to keep exp(delta) ≤ 1 and avoid NaNs
-        delta = torch.clamp(small_log - big_log, max=0.0, min=-LOG_LIM)
-        diff = torch.log1p(-torch.exp(delta))
+        delta32 = (small_log - big_log).float().clamp(max=0.0, min=-LOG_LIM)
+        diff32 = torch.log1p(-torch.exp(delta32))  # safe in fp32
+        diff = diff32.to(lx.dtype)
         # Perfect cancellation when operands equal magnitude but opposite sign
         zero_res = small_log == big_log
         new_log = big_log + diff
