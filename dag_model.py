@@ -200,7 +200,8 @@ def add_log_space(
         small_log = torch.where(bigger_is_x, ly, lx)
         big_sgn = torch.where(bigger_is_x, sx, sy)
 
-        delta = torch.clamp(small_log - big_log, max=15.0)
+        # Ensure delta ≤ 0 to keep exp(delta) ≤ 1 and avoid NaNs
+        delta = torch.clamp(small_log - big_log, max=0.0, min=-LOG_LIM)
         diff = torch.log1p(-torch.exp(delta))
         # Perfect cancellation when operands equal magnitude but opposite sign
         zero_res = small_log == big_log
@@ -227,11 +228,15 @@ def identity_log_space(sx: torch.Tensor, lx: torch.Tensor, *_):
     return sx, lx
 
 
-# Replace op list with log-space versions
+# Replace op list with log-space versions (order important for op_names)
 op_funcs = [
+    add_log_space,
+    subtract_log_space,
+    multiply_log_space,
+    divide_log_space,
     identity_log_space,
 ]
-op_names = ["identity"]
+op_names = ["add", "subtract", "multiply", "divide", "identity"]
 
 
 def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
