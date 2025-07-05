@@ -719,7 +719,18 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     compile_start = time.time()
     if cfg.compile:
         print(f"[{time.time() - setup_start:.2f}s] Compiling model")
-        model = torch.compile(model, mode="reduce-overhead")
+        try:
+            # Disable CUDA graphs; they crash when tensors share storage in
+            # complex ways ("complex memory overlap" segfault). This keeps the
+            # bulk of Inductor speed-ups while avoiding the runtime fault.
+            model = torch.compile(
+                model,
+                mode="reduce-overhead",
+                disable="cudagraphs",
+            )
+        except TypeError:
+            # Older PyTorch without the 'disable' kwarg – fall back to safe compile
+            model = torch.compile(model, mode="reduce-overhead")
         print(
             f"[{time.time() - setup_start:.2f}s] Model compilation completed in {time.time() - compile_start:.2f}s"
         )
