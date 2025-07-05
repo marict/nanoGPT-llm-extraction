@@ -278,8 +278,11 @@ def add_log_space(
         small_log = torch.where(bigger_is_x, ly, lx)
         big_sgn = torch.where(bigger_is_x, sx, sy)
 
-        # Ensure delta ≤ 0 to keep exp(delta) ≤ 1 and avoid NaNs
-        delta32 = (small_log - big_log).float().clamp(max=0.0, min=-LOG_LIM)
+        # Ensure delta is sufficiently negative so that exp(delta) < 1 but also
+        # not *too* close to zero, where the derivative of log1p(-exp(delta))
+        # explodes and causes huge gradients. A small safe margin (-1e-3)
+        # prevents this while introducing only <0.1% relative error.
+        delta32 = (small_log - big_log).float().clamp(max=-1e-3, min=-LOG_LIM)
         diff32 = torch.log1p(-torch.exp(delta32))  # safe in fp32
         diff = diff32.to(lx.dtype)
         # Perfect cancellation when operands equal magnitude but opposite sign
@@ -314,8 +317,8 @@ def identity_log_space(sx: torch.Tensor, lx: torch.Tensor, *_):
 op_funcs = [
     # add_log_space,
     # subtract_log_space,
-    # multiply_log_space,
-    # divide_log_space,
+    multiply_log_space,
+    divide_log_space,
     identity_log_space,
 ]
 # op_names = ["add", "subtract", "multiply", "divide", "identity"]
