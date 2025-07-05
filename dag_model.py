@@ -130,6 +130,24 @@ def _clip_log(log_t: torch.Tensor) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------
+# Smooth log rescaling (replaces hard _clip_log inside DAG loop)
+# ---------------------------------------------------------------------------
+
+
+def _rms_rescale(log_stack: list[torch.Tensor]) -> None:
+    """In-place rescale of the *last* entry in log_stack so that the running RMS
+    over the stack equals LOG_LIM. Works per-token, keeps gradients."""
+
+    # Compute rms over current stack (B,T)
+    logs = torch.stack(log_stack, dim=-1)  # (B,T,S)
+    rms = torch.sqrt((logs**2).mean(dim=-1, keepdim=True) + 1e-6)
+    scale = (LOG_LIM / rms).clamp(max=1.0)  # only scale down
+    # Apply scaling only to the most recent entry to avoid in-place ops on saved tensors
+    if scale.max() < 1.0:  # scaling required
+        log_stack[-1].mul_(scale.squeeze(-1))
+
+
+# ---------------------------------------------------------------------------
 # Debug utility
 # ---------------------------------------------------------------------------
 
@@ -405,7 +423,8 @@ class DifferentiableDAG(nn.Module):
         self.plan_predictor = DAGPlanPredictor(config, self.temperature)
 
         self.scalar_to_embed = ScalarToEmbed(config.n_embd)
-        # Predict [sign_logits, log_raw] in a single projection (two heads)
+        # Seed head: LayerNorm → 2-dim projection
+        self.seed_norm = LayerNorm(config.n_embd, bias=config.bias)
         self.embed_to_signlog = nn.Linear(config.n_embd, 2)
 
     def forward(
@@ -415,18 +434,18 @@ class DifferentiableDAG(nn.Module):
         # Pre-process hidden states before value extraction
         incoming_hidden = self.pre_dag(original_hidden)
 
-        # Predict sign and log directly from shared projection
-        signlog = self.embed_to_signlog(incoming_hidden)  # (B,T,2)
+        # Predict sign & magnitude in bounded range
+        seed_h = self.seed_norm(incoming_hidden)
+        signlog = self.embed_to_signlog(seed_h)  # (B,T,2)
         sign_logits = signlog[..., 0]
-        log_raw = signlog[..., 1]
+        mag_logits = signlog[..., 1]
 
-        # Soft sign with controllable sharpness; differentiable everywhere
-        RAW_LIM = 15.0  # same scale as LOG_LIM
-        sign_logits = sign_logits.clamp(min=-RAW_LIM, max=RAW_LIM)
+        # Sign in (−1,1) with optional sharpness scaling
         init_sgn = torch.tanh(sign_logits * SIGN_SCALE)
-        log_raw_clamped = log_raw.clamp(min=-RAW_LIM, max=RAW_LIM).float()  # fp32 math
-        init_log = _clip_log(F.softplus(log_raw_clamped) + 1e-6).to(log_raw.dtype)
-        # after init_log is computed
+
+        # Magnitude: map (−∞,∞)→(0,LOG_LIM) via sigmoid
+        init_log = LOG_LIM * torch.sigmoid(mag_logits)
+
         _debug_check("seed", init_sgn, init_log)
 
         # Signed log magnitude seed for plan predictor
@@ -473,10 +492,12 @@ class DifferentiableDAG(nn.Module):
 
             new_sgn = (op_w * outs_sgn_t).sum(-1)
             new_log = (op_w * outs_log_t).sum(-1)
-            new_log = _clip_log(new_log)
 
             sgn_stack.append(new_sgn)
             log_stack.append(new_log)
+
+            # Smoothly rescale logs to keep RMS within bounds (in-place)
+            _rms_rescale(log_stack)
 
         final_sgn = sgn_stack[-1]
         final_log = log_stack[-1]
@@ -835,8 +856,9 @@ class GPT(nn.Module):
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float("Inf")
 
-            # apply softmax to convert logits to (normalized) probabilities
-            logits = torch.clamp(logits, -50.0, 50.0)
+            # Normalize logits magnitude instead of hard clipping
+            logits_std = logits.std(dim=-1, keepdim=True).clamp_min(1e-3)
+            logits = logits / logits_std
             probs = F.softmax(logits, dim=-1)
 
             # Handle edge cases (NaN/inf values)
