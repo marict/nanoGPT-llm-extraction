@@ -185,6 +185,7 @@ class DAGLogger:
         mixed_hidden = model.last_mixed_hidden
         final_values = model.final_values
         last_gate = model.last_gate
+        mag_logits = model.dag.mag_logits
 
         if original_hidden is None:
             raise RuntimeError("model should contain original_hidden")
@@ -196,12 +197,15 @@ class DAGLogger:
             raise RuntimeError("model should contain final_values")
         if last_gate is None:
             raise RuntimeError("model should contain last_gate")
+        if mag_logits is None:
+            raise RuntimeError("model should contain mag_logits")
 
         hidden_norm = original_hidden[:, -1].norm(dim=-1).mean().detach().item()
         dag_norm = dag_hidden[:, -1].norm(dim=-1).mean().detach().item()
         fused_norm = mixed_hidden[:, -1].norm(dim=-1).mean().detach().item()
         final_values_norm = final_values.norm(dim=-1).mean().detach().item()
         last_gate_norm = last_gate.norm(dim=-1).mean().detach().item()
+        mag_logits_norm = mag_logits.norm(dim=-1).mean().detach().item()
 
         norm_values = {
             "hidden": hidden_norm,
@@ -210,6 +214,7 @@ class DAGLogger:
             "dag_to_orig_ratio": dag_norm / (hidden_norm + 1e-8),
             "final_values": final_values_norm,
             "last_gate": last_gate_norm,
+            "mag_logits": mag_logits_norm,
         }
         self.logging_data["norm_values"] = norm_values
 
@@ -290,7 +295,6 @@ class DAGLogger:
             raise RuntimeError("last_gate is None")
 
         metrics["gate_mean"] = model.last_gate.mean().item()
-
         return metrics
 
     def get_node_values_list(self, model) -> List[float]:

@@ -8,7 +8,9 @@ gradient_accumulation_steps = 4
 max_iters = 15_000
 lr_decay_iters = 15_000
 
-eval_interval = 500
+eval_interval = 1000
+# No math eval by for now until we can get a better model
+math_eval_examples = 0
 eval_iters = 20
 log_interval = 50
 

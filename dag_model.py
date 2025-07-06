@@ -251,6 +251,15 @@ def add_log_space(
     """Addition in log-space with sign handling (vectorised).
     Re-written without data-dependent Python control-flow so Torch Dynamo can
     capture it. All decisions are expressed with tensor operations.
+
+    Args:
+        sx: (B,T) tensor of signs
+        lx: (B,T) tensor of log magnitudes
+        sy: (B,T) tensor of signs
+        ly: (B,T) tensor of log magnitudes
+    Returns:
+        s_out: (B,T) tensor of signs
+        l_out: (B,T) tensor of log magnitudes
     """
 
     zero_x = sx == 0
@@ -495,6 +504,9 @@ class DifferentiableDAG(nn.Module):
             _debug_check("signlog", signlog)
         sign_logits = signlog[..., 0]
         mag_logits = signlog[..., 1]
+
+        # Save mag_logits for logging
+        self.mag_logits = mag_logits
 
         # Sign in (−1,1) with optional sharpness scaling
         init_sgn = torch.tanh(sign_logits * SIGN_SCALE)
