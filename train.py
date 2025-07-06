@@ -49,6 +49,18 @@ except ModuleNotFoundError:
     _HAVE_ST = False
 
 
+# -----------------------------------------------------------------------------
+# Configuration constants
+# -----------------------------------------------------------------------------
+
+# Default sample prompt for evaluation - consistent across sample.py and train.py
+DEFAULT_SAMPLE_PROMPT = "Two plus 5 = "
+
+# Checkpoint directory
+CHECKPOINT_DIR = (
+    "/runpod-volume/checkpoints" if os.path.exists("/runpod-volume") else "checkpoints"
+)
+
 # --------------------------------------------------------------------------- #
 # Safe checkpoint saving with retry
 # --------------------------------------------------------------------------- #
@@ -101,9 +113,9 @@ def _all_tensors(state):
 # Configuration utilities
 # --------------------------------------------------------------------------- #
 # Use RunPod volume if available, otherwise use local directory
-CHECKPOINT_DIR = (
-    "/runpod-volume/checkpoints" if os.path.exists("/runpod-volume") else "checkpoints"
-)
+# CHECKPOINT_DIR = (
+#     "/runpod-volume/checkpoints" if os.path.exists("/runpod-volume") else "checkpoints"
+# )
 
 
 def generate_run_name(cfg) -> str:
@@ -778,7 +790,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                         raise ValueError("No tokenizer available")
                     try:
                         # Simple prompt for generation
-                        sample_prompt = "Two plus 5 = "
+                        sample_prompt = DEFAULT_SAMPLE_PROMPT
                         encoded = encode(sample_prompt)
                         prompt_ids = torch.tensor(
                             encoded, dtype=torch.long, device=device
@@ -805,7 +817,9 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                     eval_extra = {}
                     dag_logger.compute_log_statistics(raw_model)
                     eval_extra.update(dag_logger.get_extra_vals(raw_model))
-                    dag_logger.format_console_logging(raw_model)
+                    dag_logger.format_console_logging(
+                        raw_model, decode_fn=decode, input_ids=prompt_ids
+                    )
 
                     # Run math evaluation if enabled
                     math_scores = {}

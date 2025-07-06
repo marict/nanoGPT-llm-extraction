@@ -389,12 +389,14 @@ class DAGLogger:
             "batch_size": B,
         }
 
-    def format_console_logging(self, model) -> None:
+    def format_console_logging(self, model, decode_fn=None, input_ids=None) -> None:
         """
         Print formatted logging information to console.
 
         Args:
             model: DAGGPT model instance
+            decode_fn: Optional function to decode token IDs to text (e.g., lambda ids: tokenizer.decode(ids))
+            input_ids: Optional tensor of input token IDs (B, T) to decode
         """
         if model.config.dag_depth == 0:
             return
@@ -427,16 +429,39 @@ class DAGLogger:
             "Node values per token position (converted to real values) for prompt sample:"
         )
         scratch_nodes = detailed_values["scratch_nodes"]
+
+        # Prepare token text if decode function and input_ids are provided
+        token_texts = []
+        if decode_fn is not None and input_ids is not None:
+            # Take first batch item and decode each token individually
+            batch_tokens = input_ids[0]  # (T,)
+            for i, token_id in enumerate(batch_tokens):
+                try:
+                    # Decode single token
+                    token_text = decode_fn([token_id.item()])
+                    # Clean up the text for display
+                    token_text = repr(token_text)  # Show escapes, quotes, etc.
+                    token_texts.append(token_text)
+                except Exception as e:
+                    token_texts.append(f"<decode_error: {e}>")
+
         for t, token_values in enumerate(detailed_values["values_per_token"]):
             # Convert token values back to real values
             token_values = [math.exp(val) for val in token_values]
+
+            # Format the token info line
+            if token_texts and t < len(token_texts):
+                token_info = f"Token {t} {token_texts[t]}"
+            else:
+                token_info = f"Token {t}"
+
             if scratch_nodes > 1:
                 values_str = ", ".join(
                     [f"{val:.4f}" for _, val in enumerate(token_values)]
                 )
-                print(f"  Token {t}: [{values_str}]")
+                print(f"  {token_info}: [{values_str}]")
             else:
-                print(f"  Token {t}: {token_values[0]:.4f}")
+                print(f"  {token_info}: {token_values[0]:.4f}")
 
     def get_wandb_logging_dict(self, model, base_dict: Optional[Dict] = None) -> Dict:
         """
