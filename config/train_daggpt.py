@@ -1,6 +1,6 @@
 name = "daggpt"
 
-batch_size = 52
+batch_size = 48
 block_size = 512
 gradient_accumulation_steps = 1
 
