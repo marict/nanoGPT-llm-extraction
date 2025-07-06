@@ -481,6 +481,7 @@ class DifferentiableDAG(nn.Module):
         # Seed head: LayerNorm → 2-dim projection
         self.seed_norm = LayerNorm(config.n_embd, bias=config.bias)
         self.embed_to_signlog = nn.Linear(config.n_embd, 2)
+        self.mag_logits = None  # for logging
 
     def forward(
         self,

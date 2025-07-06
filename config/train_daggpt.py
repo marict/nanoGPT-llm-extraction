@@ -1,12 +1,12 @@
 name = "daggpt"
 
-batch_size = 32
+batch_size = 12
 block_size = 512
-gradient_accumulation_steps = 4
+gradient_accumulation_steps = 2
 
 # Should be enough to show saturation
-max_iters = 15_000
-lr_decay_iters = 15_000
+max_iters = 50_000
+lr_decay_iters = 50_000
 
 eval_interval = 1000
 # No math eval by for now until we can get a better model
@@ -31,7 +31,7 @@ beta2 = 0.95
 grad_clip = 1.0
 
 decay_lr = True
-warmup_iters = 2_000
+warmup_iters = 10_000
 min_lr = 3e-5
 
 dataset = "proofpile"

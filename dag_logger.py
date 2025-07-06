@@ -5,9 +5,9 @@ This module contains all logging-related functionality for DAG models,
 separated from the core training and inference code.
 """
 
+import math
 from typing import Dict, List, Optional
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -413,6 +413,8 @@ class DAGLogger:
         print("Node values per token position:")
         scratch_nodes = detailed_values["scratch_nodes"]
         for t, token_values in enumerate(detailed_values["values_per_token"]):
+            # Convert token values back to real values
+            token_values = [math.exp(val) for val in token_values]
             if scratch_nodes > 1:
                 values_str = ", ".join(
                     [f"{val:.4f}" for _, val in enumerate(token_values)]
