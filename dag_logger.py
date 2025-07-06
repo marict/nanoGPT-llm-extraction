@@ -211,7 +211,7 @@ class DAGLogger:
         mag_logits_norm = mag_logits.norm(dim=-1).mean().detach().item()
 
         norm_values = {
-            "hidden": hidden_norm,
+            "original_hidden": hidden_norm,
             "dag_hidden": dag_norm,
             "fused": fused_norm,
             "dag_to_orig_ratio": dag_norm / (hidden_norm + 1e-8),
