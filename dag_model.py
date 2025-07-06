@@ -236,8 +236,6 @@ def divide_log_space(
 
 
 # Helper when operands share the same sign
-
-
 def _add_logs_same_sign(sgn: torch.Tensor, lx: torch.Tensor, ly: torch.Tensor):
     # Perform high-precision accumulation to avoid bf16 overflows
     lx32, ly32 = lx.float(), ly.float()
@@ -528,26 +526,34 @@ class DifferentiableDAG(nn.Module):
         # entry (0-based).
         # ------------------------------------------------------------------ #
 
-        # Start buffers with initial seed, will grow via torch.cat each step
-        sgn_buf = init_sgn.unsqueeze(-1)  # (B,T,1)
-        log_buf = init_log.unsqueeze(-1)  # (B,T,1)
+        # Pre-allocate scratch buffers once and write in-place
+        B, T, _ = original_hidden.shape
+        S_max = self.num_scratch_nodes  # = dag_depth + 1
+        sgn_buf = init_sgn.new_empty(B, T, S_max)
+        log_buf = init_log.new_empty(B, T, S_max)
+
+        # slot 0 holds the seed values
+        sgn_buf[..., 0] = init_sgn
+        log_buf[..., 0] = init_log
 
         # Generate DAG plan (vectorised) using signed-log seed
         operand1_probs, operand2_probs, operation_probs = self.plan_predictor(
             incoming_hidden, seed_feat
         )
 
-        for step in range(self.dag_depth):
-            att1 = operand1_probs[:, :, step, :]  # (B,T,S)
-            att2 = operand2_probs[:, :, step, :]
-            op_w = operation_probs[:, :, step, :]  # (B,T,n_ops)
+        for k in range(self.dag_depth):
+            att1 = operand1_probs[:, :, k, :]  # (B,T,S_max)
+            att2 = operand2_probs[:, :, k, :]
+            op_w = operation_probs[:, :, k, :]  # (B,T,n_ops)
 
-            S_curr = sgn_buf.size(-1)
+            S_curr = k + 1  # valid scratch nodes so far
             att1_step = att1[..., :S_curr]
             att2_step = att2[..., :S_curr]
 
-            current_sgn = sgn_buf  # already (B,T,S)
-            current_log = log_buf
+            # Clone slices so subsequent in-place writes to the base buffers
+            # don't invalidate Autograd versioning of the tensors used below.
+            current_sgn = sgn_buf[..., :S_curr].clone()  # (B,T,S_curr)
+            current_log = log_buf[..., :S_curr].clone()
 
             # ---- Sign discretisation -------------------------------------
             # We want forward values exactly in {−1, +1} (needed by downstream
@@ -572,22 +578,31 @@ class DifferentiableDAG(nn.Module):
             v1_log = (att1_step * current_log).sum(-1)
             v2_log = (att2_step * current_log).sum(-1)
 
-            # Apply all operations in parallel in log-space
-            outs = [op(v1_sgn, v1_log, v2_sgn, v2_log) for op in op_funcs]
-            outs_sgn, outs_log = zip(*outs)  # each element (B,T)
-            outs_sgn_t = torch.stack(list(outs_sgn), dim=-1)  # (B,T,n_ops)
-            outs_log_t = torch.stack(list(outs_log), dim=-1)  # (B,T,n_ops)
+            # Apply the 5 operations (vectorised, no Python loop)
+            add_sgn, add_log = add_log_space(v1_sgn, v1_log, v2_sgn, v2_log)
+            sub_sgn, sub_log = subtract_log_space(v1_sgn, v1_log, v2_sgn, v2_log)
+            mul_sgn, mul_log = multiply_log_space(v1_sgn, v1_log, v2_sgn, v2_log)
+            div_sgn, div_log = divide_log_space(v1_sgn, v1_log, v2_sgn, v2_log)
+            id_sgn, id_log = identity_log_space(v1_sgn, v1_log)
+
+            outs_sgn_t = torch.stack(
+                (add_sgn, sub_sgn, mul_sgn, div_sgn, id_sgn), dim=-1
+            )
+            outs_log_t = torch.stack(
+                (add_log, sub_log, mul_log, div_log, id_log), dim=-1
+            )
 
             new_sgn = (op_w * outs_sgn_t).sum(-1)
             new_log = (op_w * outs_log_t).sum(-1)
-            new_log_scaled = _rms_rescale(log_buf, new_log)
+            prev_logs_slice = log_buf[..., :S_curr]  # (B,T,S_curr)
+            new_log_scaled = _rms_rescale(prev_logs_slice, new_log)
 
-            # Append values to buffers (out-of-place concat)
-            sgn_buf = torch.cat((sgn_buf, new_sgn.unsqueeze(-1)), dim=-1)
-            log_buf = torch.cat((log_buf, new_log_scaled.unsqueeze(-1)), dim=-1)
+            # In-place write to next slot (k+1)
+            sgn_buf[..., k + 1] = new_sgn
+            log_buf[..., k + 1] = new_log_scaled
 
-        final_sgn = sgn_buf[..., -1]
-        final_log = log_buf[..., -1]
+        final_sgn = sgn_buf[..., self.dag_depth]
+        final_log = log_buf[..., self.dag_depth]
 
         final_feat = torch.stack((final_sgn, final_log), dim=-1)  # (B,T,2)
 

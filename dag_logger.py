@@ -39,6 +39,10 @@ class DAGLogger:
         Raises:
             AssertionError: If required tensors for gradient tracking are not available
         """
+
+        if model.config.dag_depth == 0:
+            return
+
         self.clear_gradient_hooks()
         self.captured_gradients = {}
 
@@ -237,6 +241,13 @@ class DAGLogger:
                 op_name: float(mean_probs[i].item())
                 for i, op_name in enumerate(op_names)
             }
+
+        # 4) Misc scalar diagnostics
+        self.logging_data["gate_mean"] = model.last_gate.mean().item()
+
+        # 5) Operation distribution metrics
+        op_metrics = self._collect_op_metrics(model)
+        self.logging_data["op_metrics"] = op_metrics
 
     def clear_gradient_hooks(self) -> None:
         """Remove all registered gradient hooks."""
@@ -496,3 +507,33 @@ class DAGLogger:
             save_op_grad
         )
         self.gradient_hooks.append(hook)
+
+    def _collect_op_metrics(self, model) -> Dict[str, float]:
+        """Compute op-selection sharpness, diversity and mutual information.
+
+        Returns values normalised to [0,1] where 1 = ideal.
+        """
+        probs = (
+            model.dag.plan_predictor.last_operation_probs_full.detach()
+        )  # (B,T,D,n_ops)
+        n_ops = probs.size(-1)
+        eps = 1e-12
+
+        p_token = probs.reshape(-1, n_ops).float().clamp_min(eps)  # (N,n_ops)
+        p_mean = p_token.mean(0)  # (n_ops,)
+
+        H_op = -torch.sum(p_mean * p_mean.log())  # marginal entropy
+        H_cond = -torch.mean(
+            torch.sum(p_token * p_token.log(), dim=1)
+        )  # conditional entropy
+
+        log_n = math.log(n_ops)
+        op_diversity = (H_op / log_n).clamp(0.0, 1.0).item()
+        op_sharpness = (1.0 - H_cond / log_n).clamp(0.0, 1.0).item()
+        op_mi = ((H_op - H_cond) / log_n).clamp(0.0, 1.0).item()
+
+        return {
+            "op_diversity": op_diversity,
+            "op_sharpness": op_sharpness,
+            "op_mutual_info": op_mi,
+        }
