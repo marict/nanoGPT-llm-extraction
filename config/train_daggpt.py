@@ -1,8 +1,8 @@
 name = "daggpt"
 
-batch_size = 12
+batch_size = 32
 block_size = 512
-gradient_accumulation_steps = 2
+gradient_accumulation_steps = 1
 
 # Should be enough to show saturation
 max_iters = 50_000
