@@ -254,6 +254,9 @@ class DAGLogger:
         Returns:
             Dictionary of all logging metrics
         """
+        if model.config.dag_depth == 0:
+            return {}
+
         required_keys = [
             "node_values",
             "detailed_node_values",
@@ -386,6 +389,9 @@ class DAGLogger:
         Args:
             model: DAGGPT model instance
         """
+        if model.config.dag_depth == 0:
+            return
+
         # Assert required model structure
         assert hasattr(model, "dag"), "Model missing dag attribute"
         assert hasattr(
@@ -410,7 +416,7 @@ class DAGLogger:
             "values_per_token"
         ), "Invalid detailed node values"
 
-        print("Node values per token position:")
+        print("Node values per token position (converted to real values):")
         scratch_nodes = detailed_values["scratch_nodes"]
         for t, token_values in enumerate(detailed_values["values_per_token"]):
             # Convert token values back to real values
@@ -434,6 +440,9 @@ class DAGLogger:
         Returns:
             Dictionary ready for wandb logging
         """
+        if model.config.dag_depth == 0:
+            return {}
+
         if base_dict is None:
             base_dict = {}
 
@@ -450,6 +459,9 @@ class DAGLogger:
         Raises:
             AssertionError: If required operation probability tensors are not available
         """
+        if model.config.dag_depth == 0:
+            return
+
         # Assert all required conditions - no fallbacks
         assert hasattr(model, "dag"), "Model missing dag attribute"
         assert hasattr(

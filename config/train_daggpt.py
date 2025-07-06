@@ -11,7 +11,7 @@ lr_decay_iters = 50_000
 eval_interval = 1000
 # No math eval by for now until we can get a better model
 math_eval_examples = 0
-eval_iters = 20
+eval_iters = 5
 log_interval = 50
 
 weight_decay = 0.05
