@@ -423,7 +423,9 @@ class DAGLogger:
             "values_per_token"
         ), "Invalid detailed node values"
 
-        print("Node values per token position (converted to real values):")
+        print(
+            "Node values per token position (converted to real values) for prompt sample:"
+        )
         scratch_nodes = detailed_values["scratch_nodes"]
         for t, token_values in enumerate(detailed_values["values_per_token"]):
             # Convert token values back to real values
