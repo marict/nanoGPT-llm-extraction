@@ -273,42 +273,39 @@ class DAGLogger:
             "detailed_node_values",
             "norm_values",
             "op_probs",
+            "op_metrics",
+            "gate_mean",
+            "gate_max",
+            "last_gate",
         ]
+
+        assert (
+            self.logging_data
+        ), "Logging data not available - call compute_log_statistics() first"
 
         for k in required_keys:
             if k not in self.logging_data:
                 raise RuntimeError(f"Missing logging data key: {k}")
 
         metrics = {}
-
         # Add gradient information - preserve original names
         for grad_name, grad_val in self.captured_gradients.items():
             metrics[grad_name] = grad_val
-
-        # Use centralized logging data - no fallbacks
-        assert (
-            self.logging_data
-        ), "Logging data not available - call compute_log_statistics() first"
-
-        if "norm_values" not in self.logging_data:
-            raise RuntimeError("norm_values not in logging data")
 
         norm_data = self.logging_data["norm_values"]
         for norm_name, norm_val in norm_data.items():
             metrics[f"norm/{norm_name}"] = norm_val
 
-        if "op_probs" not in self.logging_data:
-            raise RuntimeError("op_probs not in logging data")
-
         for op_name, p_val in self.logging_data["op_probs"].items():
             metrics[f"op_prob/{op_name}"] = p_val
 
-        if "last_gate" not in self.logging_data:
-            raise RuntimeError("last_gate not in logging data")
-        if model.last_gate is None:
-            raise RuntimeError("last_gate is None")
+        for op_name, p_val in self.logging_data["op_metrics"].items():
+            metrics[f"op_metric/{op_name}"] = p_val
 
-        metrics["gate_mean"] = model.last_gate.mean().item()
+        metrics["gate_mean"] = self.logging_data["gate_mean"]
+
+        metrics["gate_max"] = self.logging_data["gate_max"]
+
         return metrics
 
     def get_node_values_list(self, model) -> List[float]:
@@ -513,6 +510,16 @@ class DAGLogger:
 
         Returns values normalised to [0,1] where 1 = ideal.
         """
+
+        if not hasattr(model.dag.plan_predictor, "last_operation_probs_full"):
+            raise RuntimeError(
+                "plan_predictor missing 'last_operation_probs_full'; cannot log op metrics."
+            )
+        if model.dag.plan_predictor.last_operation_probs_full is None:
+            raise RuntimeError(
+                "'last_operation_probs_full' is None cannot log op metrics."
+            )
+
         probs = (
             model.dag.plan_predictor.last_operation_probs_full.detach()
         )  # (B,T,D,n_ops)
