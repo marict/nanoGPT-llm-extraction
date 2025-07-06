@@ -214,37 +214,55 @@ def _debug_check(op_name: str, *tensors: torch.Tensor):
 
 
 def multiply_log_space(
-    sx: torch.Tensor, lx: torch.Tensor, sy: torch.Tensor, ly: torch.Tensor
+    sx: torch.Tensor,
+    lx: torch.Tensor,
+    sy: torch.Tensor,
+    ly: torch.Tensor,
+    ignore_clip: bool = False,
 ):
     sgn_out = sx * sy
     log_out = lx + ly
-    log_out = _clip_log(log_out)
+    if not ignore_clip:
+        log_out = _clip_log(log_out)
     if ENABLE_DEBUG_NAN_CHECKS:
         _debug_check("multiply_log_space", sgn_out, log_out)
     return sgn_out, log_out
 
 
 def divide_log_space(
-    sx: torch.Tensor, lx: torch.Tensor, sy: torch.Tensor, ly: torch.Tensor
+    sx: torch.Tensor,
+    lx: torch.Tensor,
+    sy: torch.Tensor,
+    ly: torch.Tensor,
+    ignore_clip: bool = False,
 ):
     sgn_out = sx * sy
     log_out = lx - ly
-    log_out = _clip_log(log_out)
+    if not ignore_clip:
+        log_out = _clip_log(log_out)
     if ENABLE_DEBUG_NAN_CHECKS:
         _debug_check("divide_log_space", sgn_out, log_out)
     return sgn_out, log_out
 
 
 # Helper when operands share the same sign
-def _add_logs_same_sign(sgn: torch.Tensor, lx: torch.Tensor, ly: torch.Tensor):
+def _add_logs_same_sign(
+    sgn: torch.Tensor, lx: torch.Tensor, ly: torch.Tensor, ignore_clip: bool = False
+):
     # Perform high-precision accumulation to avoid bf16 overflows
     lx32, ly32 = lx.float(), ly.float()
     l_out = torch.logaddexp(lx32, ly32).to(lx.dtype)
-    return sgn, _clip_log(l_out)
+    if not ignore_clip:
+        l_out = _clip_log(l_out)
+    return sgn, l_out
 
 
 def add_log_space(
-    sx: torch.Tensor, lx: torch.Tensor, sy: torch.Tensor, ly: torch.Tensor
+    sx: torch.Tensor,
+    lx: torch.Tensor,
+    sy: torch.Tensor,
+    ly: torch.Tensor,
+    ignore_clip: bool = False,
 ):
     """Addition in log-space with sign handling (vectorised).
     Re-written without data-dependent Python control-flow so Torch Dynamo can
@@ -255,6 +273,7 @@ def add_log_space(
         lx: (B,T) tensor of log magnitudes
         sy: (B,T) tensor of signs
         ly: (B,T) tensor of log magnitudes
+        ignore_clip: if True, skip clipping for testing
     Returns:
         s_out: (B,T) tensor of signs
         l_out: (B,T) tensor of log magnitudes
@@ -283,7 +302,7 @@ def add_log_space(
     same_branch = both_nz & same_sign
     # Use a common sign (either +1 or -1) – sx and sy have identical sign here
     common_sgn = torch.sign(sx)
-    s_same, l_same = _add_logs_same_sign(common_sgn, lx, ly)
+    s_same, l_same = _add_logs_same_sign(common_sgn, lx, ly, ignore_clip)
     s_out = torch.where(same_branch, s_same, s_out)
     l_out = torch.where(same_branch, l_same, l_out)
 
@@ -308,23 +327,30 @@ def add_log_space(
     l_out = torch.where(opp_branch, new_log, l_out)
 
     # Final clip & (optional) debug ------------------------------------------
-    l_out = _clip_log(l_out)
+    if not ignore_clip:
+        l_out = _clip_log(l_out)
     if ENABLE_DEBUG_NAN_CHECKS:
         _debug_check("add_log_space", s_out, l_out)
     return s_out, l_out
 
 
 def subtract_log_space(
-    sx: torch.Tensor, lx: torch.Tensor, sy: torch.Tensor, ly: torch.Tensor
+    sx: torch.Tensor,
+    lx: torch.Tensor,
+    sy: torch.Tensor,
+    ly: torch.Tensor,
+    ignore_clip: bool = False,
 ):
     # Subtraction = addition with negated second operand
-    s_out, l_out = add_log_space(sx, lx, -sy, ly)
+    s_out, l_out = add_log_space(sx, lx, -sy, ly, ignore_clip)
     if ENABLE_DEBUG_NAN_CHECKS:
         _debug_check("subtract_log_space", s_out, l_out)
     return s_out, l_out
 
 
-def identity_log_space(sx: torch.Tensor, lx: torch.Tensor, *_):
+def identity_log_space(
+    sx: torch.Tensor, lx: torch.Tensor, *_, ignore_clip: bool = False
+):
     return sx, lx
 
 

@@ -3,7 +3,7 @@ import math
 import pytest
 import torch
 
-from dag_model import (LOG_LIM, _clip_log, add_log_space, divide_log_space,
+from dag_model import (LOG_LIM, add_log_space, divide_log_space,
                        multiply_log_space, subtract_log_space)
 
 
