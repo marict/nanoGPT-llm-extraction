@@ -312,18 +312,18 @@ def test_math_eval_comprehensive():
     cfg = train.TrainConfig()
     assert cfg.eval_math == True
     assert cfg.math_eval_tasks == ["gsm8k", "svamp"]
-    assert cfg.math_eval_max_examples == 50
+    assert cfg.math_eval_examples == 50
 
     # Test 2: Config override
     override_data = {
         "eval_math": False,
         "math_eval_tasks": ["gsm8k"],
-        "math_eval_max_examples": 100,
+        "math_eval_examples": 100,
     }
     train.update_config(cfg, override_data)
     assert cfg.eval_math == False
     assert cfg.math_eval_tasks == ["gsm8k"]
-    assert cfg.math_eval_max_examples == 100
+    assert cfg.math_eval_examples == 100
 
     # Test 3: Math evaluation function
     config = GPTConfig(

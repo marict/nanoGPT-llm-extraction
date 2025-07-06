@@ -48,6 +48,11 @@ def evaluate_math(
     if tasks is None:
         tasks = ["gsm8k", "svamp"]  # Default to both GSM8K and SVAMP during training
 
+    # Skip evaluation entirely if max_examples is 0
+    if max_examples == 0:
+        print("Skipping math evaluation because max_examples=0.")
+        return {}
+
     try:
         print(
             f"Running math evaluation on {tasks} (max {max_examples} examples each)..."

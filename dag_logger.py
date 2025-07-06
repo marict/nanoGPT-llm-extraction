@@ -161,7 +161,6 @@ class DAGLogger:
         """
         # Clear previous logging data
         self.logging_data = {}
-
         if model.config.dag_depth == 0:
             return
 

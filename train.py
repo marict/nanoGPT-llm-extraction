@@ -143,7 +143,7 @@ class TrainConfig:
     # Math evaluation settings
     eval_math: bool = True  # Whether to run math evaluation during training
     math_eval_tasks: List[str] = field(default_factory=lambda: ["gsm8k", "svamp"])
-    math_eval_max_examples: int = 50  # Max examples per math task during training
+    math_eval_examples: int = 50  # Max examples per math task during training
 
     name: str = (
         "owt"  # Project/run name (used for both wandb project and runpod naming)
@@ -814,7 +814,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                             model,
                             device,
                             tasks=cfg.math_eval_tasks,
-                            max_examples=cfg.math_eval_max_examples,
+                            max_examples=cfg.math_eval_examples,
                         )
 
                     print(

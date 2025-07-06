@@ -37,7 +37,6 @@ beta2 = 0.95
 grad_clip = 1.0
 
 math_eval_max_examples = 1
-
 decay_lr = False
 warmup_iters = 2000
 lr_decay_iters = 600000
