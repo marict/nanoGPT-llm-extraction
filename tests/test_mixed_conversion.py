@@ -7,7 +7,6 @@ Demonstrates per-token conversion that creates mixed expressions.
 import random
 
 from data.dagset.streaming import (add_english_to_expression,
-                                   convert_dag_text_to_english,
                                    generate_single_dag_example)
 
 
@@ -64,7 +63,7 @@ def test_mixed_conversion():
         )
 
         # Apply mixed conversion
-        mixed_text = convert_dag_text_to_english(
+        mixed_text = add_english_to_expression(
             dag_example.text, conversion_probability=0.4, rng=random.Random(200 + i)
         )
 

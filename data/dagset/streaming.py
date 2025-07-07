@@ -4,6 +4,7 @@ streaming.py
 On-the-fly DAG dataset generation for training.
 """
 
+import math
 import random
 import re
 import sys
@@ -18,11 +19,11 @@ import torch
 from num2words import num2words
 from tiktoken import get_encoding
 
-from models.dag_model import OP_NAMES
-
 # Add parent directories to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 sys.path.append(str(Path(__file__).parent.parent.parent))
+
+from models.dag_model import OP_NAMES
 
 
 def convert_number_to_words(number: float, use_words: bool = True) -> str:
@@ -129,8 +130,10 @@ class DAGExample:
 
     text: str
     depth: int
-    initial_values: list[tuple[float, float]]
-    operations: list[tuple[int, int, str]]
+    initial_values: list[float]  # for logging
+    signs: torch.Tensor  # for training - [D+1] tensor
+    log_magnitudes: torch.Tensor  # for training - [D+1] tensor
+    operations: torch.Tensor  # for training - [D x num_ops] one-hot tensor
 
 
 def generate_random_dag_plan(
@@ -153,7 +156,7 @@ def convert_dag_to_expression_string(
     initial_values: list[float],
     operations: list[str],
     rng: random.Random = None,
-    convert_to_english: bool = False,
+    convert_to_english: bool = True,
     conversion_probability: float = 0.3,
 ) -> str:
     """Convert DAG structure to a simple mathematical expression string following stack-based execution.
@@ -164,8 +167,15 @@ def convert_dag_to_expression_string(
     if rng is None:
         rng = random
 
-    stack = [sympy.Symbol(v) for v in initial_values]
-    op_map = {
+    stack = [sympy.Symbol(str(v)) for v in initial_values]
+    op_name_to_symbol = {
+        "add": "+",
+        "subtract": "-",
+        "multiply": "*",
+        "divide": "/",
+        "identity": "identity",
+    }
+    op_symbol_to_expression = {
         "+": lambda a, b: a + b,
         "-": lambda a, b: a - b,
         "*": lambda a, b: a * b,
@@ -176,10 +186,12 @@ def convert_dag_to_expression_string(
     for op in operations:
         b = stack.pop()
         a = stack.pop()
-        expr = op_map[op](a, b)
+        op_symbol = op_name_to_symbol[op]
+        expr = op_symbol_to_expression[op_symbol](a, b)
         stack.append(expr)
 
-    result = stack[0]
+    result = str(stack[0])
+
     # Apply English conversion if requested
     if convert_to_english:
         result = add_english_to_expression(result, conversion_probability, rng)
@@ -187,11 +199,33 @@ def convert_dag_to_expression_string(
     return result
 
 
-def convert_plan_to_tensor(
+def convert_plan_to_tensors(
     initial_values: list[float],
     operations: list[str],
-) -> torch.Tensor:
-    pass
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Convert a DAG plan to tensors for training.
+
+    Args:
+        initial_values: List of initial values
+        operations: List of operations
+
+    Returns:
+        Tuple of (signs, log_magnitudes, operations_one_hot)
+    """
+    # Convert initial values to signs and log magnitudes
+    signs = torch.tensor([1.0 if v >= 0.0 else -1.0 for v in initial_values])
+    log_magnitudes = torch.tensor([math.log(abs(v)) for v in initial_values])
+
+    # Convert operations to one-hot encoded tensors
+    operation_to_index = {op: i for i, op in enumerate(OP_NAMES)}
+    depth = len(operations)
+    operations_one_hot = torch.zeros(depth, len(OP_NAMES))
+
+    for i, op in enumerate(operations):
+        op_idx = operation_to_index[op]
+        operations_one_hot[i, op_idx] = 1.0
+
+    return signs, log_magnitudes, operations_one_hot
 
 
 def generate_single_dag_example(
@@ -236,7 +270,7 @@ def generate_single_dag_example(
     )
 
     # Step 3: Convert dag plan to a tensor for labels
-    labels = convert_plan_to_tensor(
+    signs, log_magnitudes, operations = convert_plan_to_tensors(
         initial_values=initial_values,
         operations=operations,
     )
@@ -245,6 +279,8 @@ def generate_single_dag_example(
         text=expression,
         depth=depth,
         initial_values=initial_values,
+        signs=signs,
+        log_magnitudes=log_magnitudes,
         operations=operations,
     )
 
@@ -304,7 +340,7 @@ class StreamingDAGDataset:
         value_range: tuple[float, float] = (0.1, 100.0),
         seed: int = 42,
         tokenizer: str = "gpt2",
-        convert_to_english: bool = False,
+        convert_to_english: bool = True,
         english_conversion_probability: float = 0.3,
     ):
         """Initialize the streaming DAG dataset.
@@ -558,6 +594,98 @@ def create_dag_dataloaders(
     return train_loader, val_loader
 
 
+class DAGPredictorDataLoader:
+    """DataLoader for DAG predictor training that returns the correct format."""
+
+    def __init__(
+        self,
+        batch_size: int = 32,
+        max_depth: int = 8,
+        num_initial_values: int = None,
+        value_range: tuple[float, float] = (0.1, 100.0),
+        seed: int = 42,
+        convert_to_english: bool = False,
+        english_conversion_probability: float = 0.3,
+    ):
+        """Initialize the DAG predictor data loader.
+
+        Args:
+            batch_size: Batch size for training
+            max_depth: DAG depth (all examples will have this depth)
+            num_initial_values: Number of initial values per example
+            value_range: Range for initial values
+            seed: Random seed for reproducibility
+            convert_to_english: Whether to potentially convert numbers/operators to English
+            english_conversion_probability: Probability of converting to English (0.0 to 1.0)
+        """
+        self.batch_size = batch_size
+        self.max_depth = max_depth
+        self.num_initial_values = (
+            num_initial_values if num_initial_values is not None else max_depth + 1
+        )
+        self.value_range = value_range
+        self.seed = seed
+        self.convert_to_english = convert_to_english
+        self.english_conversion_probability = english_conversion_probability
+
+        # Create random state
+        self.random_state = random.Random(seed)
+
+    def generate_batch(
+        self, batch_size: int = None
+    ) -> Tuple[List[str], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        """Generate a batch of examples.
+
+        Args:
+            batch_size: Number of examples to generate
+
+        Returns:
+            Tuple of (texts, (operations_one_hot, signs, log_magnitudes))
+            - texts: List of B string examples
+            - operations_one_hot: [B x D x num_ops] one-hot encoded operation vectors
+            - signs: [B x (D+1)] sign tensor per batch
+            - log_magnitudes: [B x (D+1)] log magnitude tensor per batch
+        """
+        if batch_size is None:
+            batch_size = self.batch_size
+
+        texts = []
+        operations_list = []
+        signs_list = []
+        log_magnitudes_list = []
+
+        for _ in range(batch_size):
+            # Generate example
+            example = generate_single_dag_example(
+                depth=self.max_depth,
+                num_initial_values=self.num_initial_values,
+                value_range=self.value_range,
+                rng=self.random_state,
+                convert_to_english=self.convert_to_english,
+                conversion_probability=self.english_conversion_probability,
+            )
+
+            texts.append(example.text)
+            operations_list.append(example.operations)
+            signs_list.append(example.signs)
+            log_magnitudes_list.append(example.log_magnitudes)
+
+        # Stack tensors
+        operations_batch = torch.stack(operations_list, dim=0)  # [B, D, num_ops]
+        signs_batch = torch.stack(signs_list, dim=0)  # [B, D+1]
+        log_magnitudes_batch = torch.stack(log_magnitudes_list, dim=0)  # [B, D+1]
+
+        return texts, (operations_batch, signs_batch, log_magnitudes_batch)
+
+    def __iter__(self):
+        return self
+
+    def __next__(
+        self,
+    ) -> Tuple[List[str], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        return self.generate_batch()
+
+
 class DAGStructureDataset:
     """
     Dataset for pretraining DAG predictor on structure prediction.
@@ -653,21 +781,17 @@ class DAGStructureDataset:
         initial_sgn = torch.zeros(num_scratch_nodes)
         initial_log = torch.zeros(num_scratch_nodes)
 
-        # Fill initial values (typically just one for slot 0)
-        for i, (sign, log_mag) in enumerate(example.initial_values):
-            if i < num_scratch_nodes:
-                initial_sgn[i] = sign
-                initial_log[i] = log_mag
+        # Fill initial values from the example's sign and log magnitude tensors
+        signs_tensor = example.signs
+        log_mags_tensor = example.log_magnitudes
 
-        # Create operation probabilities (one-hot for ground truth)
-        operation_probs = torch.zeros(depth, len(OP_NAMES))
+        # Copy values up to num_scratch_nodes
+        copy_len = min(len(signs_tensor), num_scratch_nodes)
+        initial_sgn[:copy_len] = signs_tensor[:copy_len]
+        initial_log[:copy_len] = log_mags_tensor[:copy_len]
 
-        for step, (operand1_idx, operand2_idx, operation_name) in enumerate(
-            example.operations
-        ):
-            if step < depth:
-                op_idx = self.op_name_to_idx[operation_name]
-                operation_probs[step, op_idx] = 1.0
+        # Use the example's operation tensor (already one-hot encoded)
+        operation_probs = example.operations
 
         return {
             "initial_sgn": initial_sgn,
@@ -810,21 +934,84 @@ def create_dag_structure_dataloaders(
     return train_loader, val_loader
 
 
+def create_dag_predictor_dataloaders(
+    train_batch_size: int = 32,
+    val_batch_size: int = 32,
+    max_depth: int = 8,
+    train_seed: int = 42,
+    val_seed: int = 43,
+    convert_to_english: bool = False,
+    english_conversion_probability: float = 0.3,
+) -> Tuple[DAGPredictorDataLoader, DAGPredictorDataLoader]:
+    """Create train and validation DAG predictor dataloaders.
+
+    Args:
+        train_batch_size: Training batch size
+        val_batch_size: Validation batch size
+        max_depth: DAG depth (all examples will have this exact depth)
+        train_seed: Seed for training data
+        val_seed: Seed for validation data
+        convert_to_english: Whether to potentially convert numbers/operators to English
+        english_conversion_probability: Probability of converting to English (0.0 to 1.0)
+
+    Returns:
+        Tuple of (train_loader, val_loader)
+
+    Each dataloader returns:
+        - texts: List of B string examples (no tokenization)
+        - operations_one_hot: [B x D x num_ops] one-hot encoded operation vectors
+        - signs: [B x (D+1)] sign tensor per batch
+        - log_magnitudes: [B x (D+1)] log magnitude tensor per batch
+    """
+    # Create dataloaders
+    train_loader = DAGPredictorDataLoader(
+        batch_size=train_batch_size,
+        max_depth=max_depth,
+        seed=train_seed,
+        convert_to_english=convert_to_english,
+        english_conversion_probability=english_conversion_probability,
+    )
+
+    val_loader = DAGPredictorDataLoader(
+        batch_size=val_batch_size,
+        max_depth=max_depth,
+        seed=val_seed,
+        convert_to_english=convert_to_english,
+        english_conversion_probability=english_conversion_probability,
+    )
+
+    return train_loader, val_loader
+
+
 if __name__ == "__main__":
     # Simple example usage
     print("DAG Streaming Dataset Example")
     print("=" * 40)
 
-    # Create a dataset
-    dataset = StreamingDAGDataset(max_depth=3, seed=42)
+    # Test the new DAG predictor dataloader
+    print("\nTesting DAG Predictor DataLoader:")
+    train_loader, val_loader = create_dag_predictor_dataloaders(
+        train_batch_size=2, val_batch_size=2, max_depth=3
+    )
 
-    # Generate a small batch
+    # Generate a batch
+    texts, (operations, signs, log_mags) = train_loader.generate_batch(2)
+
+    print(f"Generated batch with {len(texts)} examples")
+    print(f"Operations shape: {operations.shape}")  # Should be [2, 3, num_ops]
+    print(f"Signs shape: {signs.shape}")  # Should be [2, 4]
+    print(f"Log magnitudes shape: {log_mags.shape}")  # Should be [2, 4]
+
+    print("\nGenerated examples:")
+    for i, text in enumerate(texts):
+        print(f"Example {i+1}: {text}")
+
+    print("\n✅ New DAG Predictor DataLoader working correctly!")
+
+    # Test the old streaming dataset for comparison
+    print("\nTesting old streaming dataset:")
+    dataset = StreamingDAGDataset(max_depth=3, seed=42)
     tokens, text = dataset.generate_batch(3)
     print(f"Generated {len(tokens)} tokens from 3 examples")
-
-    # Show examples
-    print("\nGenerated examples:")
-    for i, example in enumerate(text.split("\n---\n")):
-        print(f"Example {i+1}: {example}")
 
     print("\n✅ Example completed successfully!")
