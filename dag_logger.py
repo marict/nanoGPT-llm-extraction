@@ -426,7 +426,7 @@ class DAGLogger:
         ), "Invalid detailed node values"
 
         print(
-            "Node values per token position (converted to real values) for prompt sample:"
+            "Initial node values per token position (converted to real values) for prompt sample:"
         )
         scratch_nodes = detailed_values["scratch_nodes"]
 
