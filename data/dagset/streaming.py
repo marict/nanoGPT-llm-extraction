@@ -2,14 +2,12 @@
 """
 streaming.py
 On-the-fly DAG dataset generation for training.
-
-NOTE: Currently this is incomplete and not used until we have the DAG structure more stable.
 """
 
-import math
 import random
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterator, List, Tuple
 
@@ -25,18 +23,6 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from dag_model import (LOG_LIM, add_log_space, divide_log_space,
                        identity_log_space, multiply_log_space, op_names,
                        subtract_log_space)
-
-# Operator name mappings to English equivalents
-OPERATOR_TO_ENGLISH = {
-    "add": ["plus", "added to", "combined with"],
-    "subtract": ["minus", "subtracted from", "less"],
-    "multiply": ["times", "multiplied by", "scaled by"],
-    "divide": ["divided by", "over", "split by"],
-    "identity": ["copied as", "set to", "same as"],
-}
-
-# Sign mappings
-SIGN_TO_ENGLISH = {"+1.0": ["positive", "plus"], "-1.0": ["negative", "minus"]}
 
 
 def convert_number_to_words(number: float, use_words: bool = True) -> str:
@@ -76,42 +62,6 @@ def convert_number_to_words(number: float, use_words: bool = True) -> str:
         return result
 
     return str(number)
-
-
-def convert_operator_to_english(operator: str, rng: random.Random = None) -> str:
-    """Convert an operator to its English equivalent.
-
-    Args:
-        operator: The operator name
-        rng: Random number generator
-
-    Returns:
-        English equivalent of the operator
-    """
-    if rng is None:
-        rng = random
-
-    if operator in OPERATOR_TO_ENGLISH:
-        return rng.choice(OPERATOR_TO_ENGLISH[operator])
-    return operator
-
-
-def convert_sign_to_english(sign_str: str, rng: random.Random = None) -> str:
-    """Convert a sign to its English equivalent.
-
-    Args:
-        sign_str: The sign string (e.g., "+1.0", "-1.0")
-        rng: Random number generator
-
-    Returns:
-        English equivalent of the sign
-    """
-    if rng is None:
-        rng = random
-
-    if sign_str in SIGN_TO_ENGLISH:
-        return rng.choice(SIGN_TO_ENGLISH[sign_str])
-    return sign_str
 
 
 def convert_math_expression_to_english(
@@ -193,14 +143,14 @@ def convert_dag_text_to_english(
     return convert_math_expression_to_english(text, conversion_probability, rng)
 
 
+@dataclass
 class DAGExample:
-    """Represents a single DAG computation example."""
+    """Lightweight container for a DAG computation example."""
 
-    def __init__(self, text: str, depth: int, initial_values: list, operations: list):
-        self.text = text
-        self.depth = depth
-        self.initial_values = initial_values
-        self.operations = operations
+    text: str
+    depth: int
+    initial_values: list[tuple[float, float]]
+    operations: list[tuple[int, int, str]]
 
 
 def generate_random_initial_value(
