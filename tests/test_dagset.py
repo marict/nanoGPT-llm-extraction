@@ -696,7 +696,7 @@ class TestDAGStructureDataset(unittest.TestCase):
         hidden_states = torch.randn(batch_size, seq_len, config.n_embd)
 
         # Get DAGPlanPredictor output
-        pred_sgn, pred_log, pred_ops = plan_predictor(hidden_states, hidden_states)
+        pred_sgn, pred_log, pred_ops = plan_predictor(hidden_states)
 
         # Verify output shapes match our structure format (when squeezed)
         self.assertEqual(pred_sgn.shape, (batch_size, seq_len, num_nodes))

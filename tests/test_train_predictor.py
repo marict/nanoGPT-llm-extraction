@@ -173,42 +173,16 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
 
         with torch.no_grad():
-            # Test without internal state
-            outputs = model(input_ids, return_internal_state=False)
-            self.assertEqual(len(outputs), 3)
+            # Test forward pass shapes
+            pred_sgn, pred_log, pred_ops = model(input_ids)
 
-            pred_sgn, pred_log, pred_ops = outputs
+            # Check shapes
             expected_nodes = self.config.dag_depth + 1
-
             self.assertEqual(pred_sgn.shape, (batch_size, seq_len, expected_nodes))
             self.assertEqual(pred_log.shape, (batch_size, seq_len, expected_nodes))
             self.assertEqual(
                 pred_ops.shape, (batch_size, seq_len, self.config.dag_depth, 5)
             )
-
-            # Test with internal state
-            outputs_with_state = model(input_ids, return_internal_state=True)
-            self.assertEqual(len(outputs_with_state), 4)
-
-            pred_sgn2, pred_log2, pred_ops2, internal_state = outputs_with_state
-
-            # Check that predictions are the same
-            self.assertTrue(torch.allclose(pred_sgn, pred_sgn2, atol=1e-6))
-            self.assertTrue(torch.allclose(pred_log, pred_log2, atol=1e-6))
-            self.assertTrue(torch.allclose(pred_ops, pred_ops2, atol=1e-6))
-
-            # Check internal state structure
-            expected_internal_keys = [
-                "initial_value_hidden",
-                "dag_structure_hidden",
-                "cross_output",
-                "initial_values_raw",
-                "operation_logits_raw",
-                "sign_logits",
-                "mag_logits",
-                "operation_logits",
-            ]
-            self.assertEqual(set(internal_state.keys()), set(expected_internal_keys))
 
     def test_forward_pass_values(self):
         """Test forward pass produces reasonable values."""
@@ -220,7 +194,7 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
 
         with torch.no_grad():
-            pred_sgn, pred_log, pred_ops = model(input_ids, return_internal_state=False)
+            pred_sgn, pred_log, pred_ops = model(input_ids)
 
             # Signs should be in [-1, 1] range (tanh output)
             self.assertTrue((pred_sgn >= -1).all())
@@ -255,9 +229,7 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
                 input_ids = torch.randint(0, 1000, (batch_size, seq_len))
 
                 with torch.no_grad():
-                    pred_sgn, pred_log, pred_ops = model(
-                        input_ids, return_internal_state=False
-                    )
+                    pred_sgn, pred_log, pred_ops = model(input_ids)
 
                     expected_nodes = self.config.dag_depth + 1
                     self.assertEqual(
@@ -280,7 +252,7 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
 
         # Forward pass
-        pred_sgn, pred_log, pred_ops = model(input_ids, return_internal_state=False)
+        pred_sgn, pred_log, pred_ops = model(input_ids)
 
         # Create dummy loss
         loss = pred_sgn.mean() + pred_log.mean() + pred_ops.mean()
@@ -378,8 +350,6 @@ class TestLossFunctions(unittest.TestCase):
         target_ops = torch.zeros(B, T, depth, n_ops)
         target_ops[:, :, :, 0] = 1  # One-hot
 
-        target_depths = torch.tensor([depth] * B)
-
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_log,
@@ -387,7 +357,6 @@ class TestLossFunctions(unittest.TestCase):
             target_sgn,
             target_log,
             target_ops,
-            target_depths,
             self.cfg,
         )
 
@@ -401,8 +370,8 @@ class TestLossFunctions(unittest.TestCase):
             self.assertTrue(torch.isfinite(loss))
             self.assertGreaterEqual(loss.item(), 0.0)
 
-    def test_compute_dag_structure_loss_with_internal_state(self):
-        """Test loss computation with internal states."""
+    def test_compute_dag_structure_loss_basic(self):
+        """Test basic loss computation."""
         B, T = 2, 8
         num_nodes = self.cfg.dag_depth + 1
         depth = self.cfg.dag_depth
@@ -419,20 +388,6 @@ class TestLossFunctions(unittest.TestCase):
         target_ops = torch.zeros(B, T, depth, n_ops)
         target_ops[:, :, :, 0] = 1
 
-        target_depths = torch.tensor([depth] * B)
-
-        # Create internal state
-        internal_state = {
-            "initial_value_hidden": torch.randn(B, T, H),
-            "dag_structure_hidden": torch.randn(B, T, H),
-            "cross_output": torch.randn(B, T, H),
-            "initial_values_raw": torch.randn(B, T, 2 * num_nodes),
-            "operation_logits_raw": torch.randn(B, T, depth * n_ops),
-            "sign_logits": torch.randn(B, T, num_nodes),
-            "mag_logits": torch.randn(B, T, num_nodes),
-            "operation_logits": torch.randn(B, T, depth, n_ops),
-        }
-
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_log,
@@ -440,12 +395,10 @@ class TestLossFunctions(unittest.TestCase):
             target_sgn,
             target_log,
             target_ops,
-            target_depths,
             self.cfg,
-            internal_state,
         )
 
-        # Should only have the basic loss components (no internal regularization losses)
+        # Should have the basic loss components
         expected_keys = {"total_loss", "sign_loss", "log_loss", "op_loss"}
 
         self.assertEqual(set(losses.keys()), expected_keys)
@@ -472,8 +425,6 @@ class TestLossFunctions(unittest.TestCase):
         target_ops = torch.zeros(B, T, depth, n_ops)
         target_ops[:, :, :, 0] = 1
 
-        target_depths = torch.tensor([depth] * B)
-
         # Test with different weights
         cfg_weighted = DAGTrainConfig()
         cfg_weighted.dag_depth = self.cfg.dag_depth
@@ -488,7 +439,6 @@ class TestLossFunctions(unittest.TestCase):
             target_sgn,
             target_log,
             target_ops,
-            target_depths,
             cfg_weighted,
         )
 
@@ -518,8 +468,6 @@ class TestLossFunctions(unittest.TestCase):
         pred_log = target_log.clone()
         pred_ops = target_ops.clone()
 
-        target_depths = torch.tensor([depth] * B)
-
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_log,
@@ -527,7 +475,6 @@ class TestLossFunctions(unittest.TestCase):
             target_sgn,
             target_log,
             target_ops,
-            target_depths,
             self.cfg,
         )
 
@@ -706,7 +653,7 @@ class TestModelSetup(unittest.TestCase):
             hidden = model.transformer.ln_f(hidden)
 
             # DAG predictor forward pass
-            pred_sgn, pred_log, pred_ops = model.dag.plan_predictor(hidden, hidden)
+            pred_sgn, pred_log, pred_ops = model.dag.plan_predictor(hidden)
 
             # Verify output shapes
             expected_nodes = cfg.dag_depth + 1
@@ -926,7 +873,7 @@ class TestIntegration(unittest.TestCase):
                 hidden = model.transformer.ln_f(hidden)
 
                 # Forward through DAG predictor (using old interface)
-                pred_sgn, pred_log, pred_ops = model.dag.plan_predictor(hidden, hidden)
+                pred_sgn, pred_log, pred_ops = model.dag.plan_predictor(hidden)
 
                 # Prepare targets
                 target_sgn = structures["initial_sgn"].to(device)
@@ -961,7 +908,6 @@ class TestIntegration(unittest.TestCase):
                     target_sgn_compat,
                     target_log_compat,
                     target_ops_compat,
-                    target_depths,
                     self.cfg,
                 )
 
@@ -1044,7 +990,7 @@ class TestIntegration(unittest.TestCase):
         hidden = model.transformer.ln_f(hidden)
 
         # DAG predictor forward
-        pred_sgn, pred_log, pred_ops = model.dag.plan_predictor(hidden, hidden)
+        pred_sgn, pred_log, pred_ops = model.dag.plan_predictor(hidden)
 
         # Reshape for compatibility
         pred_sgn_reshaped = pred_sgn.mean(dim=1, keepdim=True)  # Average over sequence
@@ -1071,7 +1017,6 @@ class TestIntegration(unittest.TestCase):
             target_sgn_compat,
             target_log_compat,
             target_ops_compat,
-            target_depths,
             self.cfg,
         )
 
@@ -1134,9 +1079,7 @@ class TestIntegration(unittest.TestCase):
         input_tokens = torch.randint(0, 1000, (batch_size, self.cfg.sequence_length))
 
         # Forward through shallow attention model with internal state
-        pred_sgn, pred_log, pred_ops, internal_state = model(
-            input_tokens, return_internal_state=True
-        )
+        pred_sgn, pred_log, pred_ops = model(input_tokens)
 
         # Reshape for compatibility
         pred_sgn_reshaped = pred_sgn.mean(dim=1, keepdim=True)  # Average over sequence
@@ -1155,7 +1098,7 @@ class TestIntegration(unittest.TestCase):
         target_log_compat = target_log.unsqueeze(1)[..., :min_nodes]
         target_ops_compat = target_ops.unsqueeze(1)[..., :min_depth, :]
 
-        # Compute loss with internal state
+        # Compute loss
         losses = compute_dag_structure_loss(
             pred_sgn_compat,
             pred_log_compat,
@@ -1163,9 +1106,7 @@ class TestIntegration(unittest.TestCase):
             target_sgn_compat,
             target_log_compat,
             target_ops_compat,
-            target_depths,
             self.cfg,
-            internal_state,
         )
 
         loss = losses["total_loss"]
@@ -1182,9 +1123,287 @@ class TestIntegration(unittest.TestCase):
         self.assertGreater(grad_count, 0)
         self.assertTrue(torch.isfinite(loss))
 
-        # Verify we only have main prediction losses (no internal regularization)
+        # Verify we have the expected loss components
         expected_keys = {"total_loss", "sign_loss", "log_loss", "op_loss"}
         self.assertEqual(set(losses.keys()), expected_keys)
+
+
+class TestDataLoaderIntegration(unittest.TestCase):
+    """Test data loader integration with train_predictor."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        torch.manual_seed(42)
+        np.random.seed(42)
+
+    def test_create_dag_structure_dataloaders(self):
+        """Test that DAG structure dataloaders can be created and used."""
+        # Create dataloaders with small batch sizes for testing
+        train_loader, val_loader = create_dag_structure_dataloaders(
+            train_batch_size=4,
+            val_batch_size=2,
+            max_depth=3,
+            train_seed=42,
+            val_seed=43,
+        )
+
+        # Test train loader
+        train_batch = next(train_loader)
+        texts, structures = train_batch
+
+        self.assertIsInstance(texts, list)
+        self.assertEqual(len(texts), 4)  # batch_size
+        self.assertIsInstance(texts[0], str)
+        self.assertGreater(len(texts[0]), 0)
+
+        # Test structure tensors
+        self.assertIsInstance(structures, dict)
+        expected_keys = {"initial_sgn", "initial_log", "operation_probs", "depths"}
+        self.assertEqual(set(structures.keys()), expected_keys)
+
+        # Check tensor shapes
+        self.assertEqual(
+            structures["initial_sgn"].shape, (4, 4)
+        )  # (batch_size, max_depth+1)
+        self.assertEqual(structures["initial_log"].shape, (4, 4))
+        self.assertEqual(
+            structures["operation_probs"].shape, (4, 3, 5)
+        )  # (batch_size, depth, n_ops)
+        self.assertEqual(structures["depths"].shape, (4,))
+
+        # Test val loader
+        val_batch = next(val_loader)
+        val_texts, val_structures = val_batch
+
+        self.assertIsInstance(val_texts, list)
+        self.assertEqual(len(val_texts), 2)  # val_batch_size
+        self.assertEqual(val_structures["initial_sgn"].shape, (2, 4))
+
+    def test_dataloader_content_consistency(self):
+        """Test that dataloader content is consistent and valid."""
+        train_loader, val_loader = create_dag_structure_dataloaders(
+            train_batch_size=8,
+            val_batch_size=4,
+            max_depth=2,
+            train_seed=42,
+            val_seed=43,
+        )
+
+        # Test multiple batches from train loader
+        for i in range(3):
+            texts, structures = next(train_loader)
+
+            # Check text content
+            for text in texts:
+                self.assertIsInstance(text, str)
+                self.assertGreater(len(text), 0)
+                # Should contain mathematical expressions
+                import re
+
+                self.assertTrue(re.search(r"\d+\.?\d*", text))  # Contains numbers
+                # May or may not contain operators (single numbers are valid)
+                # self.assertTrue(re.search(r'[\+\-\*/]', text))  # Contains operators
+
+            # Check structure tensors
+            batch_size = len(texts)
+            self.assertEqual(
+                structures["initial_sgn"].shape, (batch_size, 3)
+            )  # depth+1
+            self.assertEqual(structures["initial_log"].shape, (batch_size, 3))
+            self.assertEqual(structures["operation_probs"].shape, (batch_size, 2, 5))
+            self.assertEqual(structures["depths"].shape, (batch_size,))
+
+            # Check that depths are consistent
+            self.assertTrue(torch.all(structures["depths"] == 2))
+
+            # Check that operation probabilities are valid (sum to 1 or 0)
+            op_probs = structures["operation_probs"]
+            for b in range(batch_size):
+                for d in range(2):  # depth
+                    row = op_probs[b, d]
+                    # Should be one-hot (one 1.0, rest 0.0) or all zeros
+                    if torch.sum(row) > 0:
+                        self.assertAlmostEqual(torch.sum(row).item(), 1.0, places=5)
+                        self.assertEqual(
+                            torch.sum(row > 0).item(), 1
+                        )  # Exactly one non-zero
+
+    def test_dataloader_reproducibility(self):
+        """Test that dataloaders are reproducible with same seeds."""
+        # Create two sets of dataloaders with same seeds
+        train_loader1, val_loader1 = create_dag_structure_dataloaders(
+            train_batch_size=4,
+            val_batch_size=2,
+            max_depth=2,
+            train_seed=42,
+            val_seed=43,
+        )
+
+        train_loader2, val_loader2 = create_dag_structure_dataloaders(
+            train_batch_size=4,
+            val_batch_size=2,
+            max_depth=2,
+            train_seed=42,
+            val_seed=43,
+        )
+
+        # Compare first batches
+        texts1, structures1 = next(train_loader1)
+        texts2, structures2 = next(train_loader2)
+
+        self.assertEqual(texts1, texts2)
+        for key in structures1:
+            self.assertTrue(
+                torch.allclose(structures1[key], structures2[key], atol=1e-6)
+            )
+
+    def test_dataloader_different_seeds(self):
+        """Test that different seeds produce different data."""
+        train_loader1, _ = create_dag_structure_dataloaders(
+            train_batch_size=4,
+            val_batch_size=2,
+            max_depth=2,
+            train_seed=42,
+            val_seed=43,
+        )
+
+        train_loader2, _ = create_dag_structure_dataloaders(
+            train_batch_size=4,
+            val_batch_size=2,
+            max_depth=2,
+            train_seed=123,
+            val_seed=456,
+        )
+
+        # Compare first batches
+        texts1, structures1 = next(train_loader1)
+        texts2, structures2 = next(train_loader2)
+
+        # Should be different (very unlikely to be the same with different seeds)
+        self.assertNotEqual(texts1, texts2)
+
+
+class TestTrainingIntegration(unittest.TestCase):
+    """Test full training integration with data loaders."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        torch.manual_seed(42)
+        np.random.seed(42)
+
+    def test_model_with_real_dataloader(self):
+        """Test model forward pass with real dataloader data."""
+        # Create small model with smaller sequence length
+        config = ShallowAttentionConfig(
+            vocab_size=1000,
+            n_embd=32,
+            n_head=2,
+            dag_depth=2,
+            sequence_length=8,  # Smaller to avoid position embedding issues
+        )
+        model = ShallowAttentionDAGPredictor(config)
+
+        # Create dataloader
+        train_loader, _ = create_dag_structure_dataloaders(
+            train_batch_size=4,
+            val_batch_size=2,
+            max_depth=2,
+            train_seed=42,
+            val_seed=43,
+        )
+
+        # Get a batch
+        texts, structures = next(train_loader)
+
+        # Create input_ids from texts (simple tokenization for testing)
+        import re
+
+        input_ids = []
+        for text in texts:
+            # Simple tokenization: split on spaces and convert to integers
+            tokens = re.findall(r"\d+\.?\d*|\+|\-|\*|/|\(|\)", text)
+            # Pad or truncate to sequence_length
+            if len(tokens) < 8:  # sequence_length
+                tokens.extend(["0"] * (8 - len(tokens)))
+            else:
+                tokens = tokens[:8]
+            # Convert to integers (simple hash-based tokenization)
+            ids = [hash(token) % 1000 for token in tokens]
+            input_ids.append(ids)
+
+        input_ids = torch.tensor(input_ids)
+
+        # Test forward pass
+        model.eval()
+        with torch.no_grad():
+            pred_sgn, pred_log, pred_ops = model(input_ids)
+
+            # Check shapes
+            self.assertEqual(
+                pred_sgn.shape, (4, 8, 3)
+            )  # (batch_size, seq_len, depth+1)
+            self.assertEqual(pred_log.shape, (4, 8, 3))
+            self.assertEqual(
+                pred_ops.shape, (4, 8, 2, 5)
+            )  # (batch_size, seq_len, depth, n_ops)
+
+            # Check that predictions are finite
+            self.assertTrue(torch.isfinite(pred_sgn).all())
+            self.assertTrue(torch.isfinite(pred_log).all())
+            self.assertTrue(torch.isfinite(pred_ops).all())
+
+    def test_evaluation_with_real_data(self):
+        """Test evaluation function with real dataloader data."""
+        # Create small model with smaller sequence length to avoid position embedding issues
+        config = ShallowAttentionConfig(
+            vocab_size=1000,
+            n_embd=32,
+            n_head=2,
+            dag_depth=2,
+            sequence_length=8,  # Smaller to avoid position embedding issues
+        )
+        model = ShallowAttentionDAGPredictor(config)
+
+        # Create dataloader
+        _, val_loader = create_dag_structure_dataloaders(
+            train_batch_size=4,
+            val_batch_size=2,
+            max_depth=2,
+            train_seed=42,
+            val_seed=43,
+        )
+
+        # Mock device and context
+        device = "cpu"
+        ctx = torch.no_grad()
+
+        # Create config with matching sequence length
+        cfg = DAGTrainConfig(
+            eval_iters=1,  # Just one iteration to avoid issues
+            sign_loss_weight=1.0,
+            log_loss_weight=1.0,
+            op_loss_weight=1.0,
+            sequence_length=8,  # Match the model's sequence length
+        )
+
+        # Test evaluation
+        with ctx:
+            metrics = evaluate_dag_model(
+                model=model,
+                val_loader=val_loader,
+                device=device,
+                ctx=ctx,
+                cfg=cfg,
+                eval_iters=1,
+            )
+
+        # Check metrics
+        expected_keys = {"total_loss", "sign_loss", "log_loss", "op_loss"}
+        for key in expected_keys:
+            self.assertIn(key, metrics)
+            self.assertIsInstance(metrics[key], float)
+            self.assertTrue(np.isfinite(metrics[key]))
+            self.assertGreaterEqual(metrics[key], 0)
 
 
 if __name__ == "__main__":

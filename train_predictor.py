@@ -35,7 +35,7 @@ import wandb
 from dag_logger import DAGLogger
 from dag_model import (MLP, Block, CausalSelfAttention, DAGPlanPredictor,
                        LayerNorm, op_names)
-from data.dagset.streaming import create_dag_dataloaders
+from data.dagset.streaming import create_dag_structure_dataloaders
 from python_version_check import check_python_version
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
@@ -233,17 +233,15 @@ class ShallowAttentionDAGPredictor(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, input_ids: torch.Tensor, return_internal_state: bool = False):
+    def forward(self, input_ids: torch.Tensor):
         """
         Forward pass through shallow attention to DAG predictor.
 
         Args:
             input_ids: (B, T) token IDs
-            return_internal_state: Whether to return internal states from DAG predictor
 
         Returns:
             DAG predictor outputs (signs, log magnitudes, operation probs)
-            Optionally internal states if return_internal_state=True
         """
         B, T = input_ids.shape
         device = input_ids.device
@@ -265,9 +263,7 @@ class ShallowAttentionDAGPredictor(nn.Module):
         hidden = self.ln_f(hidden)  # (B, T, n_embd)
 
         # DAG predictor
-        return self.dag_predictor(
-            hidden, return_internal_state_or_hidden=return_internal_state
-        )
+        return self.dag_predictor(hidden)
 
     def get_num_params(self, non_embedding=True):
         """Get number of parameters in the model."""
@@ -419,11 +415,9 @@ def compute_dag_structure_loss(
     target_sgn: torch.Tensor,
     target_log: torch.Tensor,
     target_ops: torch.Tensor,
-    target_depths: torch.Tensor,
     cfg: DAGTrainConfig,
-    internal_state: Dict[str, torch.Tensor] = None,
 ) -> Dict[str, torch.Tensor]:
-    """Compute loss for DAG structure prediction with optional internal state losses.
+    """Compute loss for DAG structure prediction.
 
     Args:
         pred_sgn: (B, T, num_nodes) predicted signs
@@ -432,9 +426,7 @@ def compute_dag_structure_loss(
         target_sgn: (B, T, num_nodes) target signs
         target_log: (B, T, num_nodes) target log magnitudes
         target_ops: (B, T, depth, n_ops) target operation probabilities (one-hot)
-        target_depths: (B,) actual depths for each example
         cfg: Training configuration
-        internal_state: Optional internal states for enhanced loss computation
 
     Returns:
         Dictionary with loss components
@@ -484,9 +476,6 @@ def compute_dag_structure_loss(
         "op_loss": op_loss,
     }
 
-    # Note: internal_state parameter is kept for debugging/logging purposes only
-    # We do NOT add any regularization losses based on internal states
-
     return loss_dict
 
 
@@ -534,9 +523,7 @@ def evaluate_dag_model(
             # Forward pass through shallow attention DAG predictor model
             with ctx:
                 # Use the standalone shallow attention model
-                pred_sgn, pred_log, pred_ops = model(
-                    input_tokens, return_internal_state=False
-                )
+                pred_sgn, pred_log, pred_ops = model(input_tokens)
 
                 # Average predictions over sequence length for structure prediction
                 pred_sgn = pred_sgn.mean(dim=1)  # (B, num_nodes_pred)
@@ -579,7 +566,7 @@ def evaluate_dag_model(
                 target_log = target_log.unsqueeze(1)  # (B, 1, num_nodes)
                 target_ops = target_ops.unsqueeze(1)  # (B, 1, depth, n_ops)
 
-                # Compute losses (no internal state for evaluation)
+                # Compute losses
                 losses = compute_dag_structure_loss(
                     pred_sgn,
                     pred_log,
@@ -587,9 +574,7 @@ def evaluate_dag_model(
                     target_sgn,
                     target_log,
                     target_ops,
-                    target_depths,
                     cfg,
-                    internal_state=None,
                 )
 
                 # Accumulate losses
@@ -898,9 +883,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 )
 
                 # Forward pass through shallow attention DAG predictor model
-                pred_sgn, pred_log, pred_ops, internal_state = raw_model(
-                    input_tokens, return_internal_state=True
-                )
+                pred_sgn, pred_log, pred_ops = raw_model(input_tokens)
 
                 # Average over sequence dimension
                 pred_sgn_avg = pred_sgn.mean(dim=1)  # (B, num_nodes_pred)
@@ -944,7 +927,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 target_log_seq = target_log.unsqueeze(1)
                 target_ops_seq = target_ops.unsqueeze(1)
 
-                # Compute loss with internal states
+                # Compute loss
                 losses = compute_dag_structure_loss(
                     pred_sgn_seq,
                     pred_log_seq,
@@ -952,9 +935,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     target_sgn_seq,
                     target_log_seq,
                     target_ops_seq,
-                    target_depths,
                     cfg,
-                    internal_state,
                 )
 
                 loss = losses["total_loss"] / cfg.gradient_accumulation_steps

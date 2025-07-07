@@ -25,21 +25,18 @@ class DAGLogger:
     """
 
     def __init__(self):
-        self.gradient_hooks = []
+        """Initialize DAG logger."""
+        self.logging_data = {}
         self.captured_gradients = {}
-        self.logging_data = {}  # Single dictionary for all logging data
+        self.gradient_hooks = []
+        self.op_grad_hook = None
 
     def setup_gradient_tracking(self, model) -> None:
         """
         Set up gradient tracking hooks for a DAG model.
 
-        Args:
-            model: DAGGPT model instance
-
-        Raises:
-            AssertionError: If required tensors for gradient tracking are not available
+        Only registers hooks if tensors require gradients (i.e., in training mode).
         """
-
         if model.config.dag_depth == 0:
             return
 
@@ -54,97 +51,42 @@ class DAGLogger:
         assert hasattr(model, "dag"), "Model missing dag attribute"
         assert hasattr(model.dag, "final_hidden"), "DAG missing final_hidden attribute"
         assert model.dag.final_hidden is not None, "dag.final_hidden is None"
-        assert (
-            model.dag.final_hidden.requires_grad
-        ), "dag.final_hidden does not require gradients"
 
-        def save_dag_output_grad(grad):
-            if grad is None:
-                # Log zero so dashboards remain continuous even when gate closes
-                self.captured_gradients["grad/dag_output_norm"] = 0.0
-                self.captured_gradients["grad/dag_output_mean"] = 0.0
-                self.captured_gradients["grad/dag_output_std"] = 0.0
-                return
-            grad_norm = grad.detach().norm().item()
-            grad_mean = grad.detach().mean().item()
-            grad_std = grad.detach().std().item()
+        # Only register hooks if tensor requires gradients (training mode)
+        if model.dag.final_hidden.requires_grad:
+            # Register hook for DAG output
+            hook = model.dag.final_hidden.register_hook(self._dag_output_grad_hook_fn)
+            self.gradient_hooks.append(hook)
 
-            self.captured_gradients["grad/dag_output_norm"] = grad_norm
-            self.captured_gradients["grad/dag_output_mean"] = grad_mean
-            self.captured_gradients["grad/dag_output_std"] = grad_std
+        # Check for scratch values gradient tracking
+        if hasattr(model.dag, "final_values") and model.dag.final_values is not None:
+            if model.dag.final_values.requires_grad:
+                hook = model.dag.final_values.register_hook(
+                    self._dag_final_values_grad_hook_fn
+                )
+                self.gradient_hooks.append(hook)
 
-        hook = model.dag.final_hidden.register_hook(save_dag_output_grad)
-        self.gradient_hooks.append(hook)
-
-        # Assert DAG scratch values gradient tracking requirements - use DAG attributes directly
-        assert hasattr(model.dag, "final_values"), "DAG missing final_values attribute"
-        assert model.dag.final_values is not None, "dag.final_values is None"
-        assert (
-            model.dag.final_values.requires_grad
-        ), "dag.final_values does not require gradients"
-
-        def save_dag_scratch_grad(grad):
-            if grad is None:
-                self.captured_gradients["grad/dag_scratch_norm"] = 0.0
-                self.captured_gradients["grad/dag_scratch_mean"] = 0.0
-                return
-            grad_norm = grad.detach().norm().item()
-            grad_mean = grad.detach().mean().item()
-
-            self.captured_gradients["grad/dag_scratch_norm"] = grad_norm
-            self.captured_gradients["grad/dag_scratch_mean"] = grad_mean
-
-        hook = model.dag.final_values.register_hook(save_dag_scratch_grad)
-        self.gradient_hooks.append(hook)
-
-        # Capture gradients of original (pre-DAG) hidden states (mandatory)
+        # Check for original hidden gradient tracking
         if (
-            not hasattr(model, "last_original_hidden")
-            or model.last_original_hidden is None
+            hasattr(model.dag, "original_hidden")
+            and model.dag.original_hidden is not None
         ):
-            raise RuntimeError(
-                "Model missing 'last_original_hidden'; cannot log. Halting training."
-            )
+            if model.dag.original_hidden.requires_grad:
+                hook = model.dag.original_hidden.register_hook(
+                    self._orig_hidden_grad_hook_fn
+                )
+                self.gradient_hooks.append(hook)
 
-        assert (
-            model.last_original_hidden.requires_grad
-        ), "last_original_hidden does not require gradients"
+        # Check for gate gradient tracking
+        if hasattr(model.dag, "gate_w_d") and model.dag.gate_w_d is not None:
+            if model.dag.gate_w_d.requires_grad:
+                hook = model.dag.gate_w_d.register_hook(self._gate_w_d_grad_hook_fn)
+                self.gradient_hooks.append(hook)
 
-        def save_orig_hidden_grad(grad):
-            if grad is None:
-                self.captured_gradients["grad/orig_hidden_mean"] = 0.0
-                return
-            grad_mean = grad.detach().mean().item()
-            self.captured_gradients["grad/orig_hidden_mean"] = grad_mean
-
-        hook = model.last_original_hidden.register_hook(save_orig_hidden_grad)
-        self.gradient_hooks.append(hook)
-
-        assert hasattr(model, "gate_w_d"), "Model missing gate_w_d attribute"
-        assert hasattr(model, "gate_w_o"), "Model missing gate_w_o attribute"
-        assert isinstance(model.gate_w_d, torch.Tensor), "gate_w_d should be a tensor"
-        assert isinstance(model.gate_w_o, torch.Tensor), "gate_w_o should be a tensor"
-
-        # Capture gradients for gate parameters
-        def save_gate_w_d_grad(grad):
-            if grad is None:
-                self.captured_gradients["grad/gate_w_d"] = 0.0
-                return
-            grad_norm = grad.detach().norm().item()
-            self.captured_gradients["grad/gate_w_d"] = grad_norm
-
-        hook = model.gate_w_d.register_hook(save_gate_w_d_grad)
-        self.gradient_hooks.append(hook)
-
-        def save_gate_w_o_grad(grad):
-            if grad is None:
-                self.captured_gradients["grad/gate_w_o"] = 0.0
-                return
-            grad_norm = grad.detach().norm().item()
-            self.captured_gradients["grad/gate_w_o"] = grad_norm
-
-        hook = model.gate_w_o.register_hook(save_gate_w_o_grad)
-        self.gradient_hooks.append(hook)
+        if hasattr(model.dag, "gate_w_o") and model.dag.gate_w_o is not None:
+            if model.dag.gate_w_o.requires_grad:
+                hook = model.dag.gate_w_o.register_hook(self._gate_w_o_grad_hook_fn)
+                self.gradient_hooks.append(hook)
 
     def update_gradient_tracking(self, model):
         """Update gradient tracking after forward pass when tensors are available."""
@@ -255,57 +197,31 @@ class DAGLogger:
         self.gradient_hooks.clear()
 
     def get_extra_vals(self, model) -> Dict[str, float]:
-        """
-        Get all extra logging values for a model (entropies + gradients).
-
-        Args:
-            model: GPT model instance
-
-        Returns:
-            Dictionary of all logging metrics
-        """
+        """Get extra values for logging."""
         if model.config.dag_depth == 0:
             return {}
 
-        required_keys = [
-            "node_values",
-            "detailed_node_values",
-            "norm_values",
-            "op_probs",
-            "op_metrics",
-            "gate_mean",
-            "gate_max",
-            "last_gate",
-        ]
+        # Get operation metrics
+        op_metrics = self._collect_op_metrics(model)
 
-        assert (
-            self.logging_data
-        ), "Logging data not available - call compute_log_statistics() first"
+        # Get gradient metrics (if available)
+        grad_metrics = {}
+        if hasattr(self, "captured_gradients") and self.captured_gradients:
+            grad_metrics = self.captured_gradients.copy()
+        else:
+            # In eval mode or when no gradients are captured, use zeros
+            grad_metrics = {
+                "op_logits_mean": 0.0,
+            }
+            for op_name in op_names:
+                grad_metrics[f"grad/op/{op_name}"] = 0.0
 
-        for k in required_keys:
-            if k not in self.logging_data:
-                raise RuntimeError(f"Missing logging data key: {k}")
+        # Combine all metrics
+        extra_vals = {}
+        extra_vals.update(op_metrics)
+        extra_vals.update(grad_metrics)
 
-        metrics = {}
-        # Add gradient information - preserve original names
-        for grad_name, grad_val in self.captured_gradients.items():
-            metrics[grad_name] = grad_val
-
-        norm_data = self.logging_data["norm_values"]
-        for norm_name, norm_val in norm_data.items():
-            metrics[f"norm/{norm_name}"] = norm_val
-
-        for op_name, p_val in self.logging_data["op_probs"].items():
-            metrics[f"op_prob/{op_name}"] = p_val
-
-        for op_name, p_val in self.logging_data["op_metrics"].items():
-            metrics[f"op_metric/{op_name}"] = p_val
-
-        metrics["gate_mean"] = self.logging_data["gate_mean"]
-
-        metrics["gate_max"] = self.logging_data["gate_max"]
-
-        return metrics
+        return extra_vals
 
     def get_node_values_list(self, model) -> List[float]:
         """
@@ -490,8 +406,7 @@ class DAGLogger:
         """
         Set up operation gradient tracking using the saved tensor from forward pass.
 
-        Raises:
-            AssertionError: If required operation probability tensors are not available
+        Only registers hooks if tensors require gradients (i.e., in training mode).
         """
         if model.config.dag_depth == 0:
             return
@@ -507,27 +422,88 @@ class DAGLogger:
         assert (
             model.dag.plan_predictor.last_operation_probs is not None
         ), "last_operation_probs is None"
-        assert (
-            model.dag.plan_predictor.last_operation_probs.requires_grad
-        ), "last_operation_probs does not require gradients"
 
-        def save_op_grad(grad):
-            if grad is None:
-                # Log zeros for all operation gradients to keep time-series complete
-                self.captured_gradients["op_logits_mean"] = 0.0
-                for op_name in op_names:
-                    self.captured_gradients[f"grad/op/{op_name}"] = 0.0
-                return
-            grad_mean = grad.detach().mean().item()
-            op_grads = grad.detach().mean(dim=(0, 1, 2)).cpu().numpy()  # (n_ops,)
+        # Only register hooks if tensor requires gradients (training mode)
+        if model.dag.plan_predictor.last_operation_probs.requires_grad:
+            # Register hook for operation probabilities
+            self.op_grad_hook = (
+                model.dag.plan_predictor.last_operation_probs.register_hook(
+                    self._op_grad_hook_fn
+                )
+            )
+        else:
+            # In eval mode or no_grad context, skip hooking
+            self.op_grad_hook = None
 
-            self.captured_gradients["op_logits_mean"] = grad_mean
-            # Average over batch, time, and steps to get per-operation gradients
-            for i, op_name in enumerate(op_names):
-                self.captured_gradients[f"grad/op/{op_name}"] = float(op_grads[i])
+    def _op_grad_hook_fn(self, grad):
+        """
+        Hook function to capture gradients of operation probabilities.
+        """
+        if grad is None:
+            # Log zeros for all operation gradients to keep time-series complete
+            self.captured_gradients["op_logits_mean"] = 0.0
+            for op_name in op_names:
+                self.captured_gradients[f"grad/op/{op_name}"] = 0.0
+            return
+        grad_mean = grad.detach().mean().item()
+        op_grads = grad.detach().mean(dim=(0, 1, 2)).cpu().numpy()  # (n_ops,)
 
-        hook = model.dag.plan_predictor.last_operation_probs.register_hook(save_op_grad)
-        self.gradient_hooks.append(hook)
+        self.captured_gradients["op_logits_mean"] = grad_mean
+        # Average over batch, time, and steps to get per-operation gradients
+        for i, op_name in enumerate(op_names):
+            self.captured_gradients[f"grad/op/{op_name}"] = float(op_grads[i])
+
+    def _dag_output_grad_hook_fn(self, grad):
+        """Hook function to capture gradients of DAG output."""
+        if grad is None:
+            # Log zero so dashboards remain continuous even when gate closes
+            self.captured_gradients["grad/dag_output_norm"] = 0.0
+            self.captured_gradients["grad/dag_output_mean"] = 0.0
+            self.captured_gradients["grad/dag_output_std"] = 0.0
+            return
+        grad_norm = grad.detach().norm().item()
+        grad_mean = grad.detach().mean().item()
+        grad_std = grad.detach().std().item()
+
+        self.captured_gradients["grad/dag_output_norm"] = grad_norm
+        self.captured_gradients["grad/dag_output_mean"] = grad_mean
+        self.captured_gradients["grad/dag_output_std"] = grad_std
+
+    def _dag_final_values_grad_hook_fn(self, grad):
+        """Hook function to capture gradients of DAG final values."""
+        if grad is None:
+            self.captured_gradients["grad/dag_final_values_norm"] = 0.0
+            self.captured_gradients["grad/dag_final_values_mean"] = 0.0
+            return
+        grad_norm = grad.detach().norm().item()
+        grad_mean = grad.detach().mean().item()
+
+        self.captured_gradients["grad/dag_final_values_norm"] = grad_norm
+        self.captured_gradients["grad/dag_final_values_mean"] = grad_mean
+
+    def _orig_hidden_grad_hook_fn(self, grad):
+        """Hook function to capture gradients of original hidden states."""
+        if grad is None:
+            self.captured_gradients["grad/orig_hidden_mean"] = 0.0
+            return
+        grad_mean = grad.detach().mean().item()
+        self.captured_gradients["grad/orig_hidden_mean"] = grad_mean
+
+    def _gate_w_d_grad_hook_fn(self, grad):
+        """Hook function to capture gradients of gate_w_d."""
+        if grad is None:
+            self.captured_gradients["grad/gate_w_d"] = 0.0
+            return
+        grad_norm = grad.detach().norm().item()
+        self.captured_gradients["grad/gate_w_d"] = grad_norm
+
+    def _gate_w_o_grad_hook_fn(self, grad):
+        """Hook function to capture gradients of gate_w_o."""
+        if grad is None:
+            self.captured_gradients["grad/gate_w_o"] = 0.0
+            return
+        grad_norm = grad.detach().norm().item()
+        self.captured_gradients["grad/gate_w_o"] = grad_norm
 
     def _collect_op_metrics(self, model) -> Dict[str, float]:
         """Compute op-selection sharpness, diversity and mutual information.

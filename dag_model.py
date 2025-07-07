@@ -398,30 +398,17 @@ class DAGPlanPredictor(nn.Module):
         self.last_operation_probs: torch.Tensor | None = None
         self.mag_logits: torch.Tensor | None = None  # for logging
 
-    def forward(
-        self, original_hidden: torch.Tensor, return_internal_state_or_hidden=False
-    ):
+    def forward(self, original_hidden: torch.Tensor):
         """
         Predict both initial values and operation choices for stack-based execution.
 
         Args:
             original_hidden: (B, T, H) - original hidden states
-            return_internal_state_or_hidden: Either:
-                - bool: Whether to return internal states for loss computation (new interface)
-                - Tensor: Hidden states (old interface for backward compatibility - ignored)
         Returns:
-            If return_internal_state=False:
                 initial_sgn: (B, T, num_scratch_nodes) - initial signs
                 initial_log: (B, T, num_scratch_nodes) - initial log magnitudes
                 operation_probs: (B, T, dag_depth, n_ops) - probabilities for operations
-            If return_internal_state=True:
-                (initial_sgn, initial_log, operation_probs, internal_state_dict)
         """
-        # Handle backward compatibility - if second argument is a tensor, treat as old interface
-        if isinstance(return_internal_state_or_hidden, torch.Tensor):
-            return_internal_state = False  # Old interface doesn't return internal state
-        else:
-            return_internal_state = return_internal_state_or_hidden
         B, T, H = original_hidden.shape
 
         # Split hidden state into initial value and dag structure components
@@ -482,22 +469,14 @@ class DAGPlanPredictor(nn.Module):
 
         # Cache for logging
         self.last_operation_probs = operation_probs
-
-        if return_internal_state:
-            # Return internal states for enhanced loss computation
-            internal_state = {
-                "initial_value_hidden": initial_value_hidden,  # (B, T, H) - processed initial value hidden states
-                "dag_structure_hidden": dag_structure_hidden,  # (B, T, H) - processed structure hidden states
-                "cross_output": cross_output,  # (B, T, H) - cross attention output
-                "initial_values_raw": initial_values_raw,  # (B, T, 2*num_nodes) - raw initial value predictions
-                "operation_logits_raw": operation_logits_raw,  # (B, T, depth*n_ops) - raw operation logits
-                "sign_logits": sign_logits,  # (B, T, num_nodes) - sign logits before tanh
-                "mag_logits": mag_logits,  # (B, T, num_nodes) - magnitude logits before processing
-                "operation_logits": operation_logits,  # (B, T, depth, n_ops) - operation logits before softmax
-            }
-            return initial_sgn, initial_log, operation_probs, internal_state
-        else:
-            return initial_sgn, initial_log, operation_probs
+        # Retain grad for loss computation on predictor training (only if requires_grad)
+        if initial_sgn.requires_grad:
+            initial_sgn.retain_grad()
+        if initial_log.requires_grad:
+            initial_log.retain_grad()
+        if operation_probs.requires_grad:
+            operation_probs.retain_grad()
+        return initial_sgn, initial_log, operation_probs
 
 
 def apply_log_op(
@@ -602,7 +581,7 @@ def stack_based_execution_buffered(
             result_log = _rms_rescale(prev_logs_slice, result_log)
 
         # Update buffer: replace second-to-last element with result
-        # Use advanced indexing to avoid in-place operations that break autograd
+        # Use clone to avoid in-place operations that break autograd
         new_buffer_sgn = buffer_sgn.clone()
         new_buffer_log = buffer_log.clone()
 

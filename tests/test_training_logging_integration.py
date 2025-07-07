@@ -9,8 +9,7 @@ import torch
 # Add repo root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from test_common import (assert_valid_logging, sample_batch_small, small_model,
-                         tiny_model)
+import pytest
 
 from dag_logger import DAGLogger
 
@@ -46,6 +45,7 @@ def test_comprehensive_training_and_text_generation_logging(
 
     # Multiple forward passes to test logging stability
     for iteration in range(3):
+        # Do forward pass first to create tensors (in training mode)
         logits, loss = model(batch_x, batch_y)
 
         # Verify shapes and values
@@ -53,8 +53,26 @@ def test_comprehensive_training_and_text_generation_logging(
         assert loss.item() > 0
         assert torch.isfinite(loss)
 
+        # Set up gradient tracking AFTER forward pass when tensors exist
+        logger = DAGLogger()
+        logger.setup_gradient_tracking(model)
+
         # Test logging functionality
-        assert_valid_logging(model, batch_x, batch_y)
+        logger.compute_log_statistics(model)
+
+        # Test console logging works (but don't actually print to reduce noise)
+        try:
+            logger.format_console_logging(model)
+        except Exception as e:
+            pytest.fail(f"Console logging failed: {e}")
+
+        # Test wandb logging dict
+        wandb_dict = logger.get_wandb_logging_dict(model)
+        assert isinstance(wandb_dict, dict)
+
+        # Test extra values
+        extra_vals = logger.get_extra_vals(model)
+        assert isinstance(extra_vals, dict)
 
         # Test gradient capture
         loss.backward()
@@ -105,10 +123,13 @@ def test_gradient_capture_and_api_integration(small_model, tiny_model):
     batch_x = torch.randint(0, config.vocab_size, (2, 4))
     batch_y = torch.randint(0, config.vocab_size, (2, 4))
 
-    # Forward pass
+    # Ensure model is in training mode for gradient tracking
+    model.train()
+
+    # Do forward pass first to create tensors (in training mode)
     logits, loss = model(batch_x, batch_y)
 
-    # Set up gradient tracking
+    # Set up gradient tracking AFTER forward pass when tensors exist
     logger.setup_gradient_tracking(model)
 
     # Backward pass
