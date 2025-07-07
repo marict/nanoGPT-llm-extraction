@@ -361,6 +361,10 @@ class DAGPlanPredictor(nn.Module):
         self.num_scratch_nodes = config.dag_depth + 1
         self.n_embd = config.n_embd
 
+        # Blocks for splitting hidden state
+        self.initial_value_hidden = Block(config)
+        self.dag_structure_hidden = Block(config)
+
         # Separate predictors for initial values and operations
         # Initial values predictor: hidden_state -> initial_values
         initial_values_output_dim = 2 * self.num_scratch_nodes
@@ -395,20 +399,34 @@ class DAGPlanPredictor(nn.Module):
         self.mag_logits: torch.Tensor | None = None  # for logging
 
     def forward(
-        self, initial_value_hidden: torch.Tensor, dag_structure_hidden: torch.Tensor
+        self, original_hidden: torch.Tensor, return_internal_state_or_hidden=False
     ):
         """
         Predict both initial values and operation choices for stack-based execution.
 
         Args:
-            initial_value_hidden: (B, T, H) - hidden states for initial values
-            dag_structure_hidden: (B, T, H) - hidden states for operations
+            original_hidden: (B, T, H) - original hidden states
+            return_internal_state_or_hidden: Either:
+                - bool: Whether to return internal states for loss computation (new interface)
+                - Tensor: Hidden states (old interface for backward compatibility - ignored)
         Returns:
-            initial_sgn: (B, T, num_scratch_nodes) - initial signs
-            initial_log: (B, T, num_scratch_nodes) - initial log magnitudes
-            operation_probs: (B, T, dag_depth, n_ops) - probabilities for operations
+            If return_internal_state=False:
+                initial_sgn: (B, T, num_scratch_nodes) - initial signs
+                initial_log: (B, T, num_scratch_nodes) - initial log magnitudes
+                operation_probs: (B, T, dag_depth, n_ops) - probabilities for operations
+            If return_internal_state=True:
+                (initial_sgn, initial_log, operation_probs, internal_state_dict)
         """
-        B, T, H = initial_value_hidden.shape
+        # Handle backward compatibility - if second argument is a tensor, treat as old interface
+        if isinstance(return_internal_state_or_hidden, torch.Tensor):
+            return_internal_state = False  # Old interface doesn't return internal state
+        else:
+            return_internal_state = return_internal_state_or_hidden
+        B, T, H = original_hidden.shape
+
+        # Split hidden state into initial value and dag structure components
+        initial_value_hidden = self.initial_value_hidden(original_hidden)
+        dag_structure_hidden = self.dag_structure_hidden(original_hidden)
 
         # Process initial values
         initial_value_flat = initial_value_hidden.reshape(B * T, H)
@@ -419,10 +437,16 @@ class DAGPlanPredictor(nn.Module):
 
         # Process operations using cross attention
         # Cross attention: dag_structure_hidden attends to initial_value_hidden
+        # Create causal mask to prevent attending to future positions
+        causal_mask = torch.triu(
+            torch.full((T, T), float("-inf"), device=original_hidden.device), diagonal=1
+        )
+
         cross_output, _ = self.cross_attn(
             query=dag_structure_hidden,
             key=initial_value_hidden,
             value=initial_value_hidden,
+            attn_mask=causal_mask,
         )
 
         # Apply LayerNorm for stability
@@ -459,7 +483,21 @@ class DAGPlanPredictor(nn.Module):
         # Cache for logging
         self.last_operation_probs = operation_probs
 
-        return initial_sgn, initial_log, operation_probs
+        if return_internal_state:
+            # Return internal states for enhanced loss computation
+            internal_state = {
+                "initial_value_hidden": initial_value_hidden,  # (B, T, H) - processed initial value hidden states
+                "dag_structure_hidden": dag_structure_hidden,  # (B, T, H) - processed structure hidden states
+                "cross_output": cross_output,  # (B, T, H) - cross attention output
+                "initial_values_raw": initial_values_raw,  # (B, T, 2*num_nodes) - raw initial value predictions
+                "operation_logits_raw": operation_logits_raw,  # (B, T, depth*n_ops) - raw operation logits
+                "sign_logits": sign_logits,  # (B, T, num_nodes) - sign logits before tanh
+                "mag_logits": mag_logits,  # (B, T, num_nodes) - magnitude logits before processing
+                "operation_logits": operation_logits,  # (B, T, depth, n_ops) - operation logits before softmax
+            }
+            return initial_sgn, initial_log, operation_probs, internal_state
+        else:
+            return initial_sgn, initial_log, operation_probs
 
 
 def apply_log_op(
@@ -732,8 +770,6 @@ class DifferentiableDAG(nn.Module):
                 f"Each step consumes one value, need at least {self.dag_depth + 1} initial values."
             )
 
-        self.initial_value_hidden = Block(config)
-        self.dag_structure_hidden = Block(config)
         self.post_dag = Block(config)
 
         # Initialize unified plan predictor (predicts both initial values and operations)
@@ -745,20 +781,8 @@ class DifferentiableDAG(nn.Module):
         self,
         original_hidden: torch.Tensor,  # (B, T, H)
     ):
-        # Pre-process hidden states
-        initial_value_hidden = self.initial_value_hidden(original_hidden)
-        dag_structure_hidden = self.dag_structure_hidden(original_hidden)
-
-        if ENABLE_DEBUG_NAN_CHECKS:
-            _debug_check("dag_structure_hidden", dag_structure_hidden)
-
-        if ENABLE_DEBUG_NAN_CHECKS:
-            _debug_check("initial_value_hidden", initial_value_hidden)
-
         # Generate unified plan (initial values + operations)
-        initial_sgn, initial_log, operation_probs = self.plan_predictor(
-            initial_value_hidden, dag_structure_hidden
-        )
+        initial_sgn, initial_log, operation_probs = self.plan_predictor(original_hidden)
 
         if ENABLE_DEBUG_NAN_CHECKS:
             _debug_check("initial_values", initial_sgn, initial_log)

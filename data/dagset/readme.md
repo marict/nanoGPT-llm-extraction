@@ -44,8 +44,7 @@ train_loader, val_loader = create_dag_dataloaders(
     val_examples_per_batch=100,     # Generate 100 examples per batch
     batch_size=32,                  # Training batch size
     block_size=1024,                # Sequence length
-    max_depth=8,                    # Maximum DAG depth
-    min_depth=1,                    # Minimum DAG depth
+    max_depth=8,                    # DAG depth (all examples have this depth)
     train_seed=42,                  # Seed for reproducible training data
     val_seed=43,                    # Different seed for validation data
 )
@@ -66,7 +65,6 @@ from data.dagset import StreamingDAGDataset
 # Create custom dataset
 dataset = StreamingDAGDataset(
     max_depth=5,
-    min_depth=1,
     value_range=(-20.0, 20.0),  # Custom value range
     seed=123,
 )

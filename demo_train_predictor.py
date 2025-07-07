@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-demo_train_dag.py
-Demonstration of how to use train_dag.py for DAG predictor pretraining.
+demo_train_predictor.py
+Demonstration of how to use train_predictor.py for DAG predictor pretraining.
 
 This script shows how to:
 1. Set up the environment
@@ -10,7 +10,7 @@ This script shows how to:
 4. Use the pretrained weights in full model training
 
 Usage:
-    python demo_train_dag.py
+    python demo_train_predictor.py
 """
 
 import os
@@ -27,7 +27,7 @@ def demo_dag_pretraining():
 
     # 1. Configuration
     print("\n1. Configuration:")
-    print("   - Uses config/train_dag_default.py")
+    print("   - Uses config/train_predictor_default.py")
     print("   - Optimized for fast pretraining")
     print("   - Trains only DAG predictor components")
     print("   - Uses DAGStructureDataset for structure prediction")
@@ -38,10 +38,10 @@ def demo_dag_pretraining():
     print("   export WANDB_API_KEY=your_key_here")
     print()
     print("   # Run pretraining")
-    print("   python train_dag.py config/train_dag_default.py")
+    print("   python train_predictor.py config/train_predictor_default.py")
     print()
     print("   # With custom parameters")
-    print("   python train_dag.py config/train_dag_default.py \\")
+    print("   python train_predictor.py config/train_predictor_default.py \\")
     print("     --dag_depth=4 \\")
     print("     --max_iters=1000 \\")
     print("     --learning_rate=1e-3")
@@ -50,7 +50,7 @@ def demo_dag_pretraining():
     print("\n3. Key Configuration Options:")
     print("   - dag_depth: Target DAG depth (default: 4)")
     print("   - max_dag_depth: Max depth for training data (default: 6)")
-    print("   - min_dag_depth: Min depth for training data (default: 1)")
+    print("")
     print("   - learning_rate: Learning rate (default: 5e-4)")
     print("   - batch_size: Batch size (default: 16)")
     print("   - max_iters: Training iterations (default: 5000)")
@@ -104,7 +104,7 @@ note = "Custom DAG pretraining experiment"
 
 # DAG dataset parameters
 max_dag_depth = 8       # Harder problems
-min_dag_depth = 2       # Skip trivial cases
+
 batch_size = 32         # Larger batches
 sequence_length = 512   # Longer sequences
 
@@ -138,9 +138,9 @@ if __name__ == "__main__":
     show_config_example()
 
     print("\nTo run the tests:")
-    print("python -m pytest tests/test_train_dag.py -v")
+    print("python -m pytest tests/test_train_predictor.py -v")
 
     print("\nTo run a quick test:")
     print(
-        "WANDB_API_KEY=dummy python train_dag.py config/train_dag_default.py --max_iters=1 --eval_only=True"
+        "WANDB_API_KEY=dummy python train_predictor.py config/train_predictor_default.py --max_iters=1 --eval_only=True"
     )

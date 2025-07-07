@@ -66,10 +66,14 @@ def _extract_config_name(config_path: str) -> str:
 
 
 def _build_training_command(
-    train_args: str, keep_alive: bool, note: str | None, wandb_run_id: str | None
+    train_args: str,
+    keep_alive: bool,
+    note: str | None,
+    wandb_run_id: str | None,
+    script_name: str = "train.py",
 ) -> str:
     """Build the complete training command with all flags."""
-    cmd = train_args
+    cmd = f"{script_name} {train_args}"
 
     if keep_alive:
         cmd += " --keep-alive"
@@ -100,6 +104,7 @@ def start_cloud_training(
     api_key: str | None = None,
     keep_alive: bool = False,
     note: str | None = None,
+    script_name: str = "train.py",
 ) -> str:
     """Launch a RunPod GPU instance and run training automatically."""
 
@@ -142,7 +147,7 @@ def start_cloud_training(
 
     # Build training command (wandb_run_id guaranteed because WANDB_API_KEY is required)
     training_command = _build_training_command(
-        train_args, keep_alive, note, wandb_run_id
+        train_args, keep_alive, note, wandb_run_id, script_name
     )
     docker_script = _create_docker_script(training_command)
     final_docker_args = f"bash -c {shlex.quote(docker_script)}"
@@ -305,6 +310,11 @@ if __name__ == "__main__":
         help="Keep pod alive after training completes (disables auto-stop)",
     )
     t.add_argument("--note", help="Note to add to the W&B run")
+    t.add_argument(
+        "--script",
+        default="train.py",
+        help="Training script to run (train.py or train_predictor.py)",
+    )
 
     args = parser.parse_args()
     if args.cmd == "train":
@@ -314,4 +324,5 @@ if __name__ == "__main__":
             api_key=args.api_key,
             keep_alive=args.keep_alive,
             note=args.note,
+            script_name=args.script,
         )

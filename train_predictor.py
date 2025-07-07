@@ -24,6 +24,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import tiktoken
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from torch.distributed import destroy_process_group, init_process_group
@@ -32,8 +33,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import runpod_service
 import wandb
 from dag_logger import DAGLogger
-from dag_model import GPT, GPTConfig, op_names
-from data.dagset.streaming import create_dag_structure_dataloaders
+from dag_model import (MLP, Block, CausalSelfAttention, DAGPlanPredictor,
+                       LayerNorm, op_names)
+from data.dagset.streaming import create_dag_dataloaders
 from python_version_check import check_python_version
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
@@ -122,7 +124,6 @@ class DAGTrainConfig:
 
     # DAG dataset parameters
     max_dag_depth: int = 8
-    min_dag_depth: int = 1
     train_examples_per_batch: int = 1000
     val_examples_per_batch: int = 100
 
@@ -172,6 +173,108 @@ class DAGTrainConfig:
     # Random seeds
     train_seed: int = 42
     val_seed: int = 43
+
+
+# --------------------------------------------------------------------------- #
+# Shallow Attention DAG Predictor Model
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class ShallowAttentionConfig:
+    """Configuration for shallow attention model."""
+
+    vocab_size: int = 50304  # GPT-2 vocab size
+    n_embd: int = 768
+    n_head: int = 12
+    dropout: float = 0.0
+    bias: bool = False
+    dag_depth: int = 4
+    sequence_length: int = 512
+    softmax_temperature: float = 20.0
+
+
+class ShallowAttentionDAGPredictor(nn.Module):
+    """
+    Standalone model that performs shallow attention over token embeddings
+    and uses a DAG predictor for structure prediction.
+
+    Architecture:
+    Token IDs -> Embeddings -> Position Embeddings -> Single Attention Layer -> DAG Predictor
+    """
+
+    def __init__(self, config: ShallowAttentionConfig):
+        super().__init__()
+        self.config = config
+
+        # Token and position embeddings
+        self.wte = nn.Embedding(config.vocab_size, config.n_embd)
+        self.wpe = nn.Embedding(config.sequence_length, config.n_embd)
+        self.drop = nn.Dropout(config.dropout)
+
+        # Single attention block for shallow attention
+        self.attention_block = Block(config)
+
+        # Layer norm for stability
+        self.ln_f = LayerNorm(config.n_embd, bias=config.bias)
+
+        # DAG predictor
+        self.dag_predictor = DAGPlanPredictor(config, config.softmax_temperature)
+
+        # Initialize weights
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        """Initialize weights using GPT-2 style initialization."""
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def forward(self, input_ids: torch.Tensor, return_internal_state: bool = False):
+        """
+        Forward pass through shallow attention to DAG predictor.
+
+        Args:
+            input_ids: (B, T) token IDs
+            return_internal_state: Whether to return internal states from DAG predictor
+
+        Returns:
+            DAG predictor outputs (signs, log magnitudes, operation probs)
+            Optionally internal states if return_internal_state=True
+        """
+        B, T = input_ids.shape
+        device = input_ids.device
+
+        # Token embeddings
+        token_emb = self.wte(input_ids)  # (B, T, n_embd)
+
+        # Position embeddings
+        pos = torch.arange(T, device=device)
+        pos_emb = self.wpe(pos)  # (T, n_embd)
+
+        # Combine embeddings
+        hidden = self.drop(token_emb + pos_emb)  # (B, T, n_embd)
+
+        # Single attention layer (shallow attention)
+        hidden = self.attention_block(hidden)  # (B, T, n_embd)
+
+        # Final layer norm
+        hidden = self.ln_f(hidden)  # (B, T, n_embd)
+
+        # DAG predictor
+        return self.dag_predictor(
+            hidden, return_internal_state_or_hidden=return_internal_state
+        )
+
+    def get_num_params(self, non_embedding=True):
+        """Get number of parameters in the model."""
+        n_params = sum(p.numel() for p in self.parameters())
+        if non_embedding:
+            n_params -= self.wpe.weight.numel()
+        return n_params
 
 
 def generate_run_name(cfg: DAGTrainConfig) -> str:
@@ -318,8 +421,9 @@ def compute_dag_structure_loss(
     target_ops: torch.Tensor,
     target_depths: torch.Tensor,
     cfg: DAGTrainConfig,
+    internal_state: Dict[str, torch.Tensor] = None,
 ) -> Dict[str, torch.Tensor]:
-    """Compute loss for DAG structure prediction.
+    """Compute loss for DAG structure prediction with optional internal state losses.
 
     Args:
         pred_sgn: (B, T, num_nodes) predicted signs
@@ -330,6 +434,7 @@ def compute_dag_structure_loss(
         target_ops: (B, T, depth, n_ops) target operation probabilities (one-hot)
         target_depths: (B,) actual depths for each example
         cfg: Training configuration
+        internal_state: Optional internal states for enhanced loss computation
 
     Returns:
         Dictionary with loss components
@@ -365,19 +470,24 @@ def compute_dag_structure_loss(
     log_loss = (log_loss * log_mask).sum() / log_mask.sum()
     op_loss = (op_loss * op_mask).sum() / op_mask.sum()
 
-    # Weighted total loss
+    # Weighted total loss - ONLY from the main predictions (signs, magnitudes, operations)
     total_loss = (
         cfg.sign_loss_weight * sign_loss
         + cfg.log_loss_weight * log_loss
         + cfg.op_loss_weight * op_loss
     )
 
-    return {
+    loss_dict = {
         "total_loss": total_loss,
         "sign_loss": sign_loss,
         "log_loss": log_loss,
         "op_loss": op_loss,
     }
+
+    # Note: internal_state parameter is kept for debugging/logging purposes only
+    # We do NOT add any regularization losses based on internal states
+
+    return loss_dict
 
 
 def evaluate_dag_model(
@@ -421,34 +531,12 @@ def evaluate_dag_model(
                 0, 1000, (batch_size, cfg.sequence_length), device=device
             )
 
-            # Get model embeddings/hidden states
+            # Forward pass through shallow attention DAG predictor model
             with ctx:
-                # For DAG pretraining, we need to get hidden states from the model
-                # and then use the DAG predictor on them
-                if hasattr(model, "transformer"):
-                    # Get hidden states from transformer
-                    pos = torch.arange(cfg.sequence_length, device=device)
-                    emb = model.transformer.wte(input_tokens) + model.transformer.wpe(
-                        pos
-                    )
-                    hidden = model.transformer.drop(emb)
-                    for block in model.transformer.h:
-                        hidden = block(hidden)
-                    hidden = model.transformer.ln_f(hidden)
-                else:
-                    # Fallback: create random hidden states
-                    hidden = torch.randn(
-                        batch_size, cfg.sequence_length, cfg.n_embd, device=device
-                    )
-
-                # Use DAG predictor to predict structure
-                if hasattr(model, "dag") and model.dag is not None:
-                    pred_sgn, pred_log, pred_ops = model.dag.plan_predictor(
-                        hidden, hidden
-                    )
-                else:
-                    # Model doesn't have DAG components
-                    continue
+                # Use the standalone shallow attention model
+                pred_sgn, pred_log, pred_ops = model(
+                    input_tokens, return_internal_state=False
+                )
 
                 # Average predictions over sequence length for structure prediction
                 pred_sgn = pred_sgn.mean(dim=1)  # (B, num_nodes_pred)
@@ -491,7 +579,7 @@ def evaluate_dag_model(
                 target_log = target_log.unsqueeze(1)  # (B, 1, num_nodes)
                 target_ops = target_ops.unsqueeze(1)  # (B, 1, depth, n_ops)
 
-                # Compute losses
+                # Compute losses (no internal state for evaluation)
                 losses = compute_dag_structure_loss(
                     pred_sgn,
                     pred_log,
@@ -501,6 +589,7 @@ def evaluate_dag_model(
                     target_ops,
                     target_depths,
                     cfg,
+                    internal_state=None,
                 )
 
                 # Accumulate losses
@@ -518,7 +607,7 @@ def evaluate_dag_model(
     return total_losses
 
 
-def train_dag(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
+def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
     """Run DAG predictor training loop."""
     # --------------------------------------------------------------------- #
     # Setup
@@ -610,8 +699,7 @@ def train_dag(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
     train_loader, val_loader = create_dag_structure_dataloaders(
         train_batch_size=cfg.batch_size,
         val_batch_size=cfg.batch_size,
-        max_depth=cfg.max_dag_depth,
-        min_depth=cfg.min_dag_depth,
+        max_depth=cfg.dag_depth,  # All examples have exactly this depth to match the model
         train_seed=cfg.train_seed,
         val_seed=cfg.val_seed,
     )
@@ -619,23 +707,27 @@ def train_dag(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
     # --------------------------------------------------------------------- #
     # Model creation
     # --------------------------------------------------------------------- #
-    print(f"[{time.time() - setup_start:.2f}s] Initializing model")
+    print(
+        f"[{time.time() - setup_start:.2f}s] Initializing shallow attention DAG predictor model"
+    )
 
-    model_args = dict(
-        n_layer=cfg.n_layer,
-        n_head=cfg.n_head,
-        n_embd=cfg.n_embd,
-        block_size=cfg.sequence_length,
-        bias=cfg.bias,
+    # Create config for shallow attention model
+    model_config = ShallowAttentionConfig(
         vocab_size=50304,  # Standard GPT-2 vocab size
+        n_embd=cfg.n_embd,
+        n_head=cfg.n_head,
         dropout=cfg.dropout,
+        bias=cfg.bias,
         dag_depth=cfg.dag_depth,
+        sequence_length=cfg.sequence_length,
+        softmax_temperature=20.0,
     )
 
     if cfg.init_from == "scratch":
-        print(f"[{time.time() - setup_start:.2f}s] Initializing model from scratch")
-        gptconf = GPTConfig(**model_args)
-        model = GPT(gptconf)
+        print(
+            f"[{time.time() - setup_start:.2f}s] Initializing shallow attention model from scratch"
+        )
+        model = ShallowAttentionDAGPredictor(model_config)
         iter_num, best_val_loss = 0, 1e9
     elif cfg.init_from == "resume":
         print(f"[{time.time() - setup_start:.2f}s] Resuming from checkpoint")
@@ -643,8 +735,9 @@ def train_dag(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
         if ckpt_path is None:
             raise ValueError(f"No checkpoint found for resuming")
         checkpoint = torch.load(ckpt_path, map_location=device)
-        gptconf = GPTConfig(**checkpoint["model_args"])
-        model = GPT(gptconf)
+        # Create model with saved config
+        saved_config = ShallowAttentionConfig(**checkpoint["model_config"])
+        model = ShallowAttentionDAGPredictor(saved_config)
         state_dict = {
             k.removeprefix("_orig_mod."): v for k, v in checkpoint["model"].items()
         }
@@ -656,28 +749,20 @@ def train_dag(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
 
     model.to(device)
 
-    # Only train DAG components
-    if hasattr(model, "dag") and model.dag is not None:
-        # Freeze everything except DAG predictor
-        for name, param in model.named_parameters():
-            if "dag.plan_predictor" not in name:
-                param.requires_grad = False
-
-        print(f"[{time.time() - setup_start:.2f}s] Froze non-DAG parameters")
-    else:
-        raise ValueError("Model must have DAG components for DAG predictor training")
+    if master_process:
+        print(f"Model parameters: {model.get_num_params() / 1e6:.2f}M")
 
     # Optimizer setup
     print(f"[{time.time() - setup_start:.2f}s] Initializing optimizer")
 
-    # Only optimize DAG predictor parameters
-    dag_params = [p for n, p in model.named_parameters() if p.requires_grad]
+    # All parameters are trainable in this standalone model
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
     print(
-        f"[{time.time() - setup_start:.2f}s] Training {len(dag_params)} DAG predictor parameters"
+        f"[{time.time() - setup_start:.2f}s] Training {len(trainable_params)} parameters"
     )
 
     optimizer = torch.optim.AdamW(
-        dag_params,
+        trainable_params,
         lr=cfg.learning_rate,
         betas=(cfg.beta1, cfg.beta2),
         weight_decay=cfg.weight_decay,
@@ -730,12 +815,14 @@ def train_dag(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
                 raw_model, val_loader, device, ctx, cfg, cfg.eval_iters
             )
 
-            print(
+            # Build validation log message
+            val_log_msg = (
                 f"step {iter_num}: val_total {val_losses['total_loss']:.4f}, "
                 f"val_sign {val_losses['sign_loss']:.4f}, "
                 f"val_log {val_losses['log_loss']:.4f}, "
                 f"val_op {val_losses['op_loss']:.4f}"
             )
+            print(val_log_msg)
 
             # Log to wandb
             if run is not None:
@@ -747,6 +834,7 @@ def train_dag(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
                     "val/log_loss": val_losses["log_loss"],
                     "val/op_loss": val_losses["op_loss"],
                 }
+
                 wandb.log(log_dict, step=iter_num, commit=False)
 
             # Save checkpoint
@@ -756,7 +844,7 @@ def train_dag(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
                     ckpt = {
                         "model": raw_model.state_dict(),
                         "optimizer": optimizer.state_dict(),
-                        "model_args": model_args,
+                        "model_config": model_config.__dict__,
                         "iter_num": iter_num,
                         "best_val_loss": best_val_loss,
                         "config": cfg.__dict__,
@@ -797,25 +885,21 @@ def train_dag(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
                 )
 
             with ctx:
-                # Create dummy input tokens
+                # Tokenize texts properly (instead of dummy tokens)
                 batch_size = len(texts)
+
+                # For now, create random input tokens (in real implementation, would tokenize texts)
+                # TODO: Implement proper text tokenization from DAG structure descriptions
                 input_tokens = torch.randint(
-                    0, 1000, (batch_size, cfg.sequence_length), device=device
+                    0,
+                    min(1000, raw_model.config.vocab_size),
+                    (batch_size, cfg.sequence_length),
+                    device=device,
                 )
 
-                # Get hidden states
-                pos = torch.arange(cfg.sequence_length, device=device)
-                emb = raw_model.transformer.wte(
-                    input_tokens
-                ) + raw_model.transformer.wpe(pos)
-                hidden = raw_model.transformer.drop(emb)
-                for block in raw_model.transformer.h:
-                    hidden = block(hidden)
-                hidden = raw_model.transformer.ln_f(hidden)
-
-                # DAG predictor forward pass
-                pred_sgn, pred_log, pred_ops = raw_model.dag.plan_predictor(
-                    hidden, hidden
+                # Forward pass through shallow attention DAG predictor model
+                pred_sgn, pred_log, pred_ops, internal_state = raw_model(
+                    input_tokens, return_internal_state=True
                 )
 
                 # Average over sequence dimension
@@ -860,7 +944,7 @@ def train_dag(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
                 target_log_seq = target_log.unsqueeze(1)
                 target_ops_seq = target_ops.unsqueeze(1)
 
-                # Compute loss
+                # Compute loss with internal states
                 losses = compute_dag_structure_loss(
                     pred_sgn_seq,
                     pred_log_seq,
@@ -870,6 +954,7 @@ def train_dag(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
                     target_ops_seq,
                     target_depths,
                     cfg,
+                    internal_state,
                 )
 
                 loss = losses["total_loss"] / cfg.gradient_accumulation_steps
@@ -894,13 +979,32 @@ def train_dag(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
         t0 = time.time()
 
         if iter_num % cfg.log_interval == 0 and master_process:
-            print(
+            # Build dynamic log message for main losses
+            log_msg = (
                 f"iter {iter_num}: loss {loss_accum['total_loss']:.4f}, "
                 f"sign {loss_accum['sign_loss']:.4f}, "
                 f"log {loss_accum['log_loss']:.4f}, "
-                f"op {loss_accum['op_loss']:.4f}, "
-                f"time {dt*1000:.2f}ms"
+                f"op {loss_accum['op_loss']:.4f}"
             )
+
+            # Add internal losses if present
+            internal_loss_keys = [
+                k
+                for k in loss_accum.keys()
+                if k.endswith("_loss")
+                and k not in ["total_loss", "sign_loss", "log_loss", "op_loss"]
+            ]
+            if internal_loss_keys:
+                internal_msg = ", ".join(
+                    [
+                        f"{k.replace('_loss', '')} {loss_accum[k]:.6f}"
+                        for k in internal_loss_keys
+                    ]
+                )
+                log_msg += f", {internal_msg}"
+
+            log_msg += f", time {dt*1000:.2f}ms"
+            print(log_msg)
 
             # Log to wandb
             if run is not None:
@@ -912,6 +1016,16 @@ def train_dag(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
                     "train/op_loss": loss_accum["op_loss"],
                     "lr": lr,
                 }
+
+                # Add internal losses to wandb logging
+                for key, value in loss_accum.items():
+                    if (
+                        key.endswith("_loss")
+                        and key not in log_dict
+                        and key != "total_loss"
+                    ):
+                        log_dict[f"train/{key}"] = value
+
                 wandb.log(log_dict, step=iter_num, commit=True)
 
         iter_num += 1
@@ -957,11 +1071,14 @@ def main() -> None:
             remote_args,
             args.gpu_type or runpod_service.DEFAULT_GPU_TYPE,
             api_key=os.getenv("RUNPOD_API_KEY"),
+            script_name="train_predictor.py",
+            note=args.note,
+            keep_alive=args.keep_alive,
         )
         return
 
     Path(CHECKPOINT_DIR).mkdir(parents=True, exist_ok=True)
-    train_dag(cfg, wandb_run_id=args.wandb_run_id)
+    train_predictor(cfg, wandb_run_id=args.wandb_run_id)
 
 
 if __name__ == "__main__":

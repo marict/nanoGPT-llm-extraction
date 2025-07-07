@@ -25,7 +25,6 @@ def example_simple_streaming():
     # Create a streaming dataset
     dataset = StreamingDAGDataset(
         max_depth=5,
-        min_depth=1,
         seed=42,
     )
 
@@ -54,7 +53,6 @@ def example_dataloader_usage():
         batch_size=8,  # Training batch size
         block_size=512,  # Sequence length
         max_depth=4,
-        min_depth=1,
         train_seed=42,
         val_seed=43,
     )
@@ -111,7 +109,6 @@ def example_training_loop():
         batch_size=4,
         block_size=128,
         max_depth=3,
-        min_depth=1,
         train_seed=42,
     )
 
@@ -145,7 +142,7 @@ def example_benchmarking():
     """Example 4: Benchmarking generation speed."""
     print("\n=== Example 4: Benchmarking ===")
 
-    dataset = StreamingDAGDataset(max_depth=6, min_depth=1, seed=42)
+    dataset = StreamingDAGDataset(max_depth=6, seed=42)
 
     # Test different batch sizes
     batch_sizes = [10, 100, 1000]

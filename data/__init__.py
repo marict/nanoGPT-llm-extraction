@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
 
+from .dagset import prepare as prepare_dagset
 from .openwebtext.prepare import prepare as prepare_openwebtext
 from .proofpile.prepare import prepare as prepare_proofpile
 from .shakespeare.prepare import prepare as prepare_shakespeare
@@ -10,6 +11,7 @@ DATASETS: Dict[str, Callable] = {
     "shakespeare": prepare_shakespeare,
     "openwebtext": prepare_openwebtext,
     "proofpile": prepare_proofpile,
+    "dagset": prepare_dagset,
 }
 
 

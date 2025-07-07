@@ -151,7 +151,7 @@ def generate_single_dag_example(
     value_range: tuple[float, float] = (-10.0, 10.0),
     rng: random.Random = None,
 ) -> DAGExample:
-    """Generate a single DAG computation example.
+    """Generate a single DAG computation example (structure-only).
 
     Args:
         depth: Depth of the DAG computation
@@ -160,7 +160,7 @@ def generate_single_dag_example(
         rng: Random number generator to use
 
     Returns:
-        DAG computation example
+        DAG computation example with structure only (no computed results)
     """
     if rng is None:
         rng = random
@@ -175,45 +175,25 @@ def generate_single_dag_example(
     # Generate DAG plan
     operations = generate_random_dag_plan(depth, num_initial_values, rng)
 
-    # Execute the computation
-    all_values = execute_dag_computation(initial_values, operations)
-
-    # Format as text
+    # Format as text (structure-only)
     text_lines = []
     text_lines.append(f"DAG Computation (depth={depth}):")
     text_lines.append("")
 
     # Show initial values
     for i, (sign, log_mag) in enumerate(initial_values):
-        actual_value = sign * np.exp(log_mag)
-        text_lines.append(
-            f"v{i} = {actual_value:.6f} (sign={sign:+.1f}, log_mag={log_mag:.6f})"
-        )
+        text_lines.append(f"v{i} = (sign={sign:+.1f}, log_mag={log_mag:.6f})")
 
     text_lines.append("")
 
-    # Show computation steps
+    # Show computation steps (structure only)
     for step, (operand1_idx, operand2_idx, operation_name) in enumerate(operations):
         result_idx = num_initial_values + step
-        result_sign, result_log = all_values[result_idx]
-        result_value = result_sign * np.exp(result_log)
-
         text_lines.append(
             f"Step {step + 1}: v{result_idx} = v{operand1_idx} {operation_name} v{operand2_idx}"
         )
-        text_lines.append(
-            f"  Result: {result_value:.6f} (sign={result_sign:+.1f}, log_mag={result_log:.6f})"
-        )
 
     text_lines.append("")
-
-    # Show final result
-    final_idx = len(all_values) - 1
-    final_sign, final_log = all_values[final_idx]
-    final_value = final_sign * np.exp(final_log)
-    text_lines.append(f"Final result: v{final_idx} = {final_value:.6f}")
-    text_lines.append("")
-
     text = "\n".join(text_lines)
 
     return DAGExample(
@@ -224,23 +204,21 @@ def generate_single_dag_example(
 def generate_dag_dataset(
     num_examples: int = 10000,
     max_depth: int = 8,
-    min_depth: int = 1,
     num_initial_values: int = 1,
     value_range: tuple[float, float] = (-10.0, 10.0),
     rng: random.Random = None,
 ) -> list[DAGExample]:
-    """Generate a dataset of DAG computation examples.
+    """Generate a dataset of DAG computation examples (structure-only).
 
     Args:
         num_examples: Number of examples to generate
-        max_depth: Maximum DAG depth
-        min_depth: Minimum DAG depth
+        max_depth: DAG depth (all examples will have this depth)
         num_initial_values: Number of initial values per example
         value_range: Range for initial values
         rng: Random number generator to use
 
     Returns:
-        List of DAG examples
+        List of DAG examples with structure only (no computed results)
     """
     if rng is None:
         rng = random
@@ -248,10 +226,11 @@ def generate_dag_dataset(
     examples = []
 
     for _ in range(num_examples):
-        # Choose random depth
-        depth = rng.randint(min_depth, max_depth)
+        # Use fixed depth - all examples should have the same depth as the model
+        # The identity function allows us to handle effective shorter computations naturally
+        depth = max_depth
 
-        # Generate example
+        # Generate example (structure-only for training efficiency)
         example = generate_single_dag_example(
             depth, num_initial_values, value_range, rng
         )
@@ -278,7 +257,6 @@ class StreamingDAGDataset:
     def __init__(
         self,
         max_depth: int = 8,
-        min_depth: int = 1,
         num_initial_values: int = 1,
         value_range: tuple[float, float] = (-10.0, 10.0),
         seed: int = 42,
@@ -287,15 +265,13 @@ class StreamingDAGDataset:
         """Initialize the streaming DAG dataset.
 
         Args:
-            max_depth: Maximum DAG depth
-            min_depth: Minimum DAG depth
+            max_depth: DAG depth (all examples will have this depth)
             num_initial_values: Number of initial values per example
             value_range: Range for initial values
             seed: Random seed for reproducibility
             tokenizer: Tokenizer to use (default: gpt2)
         """
         self.max_depth = max_depth
-        self.min_depth = min_depth
         self.num_initial_values = num_initial_values
         self.value_range = value_range
         self.seed = seed
@@ -321,7 +297,6 @@ class StreamingDAGDataset:
         examples = generate_dag_dataset(
             num_examples=batch_size,
             max_depth=self.max_depth,
-            min_depth=self.min_depth,
             num_initial_values=self.num_initial_values,
             value_range=self.value_range,
             rng=self.random_state,
@@ -485,7 +460,6 @@ def create_dag_dataloaders(
     batch_size: int = 32,
     block_size: int = 1024,
     max_depth: int = 8,
-    min_depth: int = 1,
     train_seed: int = 42,
     val_seed: int = 43,
 ) -> tuple[DAGDataLoader, DAGDataLoader]:
@@ -496,8 +470,7 @@ def create_dag_dataloaders(
         val_examples_per_batch: DAG examples per validation batch
         batch_size: Training batch size
         block_size: Maximum sequence length
-        max_depth: Maximum DAG depth
-        min_depth: Minimum DAG depth
+        max_depth: DAG depth (all examples will have this depth)
         train_seed: Seed for training data
         val_seed: Seed for validation data
 
@@ -507,13 +480,11 @@ def create_dag_dataloaders(
     # Create datasets
     train_dataset = StreamingDAGDataset(
         max_depth=max_depth,
-        min_depth=min_depth,
         seed=train_seed,
     )
 
     val_dataset = StreamingDAGDataset(
         max_depth=max_depth,
-        min_depth=min_depth,
         seed=val_seed,
     )
 
@@ -544,7 +515,6 @@ class DAGStructureDataset:
     def __init__(
         self,
         max_depth: int = 8,
-        min_depth: int = 1,
         num_initial_values: int = 1,
         value_range: tuple[float, float] = (-10.0, 10.0),
         seed: int = 42,
@@ -554,8 +524,7 @@ class DAGStructureDataset:
         """Initialize the DAG structure dataset.
 
         Args:
-            max_depth: Maximum DAG depth
-            min_depth: Minimum DAG depth
+            max_depth: DAG depth (all examples will have this depth)
             num_initial_values: Number of initial values per example
             value_range: Range for initial values
             seed: Random seed
@@ -563,7 +532,6 @@ class DAGStructureDataset:
             max_seq_length: Maximum sequence length for text inputs
         """
         self.max_depth = max_depth
-        self.min_depth = min_depth
         self.num_initial_values = num_initial_values
         self.value_range = value_range
         self.seed = seed
@@ -590,7 +558,7 @@ class DAGStructureDataset:
         Returns:
             Tuple of (text_description, structure_tensors)
         """
-        # Generate the DAG example
+        # Generate the DAG example (structure-only, no execution needed)
         example = generate_single_dag_example(
             depth=depth,
             num_initial_values=self.num_initial_values,
@@ -660,8 +628,9 @@ class DAGStructureDataset:
         structures = []
 
         for _ in range(batch_size):
-            # Choose random depth
-            depth = self.random_state.randint(self.min_depth, self.max_depth)
+            # Use fixed depth - all examples in dataset should have the same depth
+            # The identity function allows us to handle cases with effective depth < max_depth naturally
+            depth = self.max_depth
 
             # Generate example
             text, structure = self.generate_structure_example(depth)
@@ -736,7 +705,6 @@ def create_dag_structure_dataloaders(
     train_batch_size: int = 32,
     val_batch_size: int = 32,
     max_depth: int = 8,
-    min_depth: int = 1,
     train_seed: int = 42,
     val_seed: int = 43,
 ) -> Tuple[Iterator, Iterator]:
@@ -745,24 +713,21 @@ def create_dag_structure_dataloaders(
     Args:
         train_batch_size: Training batch size
         val_batch_size: Validation batch size
-        max_depth: Maximum DAG depth
-        min_depth: Minimum DAG depth
+        max_depth: DAG depth (all examples will have this exact depth)
         train_seed: Seed for training data
         val_seed: Seed for validation data
 
     Returns:
         Tuple of (train_loader, val_loader)
     """
-    # Create datasets
+    # Create datasets with fixed depth
     train_dataset = DAGStructureDataset(
         max_depth=max_depth,
-        min_depth=min_depth,
         seed=train_seed,
     )
 
     val_dataset = DAGStructureDataset(
         max_depth=max_depth,
-        min_depth=min_depth,
         seed=val_seed,
     )
 
@@ -777,7 +742,7 @@ if __name__ == "__main__":
     # Quick test
     print("Testing streaming DAG dataset...")
 
-    dataset = StreamingDAGDataset(max_depth=3, min_depth=1, seed=42)
+    dataset = StreamingDAGDataset(max_depth=3, seed=42)
 
     # Generate a small batch
     tokens, text = dataset.generate_batch(5)
@@ -794,7 +759,7 @@ if __name__ == "__main__":
     # Test new structure dataset
     print("\nTesting DAG structure dataset...")
 
-    structure_dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+    structure_dataset = DAGStructureDataset(max_depth=3, seed=42)
 
     # Generate a small batch
     texts, structures = structure_dataset.generate_batch(2)

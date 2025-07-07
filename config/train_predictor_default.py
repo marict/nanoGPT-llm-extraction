@@ -1,9 +1,9 @@
-# Default configuration for DAG predictor pretraining
-# This config is optimized for pretraining the DAG predictor on structure prediction
+# Default configuration for DAG predictor pretraining (local testing)
+# This config is optimized for local testing of the DAG predictor on structure prediction
 
 # Project settings
-name = "dag_pretrain"
-note = "DAG predictor pretraining on structure prediction"
+name = "predictor_pretrain_local"
+note = "DAG predictor pretraining on structure prediction - local testing"
 
 # Training intervals
 eval_interval = 100
@@ -16,9 +16,12 @@ clear_previous_checkpoints = False
 # Model initialization
 init_from = "scratch"  # or "resume"
 
+# Dataset configuration
+dataset = "dagset"  # Use DAG dataset for predictor training
+
 # DAG dataset parameters
 max_dag_depth = 6
-min_dag_depth = 1
+
 train_examples_per_batch = 500
 val_examples_per_batch = 100
 

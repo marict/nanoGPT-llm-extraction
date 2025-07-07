@@ -104,7 +104,7 @@ class TestStreamingDAGDataset(unittest.TestCase):
         self.assertAlmostEqual(log1, expected_log, places=3)
 
     def test_generate_single_dag_example(self):
-        """Test single DAG example generation."""
+        """Test single DAG example generation (structure-only)."""
         example = generate_single_dag_example(depth=2, num_initial_values=1)
 
         self.assertIsInstance(example, DAGExample)
@@ -114,18 +114,21 @@ class TestStreamingDAGDataset(unittest.TestCase):
         self.assertIsInstance(example.text, str)
         self.assertGreater(len(example.text), 0)
 
-        # Check that text contains expected elements
+        # Check that structure-only text contains expected elements
         self.assertIn("DAG Computation", example.text)
         self.assertIn("v0 =", example.text)
         self.assertIn("Step 1:", example.text)
         self.assertIn("Step 2:", example.text)
-        self.assertIn("Final result:", example.text)
+
+        # Structure-only mode doesn't include computation results
+        self.assertNotIn("Final result:", example.text)
+        self.assertNotIn("Result:", example.text)
 
     def test_generate_dag_dataset(self):
         """Test dataset generation."""
         # Generate a small dataset
         examples = generate_dag_dataset(
-            num_examples=10, max_depth=3, min_depth=1, num_initial_values=1
+            num_examples=10, max_depth=3, num_initial_values=1
         )
 
         self.assertEqual(len(examples), 10)
@@ -142,7 +145,7 @@ class TestStreamingDAGDataset(unittest.TestCase):
 
     def test_streaming_dataset_basic(self):
         """Test basic streaming dataset functionality."""
-        dataset = StreamingDAGDataset(max_depth=3, min_depth=1, seed=42)
+        dataset = StreamingDAGDataset(max_depth=3, seed=42)
 
         # Test batch generation
         tokens, text = dataset.generate_batch(batch_size=5)
@@ -159,8 +162,8 @@ class TestStreamingDAGDataset(unittest.TestCase):
 
     def test_streaming_dataset_reproducibility(self):
         """Test that streaming dataset is reproducible with same seed."""
-        dataset1 = StreamingDAGDataset(max_depth=3, min_depth=1, seed=123)
-        dataset2 = StreamingDAGDataset(max_depth=3, min_depth=1, seed=123)
+        dataset1 = StreamingDAGDataset(max_depth=3, seed=123)
+        dataset2 = StreamingDAGDataset(max_depth=3, seed=123)
 
         tokens1, text1 = dataset1.generate_batch(10)
         tokens2, text2 = dataset2.generate_batch(10)
@@ -170,7 +173,7 @@ class TestStreamingDAGDataset(unittest.TestCase):
 
     def test_streaming_dataset_train_val_split(self):
         """Test train/val split functionality."""
-        dataset = StreamingDAGDataset(max_depth=3, min_depth=1, seed=42)
+        dataset = StreamingDAGDataset(max_depth=3, seed=42)
 
         train_tokens, val_tokens = dataset.get_train_val_split(
             train_examples=20, val_examples=10, split_seed=43
@@ -184,7 +187,7 @@ class TestStreamingDAGDataset(unittest.TestCase):
 
     def test_dag_dataloader(self):
         """Test the DAG data loader."""
-        dataset = StreamingDAGDataset(max_depth=3, min_depth=1, seed=42)
+        dataset = StreamingDAGDataset(max_depth=3, seed=42)
 
         dataloader = DAGDataLoader(
             dataset=dataset,
@@ -214,7 +217,6 @@ class TestStreamingDAGDataset(unittest.TestCase):
             batch_size=4,
             block_size=64,
             max_depth=3,
-            min_depth=1,
             train_seed=42,
             val_seed=43,
         )
@@ -300,7 +302,7 @@ class TestStreamingDAGDataset(unittest.TestCase):
 
     def test_streaming_infinite_generation(self):
         """Test that streaming can generate data indefinitely."""
-        dataset = StreamingDAGDataset(max_depth=2, min_depth=1, seed=42)
+        dataset = StreamingDAGDataset(max_depth=2, seed=42)
 
         # Test streaming tokens
         token_stream = dataset.stream_tokens(batch_size=10)
@@ -324,7 +326,7 @@ class TestDAGStructureDataset(unittest.TestCase):
 
     def test_dag_structure_dataset_basic(self):
         """Test basic DAG structure dataset functionality."""
-        dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+        dataset = DAGStructureDataset(max_depth=3, seed=42)
 
         # Test single example generation
         text, structure = dataset.generate_structure_example(depth=2)
@@ -347,7 +349,7 @@ class TestDAGStructureDataset(unittest.TestCase):
 
     def test_structure_tensor_format(self):
         """Test that structure tensors match DAGPlanPredictor format."""
-        dataset = DAGStructureDataset(max_depth=4, min_depth=2, seed=42)
+        dataset = DAGStructureDataset(max_depth=4, seed=42)
 
         for test_depth in [2, 3, 4]:
             text, structure = dataset.generate_structure_example(depth=test_depth)
@@ -385,7 +387,7 @@ class TestDAGStructureDataset(unittest.TestCase):
 
     def test_structure_consistency_with_dag_computation(self):
         """Test that structure tensors are consistent with actual DAG computation."""
-        dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+        dataset = DAGStructureDataset(max_depth=3, seed=42)
 
         # Generate a structure example
         text, structure = dataset.generate_structure_example(depth=2)
@@ -407,7 +409,7 @@ class TestDAGStructureDataset(unittest.TestCase):
 
     def test_batch_generation_and_padding(self):
         """Test batch generation with proper padding."""
-        dataset = DAGStructureDataset(max_depth=4, min_depth=1, seed=42)
+        dataset = DAGStructureDataset(max_depth=4, seed=42)
 
         # Generate a batch with mixed depths
         texts, structures = dataset.generate_batch(batch_size=5)
@@ -446,7 +448,7 @@ class TestDAGStructureDataset(unittest.TestCase):
 
     def test_dataloader_functionality(self):
         """Test the structure dataloader."""
-        dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+        dataset = DAGStructureDataset(max_depth=3, seed=42)
 
         # Create dataloader
         dataloader = dataset.create_dataloader(batch_size=4)
@@ -478,7 +480,6 @@ class TestDAGStructureDataset(unittest.TestCase):
             train_batch_size=4,
             val_batch_size=2,
             max_depth=3,
-            min_depth=1,
             train_seed=42,
             val_seed=43,
         )
@@ -495,8 +496,8 @@ class TestDAGStructureDataset(unittest.TestCase):
 
     def test_structure_dataset_reproducibility(self):
         """Test that structure dataset is reproducible with same seed."""
-        dataset1 = DAGStructureDataset(max_depth=3, min_depth=1, seed=123)
-        dataset2 = DAGStructureDataset(max_depth=3, min_depth=1, seed=123)
+        dataset1 = DAGStructureDataset(max_depth=3, seed=123)
+        dataset2 = DAGStructureDataset(max_depth=3, seed=123)
 
         texts1, structures1 = dataset1.generate_batch(5)
         texts2, structures2 = dataset2.generate_batch(5)
@@ -510,8 +511,8 @@ class TestDAGStructureDataset(unittest.TestCase):
 
     def test_structure_dataset_different_seeds(self):
         """Test that different seeds produce different results."""
-        dataset1 = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
-        dataset2 = DAGStructureDataset(max_depth=3, min_depth=1, seed=43)
+        dataset1 = DAGStructureDataset(max_depth=3, seed=42)
+        dataset2 = DAGStructureDataset(max_depth=3, seed=43)
 
         texts1, structures1 = dataset1.generate_batch(5)
         texts2, structures2 = dataset2.generate_batch(5)
@@ -530,7 +531,7 @@ class TestDAGStructureDataset(unittest.TestCase):
     def test_edge_cases(self):
         """Test edge cases and error conditions."""
         # Test minimum depth
-        dataset = DAGStructureDataset(max_depth=1, min_depth=1, seed=42)
+        dataset = DAGStructureDataset(max_depth=1, seed=42)
         text, structure = dataset.generate_structure_example(depth=1)
 
         self.assertEqual(structure["depth"].item(), 1)
@@ -539,7 +540,7 @@ class TestDAGStructureDataset(unittest.TestCase):
 
     def test_op_name_to_idx_mapping(self):
         """Test that operation name to index mapping is correct."""
-        dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+        dataset = DAGStructureDataset(max_depth=3, seed=42)
 
         # Verify the mapping exists and is correct
         self.assertIsInstance(dataset.op_name_to_idx, dict)
@@ -555,7 +556,7 @@ class TestDAGStructureDataset(unittest.TestCase):
 
     def test_tensor_dtypes(self):
         """Test that generated tensors have correct dtypes."""
-        dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+        dataset = DAGStructureDataset(max_depth=3, seed=42)
 
         text, structure = dataset.generate_structure_example(depth=2)
 
@@ -567,7 +568,7 @@ class TestDAGStructureDataset(unittest.TestCase):
 
     def test_structure_values_range(self):
         """Test that structure values are in expected ranges."""
-        dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+        dataset = DAGStructureDataset(max_depth=3, seed=42)
 
         # Generate multiple examples to test range
         for _ in range(10):
@@ -591,7 +592,7 @@ class TestDAGStructureDataset(unittest.TestCase):
         """Test integration with actual DAG model components."""
         from dag_model import stack_based_execution
 
-        dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+        dataset = DAGStructureDataset(max_depth=3, seed=42)
 
         # Generate structure examples
         texts, structures = dataset.generate_batch(batch_size=2)
@@ -649,7 +650,7 @@ class TestDAGStructureDataset(unittest.TestCase):
         plan_predictor = DAGPlanPredictor(config)
 
         # Generate structure dataset with same depth
-        dataset = DAGStructureDataset(max_depth=2, min_depth=2, seed=42)
+        dataset = DAGStructureDataset(max_depth=2, seed=42)
         texts, structures = dataset.generate_batch(batch_size=1)
 
         # Check tensor shapes match what DAGPlanPredictor expects
