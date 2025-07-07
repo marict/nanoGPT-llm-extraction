@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import math
 import os
-import pickle
 import random
 import runpy
 import string
@@ -21,20 +20,15 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-import numpy as np
-import tiktoken
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch import Tensor
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import runpod_service
 import wandb
-from dag_logger import DAGLogger
-from dag_model import (MLP, Block, CausalSelfAttention, DAGPlanPredictor,
-                       LayerNorm, op_names)
+from dag_model import Block, DAGPlanPredictor, LayerNorm
 from data.dagset.streaming import create_dag_structure_dataloaders
 from python_version_check import check_python_version
 
@@ -97,8 +91,6 @@ def _safe_torch_save(obj, path: Path, retries: int = 1) -> None:
 
 def _all_tensors(state):
     """Return True if every leaf value in state dict is a torch.Tensor."""
-    import torch
-
     for v in state.values():
         if isinstance(v, dict):
             if not _all_tensors(v):
@@ -333,7 +325,12 @@ def parse_args() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Train DAG predictor on structure prediction"
     )
-    parser.add_argument("config", type=str, help="Path to config file")
+    parser.add_argument(
+        "config",
+        type=str,
+        help="Path to config file",
+        default="config/train_predictor_default.py",
+    )
     parser.add_argument("--wandb-api-key", type=str, help="Weights & Biases API key")
     parser.add_argument("--wandb-run-id", type=str, help="Resume existing wandb run")
     parser.add_argument("--dag-depth", type=int, help="Override DAG depth")
@@ -496,6 +493,13 @@ def evaluate_dag_model(
         "log_loss": 0.0,
         "op_loss": 0.0,
     }
+    # Additional evaluation metrics we want to track
+    total_metrics = {
+        "op_accuracy": 0.0,
+        "full_dag_op_match": 0.0,
+        "sign_accuracy": 0.0,
+        "log_magnitude_mape": 0.0,
+    }
 
     num_batches = 0
 
@@ -508,7 +512,6 @@ def evaluate_dag_model(
             target_sgn = structures["initial_sgn"].to(device)  # (B, num_nodes)
             target_log = structures["initial_log"].to(device)  # (B, num_nodes)
             target_ops = structures["operation_probs"].to(device)  # (B, depth, n_ops)
-            target_depths = structures["depths"].to(device)  # (B,)
 
             # Tokenize texts (simple approach for now)
             # In practice, you'd want more sophisticated text encoding
@@ -577,6 +580,37 @@ def evaluate_dag_model(
                     cfg,
                 )
 
+                # ------------------------------------------------------------------ #
+                # Compute additional evaluation metrics
+                # ------------------------------------------------------------------ #
+                # Squeeze the sequence dimension which is 1 after earlier unsqueeze
+                pred_ops_sq = pred_ops.squeeze(1)  # (B, depth, n_ops)
+                target_ops_sq = target_ops.squeeze(1)
+                pred_ops_idx = pred_ops_sq.argmax(dim=-1)
+                target_ops_idx = target_ops_sq.argmax(dim=-1)
+
+                op_correct = pred_ops_idx.eq(target_ops_idx)  # (B, depth)
+                op_acc = op_correct.float().mean()
+                full_match = op_correct.all(dim=-1).float().mean()  # (B,)
+
+                pred_sgn_sq = pred_sgn.squeeze(1)  # (B, num_nodes)
+                target_sgn_sq = target_sgn.squeeze(1)
+                sign_correct = torch.sign(pred_sgn_sq).eq(torch.sign(target_sgn_sq))
+                sign_acc = sign_correct.float().mean()
+
+                # Magnitude MAPE using exponentiated logs
+                pred_mag = pred_log.squeeze(1).exp()
+                target_mag = target_log.squeeze(1).exp()
+                log_mape = (
+                    (pred_mag - target_mag).abs() / target_mag.clamp_min(1e-8)
+                ).mean()
+
+                # Accumulate metrics
+                total_metrics["op_accuracy"] += op_acc.item()
+                total_metrics["full_dag_op_match"] += full_match.item()
+                total_metrics["sign_accuracy"] += sign_acc.item()
+                total_metrics["log_magnitude_mape"] += log_mape.item()
+
                 # Accumulate losses
                 for key, value in losses.items():
                     total_losses[key] += value.item()
@@ -587,9 +621,12 @@ def evaluate_dag_model(
     if num_batches > 0:
         for key in total_losses:
             total_losses[key] /= num_batches
+        for key in total_metrics:
+            total_metrics[key] /= num_batches
 
     model.train()
-    return total_losses
+    # Merge dictionaries before returning for convenience
+    return {**total_losses, **total_metrics}
 
 
 def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
@@ -808,6 +845,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 f"val_sign {val_losses['sign_loss']:.4f}, "
                 f"val_log {val_losses['log_loss']:.4f}, "
                 f"val_op {val_losses['op_loss']:.4f}"
+                f", val_op_acc {val_losses['op_accuracy']:.4f}, "
+                f"val_full_match {val_losses['full_dag_op_match']:.4f}, "
+                f"val_sign_acc {val_losses['sign_accuracy']:.4f}, "
+                f"val_log_mape {val_losses['log_magnitude_mape']:.4f}"
             )
             print(val_log_msg)
 
@@ -820,6 +861,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     "val/sign_loss": val_losses["sign_loss"],
                     "val/log_loss": val_losses["log_loss"],
                     "val/op_loss": val_losses["op_loss"],
+                    "val/op_accuracy": val_losses["op_accuracy"],
+                    "val/full_dag_op_match": val_losses["full_dag_op_match"],
+                    "val/sign_accuracy": val_losses["sign_accuracy"],
+                    "val/log_magnitude_mape": val_losses["log_magnitude_mape"],
                 }
 
                 wandb.log(log_dict, step=iter_num, commit=False)
@@ -856,13 +901,16 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         target_sgn = structures["initial_sgn"].to(device)
         target_log = structures["initial_log"].to(device)
         target_ops = structures["operation_probs"].to(device)
-        target_depths = structures["depths"].to(device)
 
         loss_accum = {
             "total_loss": 0.0,
             "sign_loss": 0.0,
             "log_loss": 0.0,
             "op_loss": 0.0,
+            "op_accuracy": 0.0,
+            "full_dag_op_match": 0.0,
+            "sign_accuracy": 0.0,
+            "log_magnitude_mape": 0.0,
         }
 
         for micro_step in range(cfg.gradient_accumulation_steps):
@@ -946,6 +994,34 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 for key, value in losses.items():
                     loss_accum[key] += value.item() / cfg.gradient_accumulation_steps
 
+                # ------------------------------------------------------------------ #
+                # Compute and accumulate training metrics (same as evaluation)
+                # ------------------------------------------------------------------ #
+                pred_ops_idx = pred_ops_avg.argmax(dim=-1)  # (B, depth)
+                target_ops_idx = target_ops.argmax(dim=-1)
+                op_correct = pred_ops_idx.eq(target_ops_idx)
+                loss_accum["op_accuracy"] += (
+                    op_correct.float().mean().item() / cfg.gradient_accumulation_steps
+                )
+                loss_accum["full_dag_op_match"] += (
+                    op_correct.all(dim=-1).float().mean().item()
+                    / cfg.gradient_accumulation_steps
+                )
+
+                sign_correct = torch.sign(pred_sgn_avg).eq(torch.sign(target_sgn))
+                loss_accum["sign_accuracy"] += (
+                    sign_correct.float().mean().item() / cfg.gradient_accumulation_steps
+                )
+
+                pred_mag = pred_log_avg.exp()
+                target_mag = target_log.exp()
+                log_mape = (
+                    (pred_mag - target_mag).abs() / target_mag.clamp_min(1e-8)
+                ).mean()
+                loss_accum["log_magnitude_mape"] += (
+                    log_mape.item() / cfg.gradient_accumulation_steps
+                )
+
             # Backward pass
             scaler.scale(loss).backward()
 
@@ -968,6 +1044,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 f"sign {loss_accum['sign_loss']:.4f}, "
                 f"log {loss_accum['log_loss']:.4f}, "
                 f"op {loss_accum['op_loss']:.4f}"
+                f", op_acc {loss_accum['op_accuracy']:.4f}, "
+                f"full_match {loss_accum['full_dag_op_match']:.4f}, "
+                f"sign_acc {loss_accum['sign_accuracy']:.4f}, "
+                f"log_mape {loss_accum['log_magnitude_mape']:.4f}"
             )
 
             # Add internal losses if present
@@ -998,6 +1078,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     "train/log_loss": loss_accum["log_loss"],
                     "train/op_loss": loss_accum["op_loss"],
                     "lr": lr,
+                    "train/op_accuracy": loss_accum["op_accuracy"],
+                    "train/full_dag_op_match": loss_accum["full_dag_op_match"],
+                    "train/sign_accuracy": loss_accum["sign_accuracy"],
+                    "train/log_magnitude_mape": loss_accum["log_magnitude_mape"],
                 }
 
                 # Add internal losses to wandb logging

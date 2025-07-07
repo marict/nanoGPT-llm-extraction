@@ -1,17 +1,25 @@
-# Default configuration for DAG predictor pretraining (local testing)
-# This config is optimized for local testing of the DAG predictor on structure prediction
+# Minimal CPU configuration used by default when running ``train_predictor.py``.
+"""Minimal CPU configuration for quick local testing of DAG predictor training.
+
+This is the predictor analogue of ``config/train_default.py`` – all settings are scaled
+down for fast execution on a laptop/CI runner. Adjust as needed for real training.
+"""
 
 # Project settings
-name = "predictor_pretrain_local"
-note = "DAG predictor pretraining on structure prediction - local testing"
+# ----------------
+# Mirrors the naming convention used in ``train_default.py``.
+name = "dag_predictor-default"
 
 # Training intervals
-eval_interval = 100
-log_interval = 10
-eval_iters = 50
+# ------------------
+# Evaluate every step and keep logs chatty for debugging.
+eval_interval = 3
+log_interval = 1
+eval_iters = 1
 eval_only = False
 always_save_checkpoint = True
-clear_previous_checkpoints = False
+# Remove any stale checkpoints when starting a new run.
+clear_previous_checkpoints = True
 
 # Model initialization
 init_from = "scratch"  # or "resume"
@@ -20,50 +28,51 @@ init_from = "scratch"  # or "resume"
 dataset = "dagset"  # Use DAG dataset for predictor training
 
 # DAG dataset parameters
-max_dag_depth = 6
+max_dag_depth = 4
 
-train_examples_per_batch = 500
-val_examples_per_batch = 100
+train_examples_per_batch = 100
+val_examples_per_batch = 20
 
 # Training hyperparameters
-gradient_accumulation_steps = 2
-batch_size = 16
-sequence_length = 256
+gradient_accumulation_steps = 1
+batch_size = 4
+sequence_length = 32
 
 # Model architecture (should match target model)
-n_layer = 6  # Smaller for faster pretraining
-n_head = 6
-n_embd = 384  # Smaller for faster pretraining
-dropout = 0.1
+n_layer = 1
+n_head = 1
+n_embd = 32
+dropout = 0.0
 bias = False
 dag_depth = 4  # Target DAG depth
 
 # Optimization
-learning_rate = 5e-4
-max_iters = 5000
+learning_rate = 6e-4
+max_iters = 6
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
 
 # Learning rate schedule
-decay_lr = True
-warmup_iters = 200
-lr_decay_iters = 5000
-min_lr = 5e-5
+decay_lr = False
+warmup_iters = 2000
+lr_decay_iters = 600000
+min_lr = 6e-5
 
 # System settings
-backend = "nccl"
-dtype = "float16"  # Use float16 for faster training
-compile = True
+backend = "gloo"
+# Keep this for mixed-precision support on modern CPUs/GPUs; fine on most hardware.
+dtype = "bfloat16"
+compile = False
 keep_alive = False
 check_nans = False
 
 # Loss weights (can tune these)
 sign_loss_weight = 1.0
 log_loss_weight = 1.0
-op_loss_weight = 2.0  # Emphasize operation prediction
+op_loss_weight = 1.0
 
 # Random seeds
 train_seed = 42
-val_seed = 43
+val_seed = 42

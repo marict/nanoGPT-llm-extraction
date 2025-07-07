@@ -7,6 +7,7 @@ On-the-fly DAG dataset generation for training.
 import random
 import re
 import sys
+from collections import deque  # fast FIFO buffer for tokens
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterator, List, Tuple
@@ -658,8 +659,8 @@ class DAGDataLoader:
         self.block_size = block_size
         self.examples_per_batch = examples_per_batch
 
-        # Buffer for tokens
-        self.token_buffer = []
+        # Buffer for tokens (deque for fast left pops)
+        self.token_buffer: deque[int] = deque()
         self.token_stream = dataset.stream_tokens(examples_per_batch)
 
     def __iter__(self):
@@ -671,26 +672,16 @@ class DAGDataLoader:
         Returns:
             Tuple of (inputs, targets) tensors
         """
-        # Ensure we have enough tokens
-        while len(self.token_buffer) < self.batch_size * (self.block_size + 1):
-            new_tokens = next(self.token_stream)
-            self.token_buffer.extend(new_tokens)
+        # Ensure the buffer has enough tokens for an entire batch
+        required_tokens = self.batch_size * (self.block_size + 1)
+        while len(self.token_buffer) < required_tokens:
+            self.token_buffer.extend(next(self.token_stream))
 
-        # Create batch
-        batch_data = []
+        # Build batch using fast popleft operations (O(1) each)
+        batch_data: List[List[int]] = []
         for _ in range(self.batch_size):
-            if len(self.token_buffer) >= self.block_size + 1:
-                # Take a sequence of block_size + 1 tokens
-                seq = self.token_buffer[: self.block_size + 1]
-                self.token_buffer = self.token_buffer[self.block_size + 1 :]
-                batch_data.append(seq)
-            else:
-                # Not enough tokens, refill buffer
-                new_tokens = next(self.token_stream)
-                self.token_buffer.extend(new_tokens)
-                seq = self.token_buffer[: self.block_size + 1]
-                self.token_buffer = self.token_buffer[self.block_size + 1 :]
-                batch_data.append(seq)
+            seq = [self.token_buffer.popleft() for _ in range(self.block_size + 1)]
+            batch_data.append(seq)
 
         # Convert to tensors
         batch_tensor = torch.tensor(batch_data, dtype=torch.long)

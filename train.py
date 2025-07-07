@@ -554,7 +554,18 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     if not data_dir.exists():
         data_dir = Path("data") / cfg.dataset
 
-    if not (data_dir / "train.bin").exists():
+    # -------------------------------------------------------------
+    # Dataset preparation (streaming-aware)
+    # -------------------------------------------------------------
+    needs_prep = False
+    if cfg.dataset == "dagset":
+        # Purely streaming: we consider the dataset ready if its meta file exists.
+        needs_prep = not (data_dir / "meta.pkl").exists()
+    else:
+        # File-based datasets still look for train.bin as before.
+        needs_prep = not (data_dir / "train.bin").exists()
+
+    if needs_prep:
         if master_process:
             print(
                 f"[{time.time() - setup_start:.2f}s] Preparing dataset {cfg.dataset}... with subset {cfg.subset}"

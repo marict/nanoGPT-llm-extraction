@@ -1,6 +1,8 @@
-"""
-DAG dataset for training language models on structured reasoning tasks.
-Streaming-only implementation - no file storage required.
+"""DAG dataset (streaming-only).
+
+This module implements a *purely* streaming dataset for training language models
+to reason over arithmetic DAGs. **No on-disk ``train.bin`` / ``val.bin`` files
+are ever written or read.** All examples are generated on-the-fly.
 """
 
 import pickle
@@ -60,11 +62,6 @@ def prepare(
 
     with open(meta_file, "wb") as f:
         pickle.dump(meta, f)
-
-    # Create empty train.bin and val.bin files to satisfy the training script
-    # These won't be used since we'll override the data loading for streaming
-    (dagset_dir / "train.bin").touch()
-    (dagset_dir / "val.bin").touch()
 
     print(
         f"✅ DAG dataset prepared - Train: {estimated_train_tokens:,} tokens, Val: {estimated_val_tokens:,} tokens"
