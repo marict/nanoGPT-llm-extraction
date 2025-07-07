@@ -16,7 +16,7 @@ import torch
 
 import run_math_eval
 from dag_logger import DAGLogger
-from dag_model import GPT, GPTConfig
+from models.dag_model import GPT, GPTConfig
 
 
 def estimate_loss(

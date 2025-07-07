@@ -13,17 +13,16 @@ from pathlib import Path
 from typing import Dict, Iterator, List, Tuple
 
 import numpy as np
+import sympy
 import torch
 from num2words import num2words
 from tiktoken import get_encoding
 
+from models.dag_model import OP_NAMES
+
 # Add parent directories to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 sys.path.append(str(Path(__file__).parent.parent.parent))
-
-from dag_model import (LOG_LIM, add_log_space, divide_log_space,
-                       identity_log_space, multiply_log_space, op_names,
-                       subtract_log_space)
 
 
 def convert_number_to_words(number: float, use_words: bool = True) -> str:
@@ -65,7 +64,7 @@ def convert_number_to_words(number: float, use_words: bool = True) -> str:
     return str(number)
 
 
-def convert_math_expression_to_english(
+def add_english_to_expression(
     expression: str, conversion_probability: float = 0.3, rng: random.Random = None
 ) -> str:
     """Convert a mathematical expression to English words with per-token probability.
@@ -124,26 +123,6 @@ def convert_math_expression_to_english(
     return " ".join(converted_tokens)
 
 
-def convert_dag_text_to_english(
-    text: str, conversion_probability: float = 0.3, rng: random.Random = None
-) -> str:
-    """Convert numbers and operators in DAG text to English words per-token.
-
-    Args:
-        text: Original text (now simple math expressions)
-        conversion_probability: Probability of converting each individual token (0.0 to 1.0)
-        rng: Random number generator
-
-    Returns:
-        Text with mixed English/numeric tokens
-    """
-    if rng is None:
-        rng = random
-
-    # For simple mathematical expressions, apply per-token conversion
-    return convert_math_expression_to_english(text, conversion_probability, rng)
-
-
 @dataclass
 class DAGExample:
     """Lightweight container for a DAG computation example."""
@@ -154,145 +133,30 @@ class DAGExample:
     operations: list[tuple[int, int, str]]
 
 
-def generate_random_initial_value(
-    value_range: tuple[float, float] = (-10.0, 10.0), rng: random.Random = None
-) -> tuple[float, float]:
-    """Generate a random initial value as (sign, log_magnitude).
-
-    Args:
-        value_range: Range for the actual values (not log magnitudes)
-        rng: Random number generator to use
-
-    Returns:
-        (sign, log_magnitude) where sign is in {-1, 1} and log_magnitude is in [0, LOG_LIM]
-    """
-    if rng is None:
-        rng = random
-
-    # Generate a random actual value in the range, avoiding values too close to zero
-    while True:
-        actual_value = rng.uniform(value_range[0], value_range[1])
-        if abs(actual_value) >= 0.1:  # Ensure we don't get values too close to zero
-            break
-
-    # Convert to sign and log magnitude
-    sign = 1.0 if actual_value >= 0 else -1.0
-    log_magnitude = min(max(np.log(abs(actual_value)), 0.0), LOG_LIM)
-
-    return sign, log_magnitude
-
-
 def generate_random_dag_plan(
-    depth: int, num_initial_values: int = 1, rng: random.Random = None
-) -> list[tuple[int, int, str]]:
-    """Generate a random DAG execution plan with hard-maxed selections.
-
-    Args:
-        depth: Number of computation steps
-        num_initial_values: Number of initial values to start with
-        rng: Random number generator to use
-
-    Returns:
-        List of (operand1_idx, operand2_idx, operation_name) tuples
-    """
+    depth: int,
+    num_initial_values: int = 1,
+    value_range: tuple[float, float] = (-10.0, 10.0),
+    rng: random.Random = None,
+) -> tuple[list[float], list[str]]:
     if rng is None:
         rng = random
-
-    operations = []
-    num_available_values = num_initial_values
-
-    for step in range(depth):
-        # Randomly select an operation first
-        operation_name = rng.choice(op_names)
-
-        if operation_name == "identity" or num_available_values == 1:
-            # For identity operations or when only one value is available,
-            # use the same operand twice
-            operand1_idx = rng.randint(0, num_available_values - 1)
-            operand2_idx = operand1_idx
-        else:
-            # Select two different operands using random.sample
-            operand1_idx, operand2_idx = rng.sample(range(num_available_values), 2)
-
-        operations.append((operand1_idx, operand2_idx, operation_name))
-
-        # After each step, we have one more value available
-        num_available_values += 1
-
-    return operations
-
-
-def execute_dag_computation(
-    initial_values: list[tuple[float, float]], operations: list[tuple[int, int, str]]
-) -> list[tuple[float, float]]:
-    """Execute a DAG computation and return all intermediate values.
-
-    Args:
-        initial_values: List of (sign, log_magnitude) initial values
-        operations: List of (operand1_idx, operand2_idx, operation_name) operations
-
-    Returns:
-        List of all values (initial + computed), each as (sign, log_magnitude)
-    """
-    # Convert to tensors for computation
-    values = []
-    for sign, log_mag in initial_values:
-        values.append((torch.tensor(sign), torch.tensor(log_mag)))
-
-    # Operation function mapping
-    op_func_map = {
-        "add": add_log_space,
-        "subtract": subtract_log_space,
-        "multiply": multiply_log_space,
-        "divide": divide_log_space,
-        "identity": identity_log_space,
-    }
-
-    # Execute each operation
-    for operand1_idx, operand2_idx, operation_name in operations:
-        # Get operands
-        sign1, log1 = values[operand1_idx]
-        sign2, log2 = values[operand2_idx]
-
-        # Execute operation
-        op_func = op_func_map[operation_name]
-        result_sign, result_log = op_func(sign1, log1, sign2, log2, ignore_clip=True)
-
-        # Store result
-        values.append((result_sign, result_log))
-
-    # Convert back to Python numbers
-    result_values = []
-    for sign, log_mag in values:
-        result_values.append((float(sign.item()), float(log_mag.item())))
-
-    return result_values
+    # Generate random initial values
+    initial_values = [
+        rng.uniform(value_range[0], value_range[1]) for _ in range(num_initial_values)
+    ]
+    operations = [rng.choice(OP_NAMES) for _ in range(depth)]
+    return initial_values, operations
 
 
 def convert_dag_to_expression_string(
-    initial_values: list[tuple[float, float]],
-    operations: list[tuple[int, int, str]],
-    use_parentheses: bool = True,
+    initial_values: list[float],
+    operations: list[str],
     rng: random.Random = None,
     convert_to_english: bool = False,
     conversion_probability: float = 0.3,
 ) -> str:
     """Convert DAG structure to a simple mathematical expression string following stack-based execution.
-
-    The DAG executes as follows:
-    1. Start with initial values on a stack
-    2. For each operation, use the specified operand indices
-    3. Apply operation with operand1 as first operand, operand2 as second operand
-    4. Push result back onto stack
-    5. For identity operations, keep first operand and discard second operand
-
-    Args:
-        initial_values: List of (sign, log_magnitude) initial values
-        operations: List of (operand1_idx, operand2_idx, operation_name) operations
-        use_parentheses: Whether to add parentheses for clarity
-        rng: Random number generator
-        convert_to_english: Whether to potentially convert numbers/operators to English
-        conversion_probability: Probability of converting to English (0.0 to 1.0)
 
     Returns:
         Simple mathematical expression string like "1 * (2 - 3/4)"
@@ -300,93 +164,34 @@ def convert_dag_to_expression_string(
     if rng is None:
         rng = random
 
-    # Convert initial values back to regular numbers and round for display
-    values = []  # List of (value, expression) tuples
-    for sign, log_mag in initial_values:
-        if log_mag == 0.0:
-            number = 0.0 if sign == 0.0 else sign * 1.0
-        else:
-            number = sign * np.exp(log_mag)
-        # Round to 3 decimal places for consistent display
-        number = round(number, 3)
-        values.append((number, f"{number:.3f}"))
+    stack = [sympy.Symbol(v) for v in initial_values]
+    op_map = {
+        "+": lambda a, b: a + b,
+        "-": lambda a, b: a - b,
+        "*": lambda a, b: a * b,
+        "/": lambda a, b: a / b,
+        "identity": lambda a, b: a,  # Discard b
+    }
 
-    if len(operations) == 0:
-        # Just a single number
-        result = values[0][1] if values else "1.0"
-    else:
-        # Operation symbols for display
-        op_symbols = {
-            "add": "+",
-            "subtract": "-",
-            "multiply": "*",
-            "divide": "/",
-            "identity": None,  # Special case - no operator needed
-        }
+    for op in operations:
+        b = stack.pop()
+        a = stack.pop()
+        expr = op_map[op](a, b)
+        stack.append(expr)
 
-        # Process each operation in sequence
-        for op_idx, (operand1_idx, operand2_idx, operation_name) in enumerate(
-            operations
-        ):
-            # Get the operands - note that operand indices refer to positions in the values list
-            val1, expr1 = values[operand1_idx]
-            val2, expr2 = values[operand2_idx]
-
-            if operation_name == "identity":
-                # For identity, just keep the first operand
-                result_val = val1
-                result_expr = expr1
-            else:
-                symbol = op_symbols[operation_name]
-
-                # Compute the actual result
-                if operation_name == "add":
-                    result_val = val1 + val2
-                elif operation_name == "subtract":
-                    result_val = val1 - val2
-                elif operation_name == "multiply":
-                    result_val = val1 * val2
-                else:  # divide
-                    result_val = val1 / val2
-
-                # Round the result consistently
-                result_val = round(result_val, 3)
-
-                # Add parentheses based on operation precedence
-                if operation_name in ["multiply", "divide"]:
-                    # Higher precedence operations - check if operands need parentheses
-                    if "+" in expr1 or "-" in expr1:
-                        expr1 = f"({expr1})"
-                    if "+" in expr2 or "-" in expr2:
-                        expr2 = f"({expr2})"
-                elif operation_name in ["subtract", "divide"]:
-                    # Non-associative operations - always parenthesize second operand if it has operators
-                    if any(op in expr2 for op in ["+", "-", "*", "/"]):
-                        expr2 = f"({expr2})"
-
-                # Combine operands with operator
-                result_expr = f"{expr1} {symbol} {expr2}"
-
-                # Add parentheses around the entire expression if needed
-                if op_idx < len(operations) - 1:
-                    next_op = operations[op_idx + 1][2]
-                    if next_op in ["multiply", "divide"] and operation_name in [
-                        "add",
-                        "subtract",
-                    ]:
-                        result_expr = f"({result_expr})"
-
-            # Add result to values list - this becomes available for next operation
-            values.append((result_val, result_expr))
-
-        # Return the final expression
-        result = values[-1][1]
-
+    result = stack[0]
     # Apply English conversion if requested
     if convert_to_english:
-        result = convert_dag_text_to_english(result, conversion_probability, rng)
+        result = add_english_to_expression(result, conversion_probability, rng)
 
     return result
+
+
+def convert_plan_to_tensor(
+    initial_values: list[float],
+    operations: list[str],
+) -> torch.Tensor:
+    pass
 
 
 def generate_single_dag_example(
@@ -416,24 +221,24 @@ def generate_single_dag_example(
         # For DAG with depth n, we need n+1 initial values
         num_initial_values = depth + 1
 
-    # Step 1: Generate initial values using existing logic
-    initial_values = []
-    for _ in range(num_initial_values):
-        initial_values.append(
-            generate_random_initial_value(value_range=value_range, rng=rng)
-        )
+    # Step 1. Generate random dag plan
+    initial_values, operations = generate_random_dag_plan(
+        depth, num_initial_values, value_range, rng
+    )
 
-    # Step 2: Generate DAG operations using existing logic
-    operations = generate_random_dag_plan(depth, num_initial_values, rng)
-
-    # Step 3: Convert DAG structure to simple expression string
+    # Step 2: Convert DAG plan to simple expression string for data
     expression = convert_dag_to_expression_string(
         initial_values=initial_values,
         operations=operations,
-        use_parentheses=True,
         rng=rng,
         convert_to_english=convert_to_english,
         conversion_probability=conversion_probability,
+    )
+
+    # Step 3: Convert dag plan to a tensor for labels
+    labels = convert_plan_to_tensor(
+        initial_values=initial_values,
+        operations=operations,
     )
 
     return DAGExample(
@@ -800,8 +605,8 @@ class DAGStructureDataset:
         self.random_state = random.Random(seed)
 
         # Operation name to index mapping
-        self.op_name_to_idx = {name: i for i, name in enumerate(op_names)}
-        self.op_idx_to_name = {i: name for i, name in enumerate(op_names)}
+        self.op_name_to_idx = {name: i for i, name in enumerate(OP_NAMES)}
+        self.op_idx_to_name = {i: name for i, name in enumerate(OP_NAMES)}
 
     def generate_structure_example(
         self, depth: int
@@ -855,7 +660,7 @@ class DAGStructureDataset:
                 initial_log[i] = log_mag
 
         # Create operation probabilities (one-hot for ground truth)
-        operation_probs = torch.zeros(depth, len(op_names))
+        operation_probs = torch.zeros(depth, len(OP_NAMES))
 
         for step, (operand1_idx, operand2_idx, operation_name) in enumerate(
             example.operations
@@ -919,7 +724,7 @@ class DAGStructureDataset:
         # Initialize batched tensors
         batched_initial_sgn = torch.zeros(batch_size, max_nodes)
         batched_initial_log = torch.zeros(batch_size, max_nodes)
-        batched_operation_probs = torch.zeros(batch_size, max_depth, len(op_names))
+        batched_operation_probs = torch.zeros(batch_size, max_depth, len(OP_NAMES))
         batched_depths = torch.zeros(batch_size, dtype=torch.long)
 
         # Fill batched tensors

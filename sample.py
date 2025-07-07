@@ -12,7 +12,7 @@ import tiktoken
 import torch
 
 from dag_logger import DAGLogger
-from dag_model import GPT, GPTConfig
+from models.dag_model import GPT, GPTConfig
 from python_version_check import check_python_version
 
 check_python_version()

@@ -32,9 +32,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import runpod_service
 import wandb
 from dag_logger import DAGLogger
-from dag_model import GPT, GPTConfig, op_names
 from data import prepare_dataset
 from evaluation import estimate_loss, evaluate_math
+from models.dag_model import GPT, OP_NAMES, GPTConfig
 from python_version_check import check_python_version
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"

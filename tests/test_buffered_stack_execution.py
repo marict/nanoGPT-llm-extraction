@@ -10,8 +10,8 @@ import pytest
 import torch
 
 sys.path.append(".")
-from dag_model import (GPT, GPTConfig, execute_stack,
-                       stack_based_execution_original)
+from models.dag_model import (GPT, GPTConfig, execute_stack,
+                              stack_based_execution_original)
 
 
 class TestBufferedStackExecution:

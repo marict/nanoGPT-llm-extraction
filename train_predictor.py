@@ -11,16 +11,18 @@ import argparse
 import math
 import os
 import random
+import random as _eval_random
 import runpy
 import string
 import time
 from ast import literal_eval
 from contextlib import nullcontext
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import torch
+import torch as _torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributed import destroy_process_group, init_process_group
@@ -28,8 +30,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 import runpod_service
 import wandb
-from dag_model import Block, DAGPlanPredictor, LayerNorm
 from data.dagset.streaming import create_dag_structure_dataloaders
+from models.dag_model import OP_NAMES
+from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
 from python_version_check import check_python_version
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
@@ -165,104 +168,6 @@ class DAGTrainConfig:
     # Random seeds
     train_seed: int = 42
     val_seed: int = 43
-
-
-# --------------------------------------------------------------------------- #
-# Shallow Attention DAG Predictor Model
-# --------------------------------------------------------------------------- #
-
-
-@dataclass
-class ShallowAttentionConfig:
-    """Configuration for shallow attention model."""
-
-    vocab_size: int = 50304  # GPT-2 vocab size
-    n_embd: int = 768
-    n_head: int = 12
-    dropout: float = 0.0
-    bias: bool = False
-    dag_depth: int = 4
-    sequence_length: int = 512
-    softmax_temperature: float = 20.0
-
-
-class ShallowAttentionDAGPredictor(nn.Module):
-    """
-    Standalone model that performs shallow attention over token embeddings
-    and uses a DAG predictor for structure prediction.
-
-    Architecture:
-    Token IDs -> Embeddings -> Position Embeddings -> Single Attention Layer -> DAG Predictor
-    """
-
-    def __init__(self, config: ShallowAttentionConfig):
-        super().__init__()
-        self.config = config
-
-        # Token and position embeddings
-        self.wte = nn.Embedding(config.vocab_size, config.n_embd)
-        self.wpe = nn.Embedding(config.sequence_length, config.n_embd)
-        self.drop = nn.Dropout(config.dropout)
-
-        # Single attention block for shallow attention
-        self.attention_block = Block(config)
-
-        # Layer norm for stability
-        self.ln_f = LayerNorm(config.n_embd, bias=config.bias)
-
-        # DAG predictor
-        self.dag_predictor = DAGPlanPredictor(config, config.softmax_temperature)
-
-        # Initialize weights
-        self.apply(self._init_weights)
-
-    def _init_weights(self, module):
-        """Initialize weights using GPT-2 style initialization."""
-        if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-
-    def forward(self, input_ids: torch.Tensor):
-        """
-        Forward pass through shallow attention to DAG predictor.
-
-        Args:
-            input_ids: (B, T) token IDs
-
-        Returns:
-            DAG predictor outputs (signs, log magnitudes, operation probs)
-        """
-        B, T = input_ids.shape
-        device = input_ids.device
-
-        # Token embeddings
-        token_emb = self.wte(input_ids)  # (B, T, n_embd)
-
-        # Position embeddings
-        pos = torch.arange(T, device=device)
-        pos_emb = self.wpe(pos)  # (T, n_embd)
-
-        # Combine embeddings
-        hidden = self.drop(token_emb + pos_emb)  # (B, T, n_embd)
-
-        # Single attention layer (shallow attention)
-        hidden = self.attention_block(hidden)  # (B, T, n_embd)
-
-        # Final layer norm
-        hidden = self.ln_f(hidden)  # (B, T, n_embd)
-
-        # DAG predictor
-        return self.dag_predictor(hidden)
-
-    def get_num_params(self, non_embedding=True):
-        """Get number of parameters in the model."""
-        n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding:
-            n_params -= self.wpe.weight.numel()
-        return n_params
 
 
 def generate_run_name(cfg: DAGTrainConfig) -> str:
@@ -580,6 +485,41 @@ def evaluate_dag_model(
                     cfg,
                 )
 
+                # Console debug: show one random sample's text and initial values (first batch only)
+                if i == 0:
+
+                    sample_idx = _eval_random.randrange(batch_size)
+                    sample_text = texts[sample_idx]
+
+                    # Gather predicted and target sign/log tensors directly
+                    pred_sign_vec = pred_sgn.squeeze(1)[sample_idx]
+                    pred_log_vec = pred_log.squeeze(1)[sample_idx]
+                    tgt_sign_vec = target_sgn.squeeze(1)[sample_idx]
+                    tgt_log_vec = target_log.squeeze(1)[sample_idx]
+
+                    # Convert to real numbers: sign * exp(log_mag)
+                    pred_real_vals = (
+                        (pred_sign_vec * _torch.exp(pred_log_vec)).cpu().tolist()
+                    )
+                    tgt_real_vals = (
+                        (tgt_sign_vec * _torch.exp(tgt_log_vec)).cpu().tolist()
+                    )
+
+                    print("\n=== Validation Sample ===")
+                    print(f"Text: {sample_text}")
+                    print("Target initial values:")
+                    print([round(v, 4) for v in tgt_real_vals])
+                    print("Predicted initial values:")
+                    print([round(v, 4) for v in pred_real_vals])
+
+                    # Decode ground-truth operations for this sample
+                    gt_ops_onehot = target_ops.squeeze(1)[sample_idx]  # (depth, n_ops)
+                    gt_op_indices = gt_ops_onehot.argmax(dim=-1).cpu().tolist()
+                    gt_op_names = [OP_NAMES[idx] for idx in gt_op_indices]
+                    print("Operations (ground truth):")
+                    print(gt_op_names)
+                    print("==========================\n")
+
                 # ------------------------------------------------------------------ #
                 # Compute additional evaluation metrics
                 # ------------------------------------------------------------------ #
@@ -734,7 +674,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     )
 
     # Create config for shallow attention model
-    model_config = ShallowAttentionConfig(
+    model_config = PredictorOnlyConfig(
         vocab_size=50304,  # Standard GPT-2 vocab size
         n_embd=cfg.n_embd,
         n_head=cfg.n_head,
@@ -749,7 +689,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         print(
             f"[{time.time() - setup_start:.2f}s] Initializing shallow attention model from scratch"
         )
-        model = ShallowAttentionDAGPredictor(model_config)
+        model = PredictorOnlyModel(model_config)
         iter_num, best_val_loss = 0, 1e9
     elif cfg.init_from == "resume":
         print(f"[{time.time() - setup_start:.2f}s] Resuming from checkpoint")
@@ -758,8 +698,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
             raise ValueError(f"No checkpoint found for resuming")
         checkpoint = torch.load(ckpt_path, map_location=device)
         # Create model with saved config
-        saved_config = ShallowAttentionConfig(**checkpoint["model_config"])
-        model = ShallowAttentionDAGPredictor(saved_config)
+        saved_config = PredictorOnlyConfig(**checkpoint["model_config"])
+        model = PredictorOnlyModel(saved_config)
         state_dict = {
             k.removeprefix("_orig_mod."): v for k, v in checkpoint["model"].items()
         }

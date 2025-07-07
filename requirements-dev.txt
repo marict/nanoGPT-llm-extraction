@@ -7,5 +7,6 @@ runpod
 datasets
 random-fourier-features-pytorch
 num2words
+sympy
 
 # Torch comes with the runpod image

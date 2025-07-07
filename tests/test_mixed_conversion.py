@@ -6,8 +6,8 @@ Demonstrates per-token conversion that creates mixed expressions.
 
 import random
 
-from data.dagset.streaming import (convert_dag_text_to_english,
-                                   convert_math_expression_to_english,
+from data.dagset.streaming import (add_english_to_expression,
+                                   convert_dag_text_to_english,
                                    generate_single_dag_example)
 
 
@@ -35,7 +35,7 @@ def test_mixed_conversion():
         print("-" * 30)
 
         for expr in test_expressions[:3]:  # Test first 3 expressions
-            converted = convert_math_expression_to_english(expr, prob, rng)
+            converted = add_english_to_expression(expr, prob, rng)
             print(f"  Original: {expr}")
             print(f"  Mixed:    {converted}")
             print()
@@ -49,7 +49,7 @@ def test_mixed_conversion():
     print("Multiple mixed conversions:")
 
     for i in range(8):
-        converted = convert_math_expression_to_english(test_expr, 0.5, rng)
+        converted = add_english_to_expression(test_expr, 0.5, rng)
         print(f"  {i+1}: {converted}")
 
     print("\n" + "=" * 60)

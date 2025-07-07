@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn.functional as F
 
-from dag_model import op_names
+from models.dag_model import OP_NAMES
 
 
 class DAGLogger:
@@ -180,7 +180,7 @@ class DAGLogger:
             mean_probs = probs.mean(dim=(0, 1, 2))  # (n_ops,)
             self.logging_data["op_probs"] = {
                 op_name: float(mean_probs[i].item())
-                for i, op_name in enumerate(op_names)
+                for i, op_name in enumerate(OP_NAMES)
             }
 
         # 4) Misc scalar diagnostics
@@ -213,7 +213,7 @@ class DAGLogger:
             grad_metrics = {
                 "op_logits_mean": 0.0,
             }
-            for op_name in op_names:
+            for op_name in OP_NAMES:
                 grad_metrics[f"grad/op/{op_name}"] = 0.0
 
         # Combine all metrics
@@ -442,7 +442,7 @@ class DAGLogger:
         if grad is None:
             # Log zeros for all operation gradients to keep time-series complete
             self.captured_gradients["op_logits_mean"] = 0.0
-            for op_name in op_names:
+            for op_name in OP_NAMES:
                 self.captured_gradients[f"grad/op/{op_name}"] = 0.0
             return
         grad_mean = grad.detach().mean().item()
@@ -450,7 +450,7 @@ class DAGLogger:
 
         self.captured_gradients["op_logits_mean"] = grad_mean
         # Average over batch, time, and steps to get per-operation gradients
-        for i, op_name in enumerate(op_names):
+        for i, op_name in enumerate(OP_NAMES):
             self.captured_gradients[f"grad/op/{op_name}"] = float(op_grads[i])
 
     def _dag_output_grad_hook_fn(self, grad):

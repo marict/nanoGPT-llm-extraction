@@ -24,10 +24,10 @@ from test_common import (SMALL_CONFIG, TINY_CONFIG, assert_valid_forward_pass,
                          setup_gradient_tracking_test, small_model,
                          standard_model, tiny_model)
 
-import dag_model  # noqa: E402
+import models.dag_model as dag_model  # noqa: E402
 from dag_logger import DAGLogger
-from dag_model import (GPT, DAGPlanPredictor, DifferentiableDAG, GPTConfig,
-                       op_names)
+from models.dag_model import (GPT, OP_NAMES, DAGPlanPredictor,
+                              DifferentiableDAG, GPTConfig)
 
 
 # --------------------------------------------------------------------- #

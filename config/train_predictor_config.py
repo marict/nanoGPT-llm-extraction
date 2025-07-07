@@ -26,7 +26,7 @@ train_examples_per_batch = 1000  # Larger batches for efficiency
 val_examples_per_batch = 200  # More validation examples
 
 # Training hyperparameters (optimized for RunPod)
-gradient_accumulation_steps = 8  # Larger for better gradient estimates
+gradient_accumulation_steps = 4  # Larger for better gradient estimates
 batch_size = 32  # Larger batch size for GPU efficiency
 sequence_length = 512  # Full sequence length
 
@@ -39,8 +39,8 @@ bias = False
 dag_depth = 6  # Deeper DAG for complex structures
 
 # Optimization (tuned for longer training)
-learning_rate = 3e-4  # Standard learning rate
-max_iters = 20000  # Longer training for RunPod
+learning_rate = 3e-5  # Standard learning rate
+max_iters = 20_000  # Longer training for RunPod
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95

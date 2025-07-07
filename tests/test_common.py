@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from dag_logger import DAGLogger
-from dag_model import GPT, GPTConfig
+from models.dag_model import GPT, GPTConfig
 
 # Set random seeds for reproducible tests
 torch.manual_seed(42)

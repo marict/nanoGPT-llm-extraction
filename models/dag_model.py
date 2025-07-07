@@ -330,14 +330,14 @@ def identity_log_space(
     return sx, lx
 
 
-op_funcs = [
+OP_FUNCS = [
     add_log_space,
     subtract_log_space,
     multiply_log_space,
     divide_log_space,
     identity_log_space,
 ]
-op_names = ["add", "subtract", "multiply", "divide", "identity"]
+OP_NAMES = ["add", "subtract", "multiply", "divide", "identity"]
 
 
 def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
@@ -357,7 +357,7 @@ class DAGPlanPredictor(nn.Module):
         super().__init__()
         self.dag_depth = config.dag_depth
         self.temperature = temperature
-        self.n_ops = len(op_funcs)  # Number of operations
+        self.n_ops = len(OP_FUNCS)  # Number of operations
         self.num_scratch_nodes = config.dag_depth + 1
         self.n_embd = config.n_embd
 

@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from test_common import assert_valid_logging, sample_batch_small, small_model
 
 from dag_logger import DAGLogger
-from dag_model import GPT, GPTConfig, op_names
+from models.dag_model import GPT, OP_NAMES, GPTConfig
 
 
 # --------------------------------------------------------------------- #
@@ -69,7 +69,7 @@ def test_comprehensive_operation_logging_and_gradients(small_model, sample_batch
 
     # Should have similar structure (though values may differ due to stochastic operations)
     assert set(extra_vals2.keys()).issubset(
-        set(extra_vals.keys()) | set(["grad/op_" + op for op in op_names])
+        set(extra_vals.keys()) | set(["grad/op_" + op for op in OP_NAMES])
     )
     assert len(wandb_dict2) > 0
 

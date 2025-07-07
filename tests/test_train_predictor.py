@@ -16,10 +16,10 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
-from dag_model import GPT, GPTConfig
 from data.dagset.streaming import create_dag_structure_dataloaders
-from train_predictor import (DAGTrainConfig, ShallowAttentionConfig,
-                             ShallowAttentionDAGPredictor, _all_tensors,
+from models.dag_model import GPT, GPTConfig
+from train_predictor import (DAGTrainConfig, PredictorOnlyConfig,
+                             PredictorOnlyModel, _all_tensors,
                              _safe_torch_save, apply_overrides,
                              clean_previous_checkpoints,
                              compute_dag_structure_loss, evaluate_dag_model,
@@ -99,7 +99,7 @@ class TestShallowAttentionConfig(unittest.TestCase):
 
     def test_default_config(self):
         """Test default configuration values."""
-        cfg = ShallowAttentionConfig()
+        cfg = PredictorOnlyConfig()
         self.assertEqual(cfg.vocab_size, 50304)
         self.assertEqual(cfg.n_embd, 768)
         self.assertEqual(cfg.n_head, 12)
@@ -110,7 +110,7 @@ class TestShallowAttentionConfig(unittest.TestCase):
 
     def test_config_attributes(self):
         """Test that config has all required attributes."""
-        cfg = ShallowAttentionConfig()
+        cfg = PredictorOnlyConfig()
         required_attrs = [
             "vocab_size",
             "n_embd",
@@ -134,7 +134,7 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         torch.manual_seed(42)
-        self.config = ShallowAttentionConfig(
+        self.config = PredictorOnlyConfig(
             vocab_size=1000,
             n_embd=64,
             n_head=4,
@@ -147,10 +147,10 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
 
     def test_model_creation(self):
         """Test model creation with various configurations."""
-        model = ShallowAttentionDAGPredictor(self.config)
+        model = PredictorOnlyModel(self.config)
 
         # Test basic properties
-        self.assertIsInstance(model, ShallowAttentionDAGPredictor)
+        self.assertIsInstance(model, PredictorOnlyModel)
         self.assertEqual(model.config.dag_depth, 2)
         self.assertEqual(model.config.n_embd, 64)
 
@@ -166,7 +166,7 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
 
     def test_forward_pass_shapes(self):
         """Test forward pass produces correct output shapes."""
-        model = ShallowAttentionDAGPredictor(self.config)
+        model = PredictorOnlyModel(self.config)
         model.eval()
 
         batch_size = 2
@@ -187,7 +187,7 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
 
     def test_forward_pass_values(self):
         """Test forward pass produces reasonable values."""
-        model = ShallowAttentionDAGPredictor(self.config)
+        model = PredictorOnlyModel(self.config)
         model.eval()
 
         batch_size = 2
@@ -219,7 +219,7 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
 
     def test_different_sequence_lengths(self):
         """Test model works with different sequence lengths."""
-        model = ShallowAttentionDAGPredictor(self.config)
+        model = PredictorOnlyModel(self.config)
         model.eval()
 
         batch_size = 2
@@ -245,7 +245,7 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
 
     def test_gradient_flow(self):
         """Test that gradients flow properly through the model."""
-        model = ShallowAttentionDAGPredictor(self.config)
+        model = PredictorOnlyModel(self.config)
         model.train()
 
         batch_size = 2
@@ -774,7 +774,7 @@ class TestIntegration(unittest.TestCase):
     def test_evaluate_shallow_attention_model(self):
         """Test evaluation function with new shallow attention model."""
         # Create shallow attention model
-        model_config = ShallowAttentionConfig(
+        model_config = PredictorOnlyConfig(
             vocab_size=1000,
             n_embd=self.cfg.n_embd,
             n_head=self.cfg.n_head,
@@ -784,7 +784,7 @@ class TestIntegration(unittest.TestCase):
             sequence_length=self.cfg.sequence_length,
             softmax_temperature=20.0,
         )
-        model = ShallowAttentionDAGPredictor(model_config)
+        model = PredictorOnlyModel(model_config)
         model.eval()
 
         # Create mock data loader
@@ -1040,7 +1040,7 @@ class TestIntegration(unittest.TestCase):
     def test_shallow_attention_training_step(self):
         """Test training step with new shallow attention model."""
         # Create shallow attention model
-        model_config = ShallowAttentionConfig(
+        model_config = PredictorOnlyConfig(
             vocab_size=1000,
             n_embd=self.cfg.n_embd,
             n_head=self.cfg.n_head,
@@ -1050,7 +1050,7 @@ class TestIntegration(unittest.TestCase):
             sequence_length=self.cfg.sequence_length,
             softmax_temperature=20.0,
         )
-        model = ShallowAttentionDAGPredictor(model_config)
+        model = PredictorOnlyModel(model_config)
         model.train()
 
         # Create optimizer for all parameters (no freezing needed)
@@ -1296,14 +1296,14 @@ class TestTrainingIntegration(unittest.TestCase):
     def test_model_with_real_dataloader(self):
         """Test model forward pass with real dataloader data."""
         # Create small model with smaller sequence length
-        config = ShallowAttentionConfig(
+        config = PredictorOnlyConfig(
             vocab_size=1000,
             n_embd=32,
             n_head=2,
             dag_depth=2,
             sequence_length=8,  # Smaller to avoid position embedding issues
         )
-        model = ShallowAttentionDAGPredictor(config)
+        model = PredictorOnlyModel(config)
 
         # Create dataloader
         train_loader, _ = create_dag_structure_dataloaders(
@@ -1357,14 +1357,14 @@ class TestTrainingIntegration(unittest.TestCase):
     def test_evaluation_with_real_data(self):
         """Test evaluation function with real dataloader data."""
         # Create small model with smaller sequence length to avoid position embedding issues
-        config = ShallowAttentionConfig(
+        config = PredictorOnlyConfig(
             vocab_size=1000,
             n_embd=32,
             n_head=2,
             dag_depth=2,
             sequence_length=8,  # Smaller to avoid position embedding issues
         )
-        model = ShallowAttentionDAGPredictor(config)
+        model = PredictorOnlyModel(config)
 
         # Create dataloader
         _, val_loader = create_dag_structure_dataloaders(

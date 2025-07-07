@@ -195,7 +195,7 @@ def main():
 
     # Determine model type based on checkpoint
     model_args = checkpoint["model_args"]
-    from dag_model import GPT, GPTConfig
+    from models.dag_model import GPT, GPTConfig
 
     # Ensure dag_depth is set (default to 0 for standard GPT)
     model_args.setdefault("dag_depth", 0)
