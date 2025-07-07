@@ -4,13 +4,13 @@ batch_size = 48
 block_size = 512
 gradient_accumulation_steps = 1
 
-# Should be enough to show saturation
-max_iters = 15_000
-lr_decay_iters = 15_000
+# Whatever is enough to show saturation
+max_iters = 6_000
+lr_decay_iters = 6_000
 warmup_iters = int(max_iters * 0.05)
 
 
-eval_interval = 1000
+eval_interval = max_iters // 15
 # No math eval by for now until we can get a better model
 math_eval_examples = 0
 eval_iters = 5

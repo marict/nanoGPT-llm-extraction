@@ -5,8 +5,8 @@ block_size = 512  # shorter context for faster training
 
 gradient_accumulation_steps = 2  # reduces step latency
 
-max_iters = 2000  # 1–2 GPU hours on A100 class cards
-lr_decay_iters = 2000
+max_iters = 6_000  # 1–2 GPU hours on A100 class cards
+lr_decay_iters = 6_000
 
 eval_interval = 500
 eval_iters = 10

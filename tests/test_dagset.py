@@ -14,10 +14,12 @@ import torch
 # Add the data directory to the path so we can import the dagset module
 sys.path.append(str(Path(__file__).parent.parent / "data" / "dagset"))
 
-from streaming import (DAGDataLoader, DAGExample, StreamingDAGDataset,
-                       create_dag_dataloaders, execute_dag_computation,
-                       format_dag_as_text, generate_dag_dataset,
-                       generate_random_dag_plan, generate_random_initial_value,
+from streaming import (DAGDataLoader, DAGExample, DAGStructureDataset,
+                       StreamingDAGDataset, create_dag_dataloaders,
+                       create_dag_structure_dataloaders,
+                       execute_dag_computation, format_dag_as_text,
+                       generate_dag_dataset, generate_random_dag_plan,
+                       generate_random_initial_value,
                        generate_single_dag_example)
 
 # Import DAG operations for direct testing
@@ -309,6 +311,395 @@ class TestStreamingDAGDataset(unittest.TestCase):
             self.assertGreater(len(tokens), 0)
             if i >= 3:  # Test first few batches
                 break
+
+
+class TestDAGStructureDataset(unittest.TestCase):
+    """Test the DAG structure dataset for pretraining."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        # Use a fixed seed for reproducible tests
+        np.random.seed(42)
+        torch.manual_seed(42)
+
+    def test_dag_structure_dataset_basic(self):
+        """Test basic DAG structure dataset functionality."""
+        dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+
+        # Test single example generation
+        text, structure = dataset.generate_structure_example(depth=2)
+
+        # Verify text is a string
+        self.assertIsInstance(text, str)
+        self.assertGreater(len(text), 0)
+        self.assertIn("DAG Computation", text)
+
+        # Verify structure is a dictionary with correct keys
+        self.assertIsInstance(structure, dict)
+        expected_keys = {"initial_sgn", "initial_log", "operation_probs", "depth"}
+        self.assertEqual(set(structure.keys()), expected_keys)
+
+        # Verify tensor shapes
+        self.assertEqual(structure["initial_sgn"].shape, (3,))  # depth + 1 = 2 + 1
+        self.assertEqual(structure["initial_log"].shape, (3,))
+        self.assertEqual(structure["operation_probs"].shape, (2, 5))  # (depth, n_ops)
+        self.assertEqual(structure["depth"].item(), 2)
+
+    def test_structure_tensor_format(self):
+        """Test that structure tensors match DAGPlanPredictor format."""
+        dataset = DAGStructureDataset(max_depth=4, min_depth=2, seed=42)
+
+        for test_depth in [2, 3, 4]:
+            text, structure = dataset.generate_structure_example(depth=test_depth)
+
+            # Verify shapes match expected format
+            num_nodes = test_depth + 1
+            self.assertEqual(structure["initial_sgn"].shape, (num_nodes,))
+            self.assertEqual(structure["initial_log"].shape, (num_nodes,))
+            self.assertEqual(structure["operation_probs"].shape, (test_depth, 5))
+            self.assertEqual(structure["depth"].item(), test_depth)
+
+            # Verify initial values are reasonable
+            sgn = structure["initial_sgn"]
+            log_mag = structure["initial_log"]
+
+            # Only first value should be non-zero (single initial value)
+            self.assertNotEqual(sgn[0].item(), 0.0)
+            self.assertNotEqual(log_mag[0].item(), 0.0)
+
+            # Remaining values should be zero (padding)
+            for i in range(1, num_nodes):
+                self.assertEqual(sgn[i].item(), 0.0)
+                self.assertEqual(log_mag[i].item(), 0.0)
+
+            # Verify operation probabilities are one-hot
+            op_probs = structure["operation_probs"]
+            for step in range(test_depth):
+                step_probs = op_probs[step]
+                self.assertAlmostEqual(step_probs.sum().item(), 1.0, places=5)
+                # Should have exactly one 1.0 and rest 0.0
+                ones = (step_probs == 1.0).sum().item()
+                zeros = (step_probs == 0.0).sum().item()
+                self.assertEqual(ones, 1)
+                self.assertEqual(zeros, 4)
+
+    def test_structure_consistency_with_dag_computation(self):
+        """Test that structure tensors are consistent with actual DAG computation."""
+        dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+
+        # Generate a structure example
+        text, structure = dataset.generate_structure_example(depth=2)
+
+        # Extract the DAG example that was used internally
+        # We can recreate this by parsing the operations from the structure
+        depth = structure["depth"].item()
+
+        # Get the operation names from the one-hot vectors
+        op_probs = structure["operation_probs"]
+        operation_names = []
+        for step in range(depth):
+            op_idx = torch.argmax(op_probs[step]).item()
+            operation_names.append(dataset.op_idx_to_name[op_idx])
+
+        # The structure should encode the same operations mentioned in the text
+        for op_name in operation_names:
+            self.assertIn(op_name, text)
+
+    def test_batch_generation_and_padding(self):
+        """Test batch generation with proper padding."""
+        dataset = DAGStructureDataset(max_depth=4, min_depth=1, seed=42)
+
+        # Generate a batch with mixed depths
+        texts, structures = dataset.generate_batch(batch_size=5)
+
+        # Verify batch size
+        self.assertEqual(len(texts), 5)
+        self.assertEqual(structures["initial_sgn"].shape[0], 5)
+        self.assertEqual(structures["initial_log"].shape[0], 5)
+        self.assertEqual(structures["operation_probs"].shape[0], 5)
+        self.assertEqual(structures["depths"].shape[0], 5)
+
+        # Verify padding - all tensors should be padded to max depth
+        max_depth_in_batch = structures["depths"].max().item()
+        expected_nodes = max_depth_in_batch + 1
+
+        self.assertEqual(structures["initial_sgn"].shape[1], expected_nodes)
+        self.assertEqual(structures["initial_log"].shape[1], expected_nodes)
+        self.assertEqual(structures["operation_probs"].shape[1], max_depth_in_batch)
+        self.assertEqual(structures["operation_probs"].shape[2], 5)  # n_ops
+
+        # Verify that shorter examples are properly padded
+        for i in range(5):
+            actual_depth = structures["depths"][i].item()
+
+            # Check that unused operation steps are all zeros
+            if actual_depth < max_depth_in_batch:
+                unused_ops = structures["operation_probs"][i, actual_depth:]
+                self.assertTrue(torch.all(unused_ops == 0.0))
+
+            # Check that unused initial value slots are zeros
+            if actual_depth + 1 < expected_nodes:
+                unused_initial_sgn = structures["initial_sgn"][i, actual_depth + 1 :]
+                unused_initial_log = structures["initial_log"][i, actual_depth + 1 :]
+                self.assertTrue(torch.all(unused_initial_sgn == 0.0))
+                self.assertTrue(torch.all(unused_initial_log == 0.0))
+
+    def test_dataloader_functionality(self):
+        """Test the structure dataloader."""
+        dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+
+        # Create dataloader
+        dataloader = dataset.create_dataloader(batch_size=4)
+
+        # Test getting a few batches
+        for i, (texts, structures) in enumerate(dataloader):
+            # Verify batch structure
+            self.assertEqual(len(texts), 4)
+            self.assertIsInstance(texts, list)
+            self.assertIsInstance(structures, dict)
+
+            # Verify tensor shapes
+            self.assertEqual(structures["initial_sgn"].shape[0], 4)
+            self.assertEqual(structures["initial_log"].shape[0], 4)
+            self.assertEqual(structures["operation_probs"].shape[0], 4)
+            self.assertEqual(structures["depths"].shape[0], 4)
+
+            # Verify all texts are strings
+            for text in texts:
+                self.assertIsInstance(text, str)
+                self.assertGreater(len(text), 0)
+
+            if i >= 2:  # Test a few batches
+                break
+
+    def test_create_dag_structure_dataloaders(self):
+        """Test the convenience function for creating structure dataloaders."""
+        train_loader, val_loader = create_dag_structure_dataloaders(
+            train_batch_size=4,
+            val_batch_size=2,
+            max_depth=3,
+            min_depth=1,
+            train_seed=42,
+            val_seed=43,
+        )
+
+        # Test train loader
+        texts, structures = next(train_loader)
+        self.assertEqual(len(texts), 4)
+        self.assertEqual(structures["initial_sgn"].shape[0], 4)
+
+        # Test val loader
+        texts, structures = next(val_loader)
+        self.assertEqual(len(texts), 2)
+        self.assertEqual(structures["initial_sgn"].shape[0], 2)
+
+    def test_structure_dataset_reproducibility(self):
+        """Test that structure dataset is reproducible with same seed."""
+        dataset1 = DAGStructureDataset(max_depth=3, min_depth=1, seed=123)
+        dataset2 = DAGStructureDataset(max_depth=3, min_depth=1, seed=123)
+
+        texts1, structures1 = dataset1.generate_batch(5)
+        texts2, structures2 = dataset2.generate_batch(5)
+
+        # Text should be identical
+        self.assertEqual(texts1, texts2)
+
+        # Structures should be identical
+        for key in structures1.keys():
+            self.assertTrue(torch.equal(structures1[key], structures2[key]))
+
+    def test_structure_dataset_different_seeds(self):
+        """Test that different seeds produce different results."""
+        dataset1 = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+        dataset2 = DAGStructureDataset(max_depth=3, min_depth=1, seed=43)
+
+        texts1, structures1 = dataset1.generate_batch(5)
+        texts2, structures2 = dataset2.generate_batch(5)
+
+        # Should be different
+        self.assertNotEqual(texts1, texts2)
+
+        # At least one structure tensor should be different
+        different = False
+        for key in structures1.keys():
+            if not torch.equal(structures1[key], structures2[key]):
+                different = True
+                break
+        self.assertTrue(different, "Different seeds should produce different results")
+
+    def test_edge_cases(self):
+        """Test edge cases and error conditions."""
+        # Test minimum depth
+        dataset = DAGStructureDataset(max_depth=1, min_depth=1, seed=42)
+        text, structure = dataset.generate_structure_example(depth=1)
+
+        self.assertEqual(structure["depth"].item(), 1)
+        self.assertEqual(structure["initial_sgn"].shape, (2,))  # 1 + 1
+        self.assertEqual(structure["operation_probs"].shape, (1, 5))  # (1, n_ops)
+
+    def test_op_name_to_idx_mapping(self):
+        """Test that operation name to index mapping is correct."""
+        dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+
+        # Verify the mapping exists and is correct
+        self.assertIsInstance(dataset.op_name_to_idx, dict)
+        self.assertEqual(len(dataset.op_name_to_idx), 5)  # 5 operations
+
+        # Verify all expected operations are mapped
+        expected_ops = ["add", "subtract", "multiply", "divide", "identity"]
+        for op in expected_ops:
+            self.assertIn(op, dataset.op_name_to_idx)
+            self.assertIsInstance(dataset.op_name_to_idx[op], int)
+            self.assertGreaterEqual(dataset.op_name_to_idx[op], 0)
+            self.assertLess(dataset.op_name_to_idx[op], 5)
+
+    def test_tensor_dtypes(self):
+        """Test that generated tensors have correct dtypes."""
+        dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+
+        text, structure = dataset.generate_structure_example(depth=2)
+
+        # Check dtypes
+        self.assertEqual(structure["initial_sgn"].dtype, torch.float32)
+        self.assertEqual(structure["initial_log"].dtype, torch.float32)
+        self.assertEqual(structure["operation_probs"].dtype, torch.float32)
+        self.assertEqual(structure["depth"].dtype, torch.long)
+
+    def test_structure_values_range(self):
+        """Test that structure values are in expected ranges."""
+        dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+
+        # Generate multiple examples to test range
+        for _ in range(10):
+            text, structure = dataset.generate_structure_example(depth=2)
+
+            # Initial signs should be -1 or +1
+            sgn = structure["initial_sgn"][0]  # First (non-zero) value
+            self.assertIn(sgn.item(), [-1.0, 1.0])
+
+            # Log magnitudes should be non-negative and bounded
+            log_mag = structure["initial_log"][0]  # First (non-zero) value
+            self.assertGreaterEqual(log_mag.item(), 0.0)
+            self.assertLessEqual(log_mag.item(), 10.0)  # LOG_LIM from dag_model
+
+            # Operation probabilities should be valid probabilities
+            op_probs = structure["operation_probs"]
+            self.assertTrue(torch.all(op_probs >= 0.0))
+            self.assertTrue(torch.all(op_probs <= 1.0))
+
+    def test_integration_with_dag_model_components(self):
+        """Test integration with actual DAG model components."""
+        from dag_model import stack_based_execution
+
+        dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+
+        # Generate structure examples
+        texts, structures = dataset.generate_batch(batch_size=2)
+
+        # Get structure tensors in the format expected by DAG model
+        initial_sgn = structures["initial_sgn"]  # (B, num_nodes)
+        initial_log = structures["initial_log"]  # (B, num_nodes)
+        operation_probs = structures["operation_probs"]  # (B, depth, n_ops)
+
+        # Add sequence dimension to match DAG model expectations
+        # DAG model expects (B, T, ...) where T is sequence length
+        seq_len = 1  # Single token for simplicity
+        initial_sgn = initial_sgn.unsqueeze(1)  # (B, T, num_nodes)
+        initial_log = initial_log.unsqueeze(1)  # (B, T, num_nodes)
+        operation_probs = operation_probs.unsqueeze(1)  # (B, T, depth, n_ops)
+
+        # Test that stack_based_execution works with our tensors
+        try:
+            final_sgn, final_log = stack_based_execution(
+                initial_sgn, initial_log, operation_probs
+            )
+
+            # Verify output shapes
+            self.assertEqual(final_sgn.shape, (2, 1))  # (B, T)
+            self.assertEqual(final_log.shape, (2, 1))  # (B, T)
+
+            # Verify outputs are finite
+            self.assertTrue(torch.isfinite(final_sgn).all())
+            self.assertTrue(torch.isfinite(final_log).all())
+
+            # Verify signs are reasonable
+            self.assertTrue(torch.all(torch.abs(final_sgn) <= 1.0))
+
+            # Verify log magnitudes are reasonable
+            self.assertTrue(torch.all(final_log >= 0.0))
+
+        except Exception as e:
+            self.fail(f"Integration with stack_based_execution failed: {e}")
+
+    def test_structure_dataset_with_dag_plan_predictor_format(self):
+        """Test that structure tensors match DAGPlanPredictor output format exactly."""
+        from dag_model import DAGPlanPredictor, GPTConfig
+
+        # Create a small config for testing
+        config = GPTConfig(
+            vocab_size=50,
+            block_size=8,
+            n_layer=2,
+            n_head=2,
+            n_embd=32,
+            dag_depth=2,  # depth 2 for this test
+        )
+
+        # Create DAGPlanPredictor
+        plan_predictor = DAGPlanPredictor(config)
+
+        # Generate structure dataset with same depth
+        dataset = DAGStructureDataset(max_depth=2, min_depth=2, seed=42)
+        texts, structures = dataset.generate_batch(batch_size=1)
+
+        # Check tensor shapes match what DAGPlanPredictor expects
+        batch_size = 1
+        seq_len = 1
+        num_nodes = config.dag_depth + 1  # 3 nodes for depth 2
+
+        # Our structure tensors (without sequence dimension)
+        struct_sgn = structures["initial_sgn"]  # (B, num_nodes)
+        struct_log = structures["initial_log"]  # (B, num_nodes)
+        struct_ops = structures["operation_probs"]  # (B, depth, n_ops)
+
+        # Verify shapes match DAGPlanPredictor expectations
+        self.assertEqual(struct_sgn.shape, (batch_size, num_nodes))
+        self.assertEqual(struct_log.shape, (batch_size, num_nodes))
+        self.assertEqual(struct_ops.shape, (batch_size, config.dag_depth, 5))  # 5 ops
+
+        # Test that we can use these as targets for DAGPlanPredictor
+        # Create dummy hidden states
+        hidden_states = torch.randn(batch_size, seq_len, config.n_embd)
+
+        # Get DAGPlanPredictor output
+        pred_sgn, pred_log, pred_ops = plan_predictor(hidden_states, hidden_states)
+
+        # Verify output shapes match our structure format (when squeezed)
+        self.assertEqual(pred_sgn.shape, (batch_size, seq_len, num_nodes))
+        self.assertEqual(pred_log.shape, (batch_size, seq_len, num_nodes))
+        self.assertEqual(pred_ops.shape, (batch_size, seq_len, config.dag_depth, 5))
+
+        # Verify we can compute losses between predictions and structure targets
+        # Add sequence dimension to structure targets for loss computation
+        target_sgn = struct_sgn.unsqueeze(1)  # (B, T, num_nodes)
+        target_log = struct_log.unsqueeze(1)  # (B, T, num_nodes)
+        target_ops = struct_ops.unsqueeze(1)  # (B, T, depth, n_ops)
+
+        # Compute losses (this should work without errors)
+        try:
+            sgn_loss = torch.nn.functional.mse_loss(pred_sgn, target_sgn)
+            log_loss = torch.nn.functional.mse_loss(pred_log, target_log)
+            ops_loss = torch.nn.functional.cross_entropy(
+                pred_ops.reshape(-1, 5), target_ops.reshape(-1, 5).argmax(dim=-1)
+            )
+
+            # Verify losses are finite
+            self.assertTrue(torch.isfinite(sgn_loss))
+            self.assertTrue(torch.isfinite(log_loss))
+            self.assertTrue(torch.isfinite(ops_loss))
+
+        except Exception as e:
+            self.fail(f"Loss computation failed: {e}")
 
 
 if __name__ == "__main__":

@@ -6,10 +6,11 @@ On-the-fly DAG dataset generation for training.
 NOTE: Currently this is incomplete and not used until we have the DAG structure more stable.
 """
 
+import math
 import random
 import sys
 from pathlib import Path
-from typing import Iterator, List
+from typing import Dict, Iterator, List, Tuple
 
 import numpy as np
 import torch
@@ -534,6 +535,244 @@ def create_dag_dataloaders(
     return train_loader, val_loader
 
 
+class DAGStructureDataset:
+    """
+    Dataset for pretraining DAG predictor on structure prediction.
+    Maps text descriptions to DAG structure tensors.
+    """
+
+    def __init__(
+        self,
+        max_depth: int = 8,
+        min_depth: int = 1,
+        num_initial_values: int = 1,
+        value_range: tuple[float, float] = (-10.0, 10.0),
+        seed: int = 42,
+        tokenizer: str = "gpt2",
+        max_seq_length: int = 512,
+    ):
+        """Initialize the DAG structure dataset.
+
+        Args:
+            max_depth: Maximum DAG depth
+            min_depth: Minimum DAG depth
+            num_initial_values: Number of initial values per example
+            value_range: Range for initial values
+            seed: Random seed
+            tokenizer: Tokenizer to use
+            max_seq_length: Maximum sequence length for text inputs
+        """
+        self.max_depth = max_depth
+        self.min_depth = min_depth
+        self.num_initial_values = num_initial_values
+        self.value_range = value_range
+        self.seed = seed
+        self.max_seq_length = max_seq_length
+
+        # Initialize tokenizer
+        self.enc = get_encoding(tokenizer)
+
+        # Create random state
+        self.random_state = random.Random(seed)
+
+        # Operation name to index mapping
+        self.op_name_to_idx = {name: i for i, name in enumerate(op_names)}
+        self.op_idx_to_name = {i: name for i, name in enumerate(op_names)}
+
+    def generate_structure_example(
+        self, depth: int
+    ) -> Tuple[str, Dict[str, torch.Tensor]]:
+        """Generate a single (text, structure) pair.
+
+        Args:
+            depth: DAG depth for this example
+
+        Returns:
+            Tuple of (text_description, structure_tensors)
+        """
+        # Generate the DAG example
+        example = generate_single_dag_example(
+            depth=depth,
+            num_initial_values=self.num_initial_values,
+            value_range=self.value_range,
+            rng=self.random_state,
+        )
+
+        # Extract text
+        text = example.text
+
+        # Create structure tensors
+        structure = self._create_structure_tensors(example)
+
+        return text, structure
+
+    def _create_structure_tensors(self, example: DAGExample) -> Dict[str, torch.Tensor]:
+        """Convert DAG example to structure tensors matching DAGPlanPredictor format.
+
+        Args:
+            example: DAG computation example
+
+        Returns:
+            Dictionary with structure tensors
+        """
+        depth = example.depth
+        num_scratch_nodes = depth + 1  # Following DAG model convention
+
+        # Create initial values tensors
+        initial_sgn = torch.zeros(num_scratch_nodes)
+        initial_log = torch.zeros(num_scratch_nodes)
+
+        # Fill initial values (typically just one for slot 0)
+        for i, (sign, log_mag) in enumerate(example.initial_values):
+            if i < num_scratch_nodes:
+                initial_sgn[i] = sign
+                initial_log[i] = log_mag
+
+        # Create operation probabilities (one-hot for ground truth)
+        operation_probs = torch.zeros(depth, len(op_names))
+
+        for step, (operand1_idx, operand2_idx, operation_name) in enumerate(
+            example.operations
+        ):
+            if step < depth:
+                op_idx = self.op_name_to_idx[operation_name]
+                operation_probs[step, op_idx] = 1.0
+
+        return {
+            "initial_sgn": initial_sgn,
+            "initial_log": initial_log,
+            "operation_probs": operation_probs,
+            "depth": torch.tensor(depth, dtype=torch.long),
+        }
+
+    def generate_batch(
+        self, batch_size: int
+    ) -> Tuple[List[str], Dict[str, torch.Tensor]]:
+        """Generate a batch of structure examples.
+
+        Args:
+            batch_size: Number of examples to generate
+
+        Returns:
+            Tuple of (text_list, batched_structure_tensors)
+        """
+        texts = []
+        structures = []
+
+        for _ in range(batch_size):
+            # Choose random depth
+            depth = self.random_state.randint(self.min_depth, self.max_depth)
+
+            # Generate example
+            text, structure = self.generate_structure_example(depth)
+            texts.append(text)
+            structures.append(structure)
+
+        # Batch the structure tensors
+        batched_structure = self._batch_structures(structures)
+
+        return texts, batched_structure
+
+    def _batch_structures(
+        self, structures: List[Dict[str, torch.Tensor]]
+    ) -> Dict[str, torch.Tensor]:
+        """Batch structure tensors with proper padding.
+
+        Args:
+            structures: List of structure dictionaries
+
+        Returns:
+            Batched structure tensors
+        """
+        batch_size = len(structures)
+        max_depth = max(s["depth"].item() for s in structures)
+        max_nodes = max_depth + 1
+
+        # Initialize batched tensors
+        batched_initial_sgn = torch.zeros(batch_size, max_nodes)
+        batched_initial_log = torch.zeros(batch_size, max_nodes)
+        batched_operation_probs = torch.zeros(batch_size, max_depth, len(op_names))
+        batched_depths = torch.zeros(batch_size, dtype=torch.long)
+
+        # Fill batched tensors
+        for i, structure in enumerate(structures):
+            depth = structure["depth"].item()
+            nodes = depth + 1
+
+            # Copy initial values
+            batched_initial_sgn[i, :nodes] = structure["initial_sgn"][:nodes]
+            batched_initial_log[i, :nodes] = structure["initial_log"][:nodes]
+
+            # Copy operation probabilities
+            batched_operation_probs[i, :depth] = structure["operation_probs"][:depth]
+
+            # Store depth
+            batched_depths[i] = depth
+
+        return {
+            "initial_sgn": batched_initial_sgn,
+            "initial_log": batched_initial_log,
+            "operation_probs": batched_operation_probs,
+            "depths": batched_depths,
+        }
+
+    def create_dataloader(
+        self, batch_size: int = 32
+    ) -> Iterator[Tuple[List[str], Dict[str, torch.Tensor]]]:
+        """Create an infinite dataloader for structure examples.
+
+        Args:
+            batch_size: Batch size
+
+        Yields:
+            Batches of (texts, structure_tensors)
+        """
+        while True:
+            texts, structures = self.generate_batch(batch_size)
+            yield texts, structures
+
+
+def create_dag_structure_dataloaders(
+    train_batch_size: int = 32,
+    val_batch_size: int = 32,
+    max_depth: int = 8,
+    min_depth: int = 1,
+    train_seed: int = 42,
+    val_seed: int = 43,
+) -> Tuple[Iterator, Iterator]:
+    """Create train and validation structure dataloaders.
+
+    Args:
+        train_batch_size: Training batch size
+        val_batch_size: Validation batch size
+        max_depth: Maximum DAG depth
+        min_depth: Minimum DAG depth
+        train_seed: Seed for training data
+        val_seed: Seed for validation data
+
+    Returns:
+        Tuple of (train_loader, val_loader)
+    """
+    # Create datasets
+    train_dataset = DAGStructureDataset(
+        max_depth=max_depth,
+        min_depth=min_depth,
+        seed=train_seed,
+    )
+
+    val_dataset = DAGStructureDataset(
+        max_depth=max_depth,
+        min_depth=min_depth,
+        seed=val_seed,
+    )
+
+    # Create dataloaders
+    train_loader = train_dataset.create_dataloader(train_batch_size)
+    val_loader = val_dataset.create_dataloader(val_batch_size)
+
+    return train_loader, val_loader
+
+
 if __name__ == "__main__":
     # Quick test
     print("Testing streaming DAG dataset...")
@@ -551,3 +790,43 @@ if __name__ == "__main__":
         print(f"  {line}")
 
     print("\n✅ Streaming dataset test passed!")
+
+    # Test new structure dataset
+    print("\nTesting DAG structure dataset...")
+
+    structure_dataset = DAGStructureDataset(max_depth=3, min_depth=1, seed=42)
+
+    # Generate a small batch
+    texts, structures = structure_dataset.generate_batch(2)
+
+    print(f"Generated {len(texts)} text-structure pairs")
+    print(f"Structure tensor shapes:")
+    for key, tensor in structures.items():
+        print(f"  {key}: {tensor.shape}")
+
+    # Show first example
+    print(f"\nFirst example text (first 200 chars):")
+    print(f"  {texts[0][:200]}...")
+
+    print(f"\nFirst example structure:")
+    print(f"  initial_sgn: {structures['initial_sgn'][0]}")
+    print(f"  initial_log: {structures['initial_log'][0]}")
+    print(f"  operation_probs[0]: {structures['operation_probs'][0]}")
+    print(f"  depth: {structures['depths'][0]}")
+
+    print("\n✅ Structure dataset test passed!")
+
+    # Test dataloader
+    print("\nTesting structure dataloader...")
+    train_loader, val_loader = create_dag_structure_dataloaders(
+        train_batch_size=4, val_batch_size=2, max_depth=3
+    )
+
+    # Get one batch from train loader
+    texts, structures = next(train_loader)
+    print(f"Dataloader generated batch with {len(texts)} examples")
+    print(f"Batch structure shapes:")
+    for key, tensor in structures.items():
+        print(f"  {key}: {tensor.shape}")
+
+    print("\n✅ All tests passed!")

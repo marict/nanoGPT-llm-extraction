@@ -119,9 +119,8 @@ class Block(nn.Module):
 
 
 # Log-space arithmetic utilities
-LOG_LIM = 15.0  # Bound on log-magnitudes to avoid numerical instabilities
-SIGN_SCALE = 5.0  # Controls softness of sign prediction at intake
-GRAD_CAP = 1.0  # try 0.1–10.0 depending on bfloat16/float16 range
+LOG_LIM = 10.0  # Bound on log-magnitudes to avoid numerical instabilities
+GRAD_CAP = 0.3  # try 0.1–10.0 depending on bfloat16/float16 range
 
 
 def _clip_log(log_t: torch.Tensor) -> torch.Tensor:
@@ -360,46 +359,81 @@ class DAGPlanPredictor(nn.Module):
         self.temperature = temperature
         self.n_ops = len(op_funcs)  # Number of operations
         self.num_scratch_nodes = config.dag_depth + 1
+        self.n_embd = config.n_embd
 
-        # Predictor: hidden_state -> initial_values + operation choices
-        # Output: 2 * num_scratch_nodes (initial values) + dag_depth * n_ops (operations)
-        output_dim = 2 * self.num_scratch_nodes + config.dag_depth * self.n_ops
-        self.predictor = nn.Sequential(
+        # Separate predictors for initial values and operations
+        # Initial values predictor: hidden_state -> initial_values
+        initial_values_output_dim = 2 * self.num_scratch_nodes
+        self.initial_values_predictor = nn.Sequential(
             nn.Linear(config.n_embd, config.n_embd),
             nn.GELU(),
-            nn.Linear(config.n_embd, output_dim),
+            nn.Linear(config.n_embd, initial_values_output_dim),
+        )
+
+        # Cross attention for operations: dag_structure_hidden attends to initial_value_hidden
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=config.n_embd,
+            num_heads=config.n_head,
+            dropout=config.dropout,
+            bias=config.bias,
+            batch_first=True,
+        )
+
+        # LayerNorm for stability
+        self.cross_attn_ln = LayerNorm(config.n_embd, bias=config.bias)
+
+        # Final projection to get operations output
+        operations_output_dim = config.dag_depth * self.n_ops
+        self.operations_projection = nn.Sequential(
+            nn.Linear(config.n_embd, config.n_embd),
+            nn.GELU(),
+            nn.Linear(config.n_embd, operations_output_dim),
         )
 
         # Store last predictions for logging
         self.last_operation_probs: torch.Tensor | None = None
         self.mag_logits: torch.Tensor | None = None  # for logging
 
-    def forward(self, hidden_states: torch.Tensor):
+    def forward(
+        self, initial_value_hidden: torch.Tensor, dag_structure_hidden: torch.Tensor
+    ):
         """
         Predict both initial values and operation choices for stack-based execution.
 
         Args:
-            hidden_states: (B, T, H) - hidden states for all tokens
+            initial_value_hidden: (B, T, H) - hidden states for initial values
+            dag_structure_hidden: (B, T, H) - hidden states for operations
         Returns:
             initial_sgn: (B, T, num_scratch_nodes) - initial signs
             initial_log: (B, T, num_scratch_nodes) - initial log magnitudes
             operation_probs: (B, T, dag_depth, n_ops) - probabilities for operations
         """
-        B, T, H = hidden_states.shape
+        B, T, H = initial_value_hidden.shape
 
-        # Reshape for batch processing
-        hidden_flat = hidden_states.reshape(B * T, H)
-        plan_output = self.predictor(hidden_flat)
-        plan_output = plan_output.view(B, T, -1)  # (B, T, output_dim)
+        # Process initial values
+        initial_value_flat = initial_value_hidden.reshape(B * T, H)
+        initial_values_raw = self.initial_values_predictor(initial_value_flat)
+        initial_values_raw = initial_values_raw.view(
+            B, T, -1
+        )  # (B, T, 2 * num_scratch_nodes)
 
-        # Split the output into initial values and operations
-        initial_values_size = 2 * self.num_scratch_nodes
-        initial_values_raw = plan_output[
-            ..., :initial_values_size
-        ]  # (B, T, 2 * num_scratch_nodes)
-        operation_logits_raw = plan_output[
-            ..., initial_values_size:
-        ]  # (B, T, dag_depth * n_ops)
+        # Process operations using cross attention
+        # Cross attention: dag_structure_hidden attends to initial_value_hidden
+        cross_output, _ = self.cross_attn(
+            query=dag_structure_hidden,
+            key=initial_value_hidden,
+            value=initial_value_hidden,
+        )
+
+        # Apply LayerNorm for stability
+        cross_output = self.cross_attn_ln(cross_output)
+
+        # Project to operations output
+        cross_output_flat = cross_output.reshape(B * T, H)
+        operation_logits_raw = self.operations_projection(cross_output_flat)
+        operation_logits_raw = operation_logits_raw.view(
+            B, T, -1
+        )  # (B, T, dag_depth * n_ops)
 
         # Process initial values
         sign_logits = initial_values_raw[..., : self.num_scratch_nodes]
@@ -409,8 +443,8 @@ class DAGPlanPredictor(nn.Module):
         self.mag_logits = mag_logits
 
         # Convert to sign and log magnitude format
-        initial_sgn = torch.tanh(sign_logits * SIGN_SCALE)
-        initial_log = LOG_LIM * torch.sigmoid(mag_logits)
+        initial_sgn = torch.tanh(sign_logits)
+        initial_log = torch.abs(torch.tanh(mag_logits)) * LOG_LIM
 
         # Process operation logits
         operation_logits = operation_logits_raw.view(B, T, self.dag_depth, self.n_ops)
@@ -698,7 +732,8 @@ class DifferentiableDAG(nn.Module):
                 f"Each step consumes one value, need at least {self.dag_depth + 1} initial values."
             )
 
-        self.pre_dag = Block(config)
+        self.initial_value_hidden = Block(config)
+        self.dag_structure_hidden = Block(config)
         self.post_dag = Block(config)
 
         # Initialize unified plan predictor (predicts both initial values and operations)
@@ -711,13 +746,19 @@ class DifferentiableDAG(nn.Module):
         original_hidden: torch.Tensor,  # (B, T, H)
     ):
         # Pre-process hidden states
-        incoming_hidden = self.pre_dag(original_hidden)
+        initial_value_hidden = self.initial_value_hidden(original_hidden)
+        dag_structure_hidden = self.dag_structure_hidden(original_hidden)
 
         if ENABLE_DEBUG_NAN_CHECKS:
-            _debug_check("incoming_hidden", incoming_hidden)
+            _debug_check("dag_structure_hidden", dag_structure_hidden)
+
+        if ENABLE_DEBUG_NAN_CHECKS:
+            _debug_check("initial_value_hidden", initial_value_hidden)
 
         # Generate unified plan (initial values + operations)
-        initial_sgn, initial_log, operation_probs = self.plan_predictor(incoming_hidden)
+        initial_sgn, initial_log, operation_probs = self.plan_predictor(
+            initial_value_hidden, dag_structure_hidden
+        )
 
         if ENABLE_DEBUG_NAN_CHECKS:
             _debug_check("initial_values", initial_sgn, initial_log)

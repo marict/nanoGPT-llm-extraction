@@ -109,7 +109,7 @@ class DAGVisualizer:
         with torch.no_grad():
             # Get the DAG plan
             operand1_probs, operand2_probs, operation_probs = plan_predictor(
-                hidden_states
+                hidden_states, hidden_states
             )
 
             B, T, H = hidden_states.shape
