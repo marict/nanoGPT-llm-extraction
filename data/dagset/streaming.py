@@ -594,98 +594,6 @@ def create_dag_dataloaders(
     return train_loader, val_loader
 
 
-class DAGPredictorDataLoader:
-    """DataLoader for DAG predictor training that returns the correct format."""
-
-    def __init__(
-        self,
-        batch_size: int = 32,
-        max_depth: int = 8,
-        num_initial_values: int = None,
-        value_range: tuple[float, float] = (0.1, 100.0),
-        seed: int = 42,
-        convert_to_english: bool = False,
-        english_conversion_probability: float = 0.3,
-    ):
-        """Initialize the DAG predictor data loader.
-
-        Args:
-            batch_size: Batch size for training
-            max_depth: DAG depth (all examples will have this depth)
-            num_initial_values: Number of initial values per example
-            value_range: Range for initial values
-            seed: Random seed for reproducibility
-            convert_to_english: Whether to potentially convert numbers/operators to English
-            english_conversion_probability: Probability of converting to English (0.0 to 1.0)
-        """
-        self.batch_size = batch_size
-        self.max_depth = max_depth
-        self.num_initial_values = (
-            num_initial_values if num_initial_values is not None else max_depth + 1
-        )
-        self.value_range = value_range
-        self.seed = seed
-        self.convert_to_english = convert_to_english
-        self.english_conversion_probability = english_conversion_probability
-
-        # Create random state
-        self.random_state = random.Random(seed)
-
-    def generate_batch(
-        self, batch_size: int = None
-    ) -> Tuple[List[str], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-        """Generate a batch of examples.
-
-        Args:
-            batch_size: Number of examples to generate
-
-        Returns:
-            Tuple of (texts, (operations_one_hot, signs, log_magnitudes))
-            - texts: List of B string examples
-            - operations_one_hot: [B x D x num_ops] one-hot encoded operation vectors
-            - signs: [B x (D+1)] sign tensor per batch
-            - log_magnitudes: [B x (D+1)] log magnitude tensor per batch
-        """
-        if batch_size is None:
-            batch_size = self.batch_size
-
-        texts = []
-        operations_list = []
-        signs_list = []
-        log_magnitudes_list = []
-
-        for _ in range(batch_size):
-            # Generate example
-            example = generate_single_dag_example(
-                depth=self.max_depth,
-                num_initial_values=self.num_initial_values,
-                value_range=self.value_range,
-                rng=self.random_state,
-                convert_to_english=self.convert_to_english,
-                conversion_probability=self.english_conversion_probability,
-            )
-
-            texts.append(example.text)
-            operations_list.append(example.operations)
-            signs_list.append(example.signs)
-            log_magnitudes_list.append(example.log_magnitudes)
-
-        # Stack tensors
-        operations_batch = torch.stack(operations_list, dim=0)  # [B, D, num_ops]
-        signs_batch = torch.stack(signs_list, dim=0)  # [B, D+1]
-        log_magnitudes_batch = torch.stack(log_magnitudes_list, dim=0)  # [B, D+1]
-
-        return texts, (operations_batch, signs_batch, log_magnitudes_batch)
-
-    def __iter__(self):
-        return self
-
-    def __next__(
-        self,
-    ) -> Tuple[List[str], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-        return self.generate_batch()
-
-
 class DAGStructureDataset:
     """
     Dataset for pretraining DAG predictor on structure prediction.
@@ -934,84 +842,25 @@ def create_dag_structure_dataloaders(
     return train_loader, val_loader
 
 
-def create_dag_predictor_dataloaders(
-    train_batch_size: int = 32,
-    val_batch_size: int = 32,
-    max_depth: int = 8,
-    train_seed: int = 42,
-    val_seed: int = 43,
-    convert_to_english: bool = False,
-    english_conversion_probability: float = 0.3,
-) -> Tuple[DAGPredictorDataLoader, DAGPredictorDataLoader]:
-    """Create train and validation DAG predictor dataloaders.
-
-    Args:
-        train_batch_size: Training batch size
-        val_batch_size: Validation batch size
-        max_depth: DAG depth (all examples will have this exact depth)
-        train_seed: Seed for training data
-        val_seed: Seed for validation data
-        convert_to_english: Whether to potentially convert numbers/operators to English
-        english_conversion_probability: Probability of converting to English (0.0 to 1.0)
-
-    Returns:
-        Tuple of (train_loader, val_loader)
-
-    Each dataloader returns:
-        - texts: List of B string examples (no tokenization)
-        - operations_one_hot: [B x D x num_ops] one-hot encoded operation vectors
-        - signs: [B x (D+1)] sign tensor per batch
-        - log_magnitudes: [B x (D+1)] log magnitude tensor per batch
-    """
-    # Create dataloaders
-    train_loader = DAGPredictorDataLoader(
-        batch_size=train_batch_size,
-        max_depth=max_depth,
-        seed=train_seed,
-        convert_to_english=convert_to_english,
-        english_conversion_probability=english_conversion_probability,
-    )
-
-    val_loader = DAGPredictorDataLoader(
-        batch_size=val_batch_size,
-        max_depth=max_depth,
-        seed=val_seed,
-        convert_to_english=convert_to_english,
-        english_conversion_probability=english_conversion_probability,
-    )
-
-    return train_loader, val_loader
-
-
 if __name__ == "__main__":
     # Simple example usage
     print("DAG Streaming Dataset Example")
     print("=" * 40)
 
-    # Test the new DAG predictor dataloader
-    print("\nTesting DAG Predictor DataLoader:")
-    train_loader, val_loader = create_dag_predictor_dataloaders(
-        train_batch_size=2, val_batch_size=2, max_depth=3
-    )
-
-    # Generate a batch
-    texts, (operations, signs, log_mags) = train_loader.generate_batch(2)
-
-    print(f"Generated batch with {len(texts)} examples")
-    print(f"Operations shape: {operations.shape}")  # Should be [2, 3, num_ops]
-    print(f"Signs shape: {signs.shape}")  # Should be [2, 4]
-    print(f"Log magnitudes shape: {log_mags.shape}")  # Should be [2, 4]
-
-    print("\nGenerated examples:")
-    for i, text in enumerate(texts):
-        print(f"Example {i+1}: {text}")
-
-    print("\n✅ New DAG Predictor DataLoader working correctly!")
-
-    # Test the old streaming dataset for comparison
-    print("\nTesting old streaming dataset:")
+    # Test the main streaming dataset (used in train.py)
+    print("\nTesting StreamingDAGDataset:")
     dataset = StreamingDAGDataset(max_depth=3, seed=42)
     tokens, text = dataset.generate_batch(3)
     print(f"Generated {len(tokens)} tokens from 3 examples")
+    print(f"Sample text:\n{text[:200]}...")
+
+    # Test the structure dataset (used in train_predictor.py)
+    print("\nTesting DAGStructureDataset:")
+    structure_dataset = DAGStructureDataset(max_depth=3, seed=42)
+    texts, structures = structure_dataset.generate_batch(2)
+    print(f"Generated {len(texts)} structure examples")
+    print(f"Structure keys: {list(structures.keys())}")
+    print(f"Initial signs shape: {structures['initial_sgn'].shape}")
+    print(f"Operation probs shape: {structures['operation_probs'].shape}")
 
     print("\n✅ Example completed successfully!")
