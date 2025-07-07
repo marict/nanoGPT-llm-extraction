@@ -26,11 +26,37 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from models.dag_model import OP_NAMES
 
 
-def convert_number_to_words(number: float, use_words: bool = True) -> str:
+def standardize_float_rounding(value: float, rng: random.Random = None) -> float:
+    """Standardize float rounding to 0-5 decimal places.
+
+    Args:
+        value: The float value to round
+        rng: Random number generator for choosing decimal places
+
+    Returns:
+        Float rounded to 0-5 decimal places
+    """
+    if rng is None:
+        rng = random
+
+    # Choose number of decimal places (0-5)
+    decimal_places = rng.randint(0, 5)
+
+    # Round to the chosen number of decimal places
+    rounded_value = round(value, decimal_places)
+
+    # Convert to int if no decimal places to avoid .0 at the end
+    if decimal_places == 0:
+        return int(rounded_value)
+
+    return rounded_value
+
+
+def convert_number_to_words(number, use_words: bool = True) -> str:
     """Convert a number to its English word equivalent.
 
     Args:
-        number: The number to convert
+        number: The number to convert (int or float)
         use_words: Whether to convert to words or keep as digits
 
     Returns:
@@ -39,28 +65,33 @@ def convert_number_to_words(number: float, use_words: bool = True) -> str:
     if not use_words:
         return str(number)
 
-    # Handle special cases for common decimal values
-    if abs(number) < 0.001:
+    # Handle zero
+    if number == 0 or (isinstance(number, float) and abs(number) < 0.00001):
         return "zero"
 
-    # For integers, use num2words directly
-    if number == int(number):
+    # Handle integers (including those created by standardize_float_rounding)
+    if isinstance(number, int) or (isinstance(number, float) and number.is_integer()):
         return num2words(int(number))
 
-    # For decimals, convert the parts separately
-    if "." in str(number):
-        parts = str(number).split(".")
-        integer_part = int(parts[0]) if parts[0] else 0
-        decimal_part = parts[1]
+    # Handle floats with decimals
+    if isinstance(number, float):
+        # Convert to string to get the decimal representation
+        number_str = str(number)
 
-        result = num2words(integer_part) if integer_part != 0 else "zero"
-        result += " point"
+        if "." in number_str:
+            parts = number_str.split(".")
+            integer_part = int(parts[0]) if parts[0] else 0
+            decimal_part = parts[1]
 
-        # Convert each decimal digit to words
-        for digit in decimal_part[:6]:  # Limit to 6 decimal places
-            result += " " + num2words(int(digit))
+            # Build the result
+            result = num2words(integer_part) if integer_part != 0 else "zero"
+            result += " point"
 
-        return result
+            # Convert each decimal digit to words (limit to 5 decimal places)
+            for digit in decimal_part[:5]:
+                result += " " + num2words(int(digit))
+
+            return result
 
     return str(number)
 
@@ -112,7 +143,15 @@ def add_english_to_expression(
                 converted_tokens.append(token)
         elif re.match(r"\d+\.?\d*", token):
             # Randomly convert number to words based on probability
-            number = float(token)
+            # Handle both int and float types from standardized rounding
+            try:
+                if "." in token:
+                    number = float(token)
+                else:
+                    number = int(token)
+            except ValueError:
+                number = float(token)
+
             if rng.random() < conversion_probability:
                 converted_tokens.append(convert_number_to_words(number, True))
             else:
@@ -144,9 +183,10 @@ def generate_random_dag_plan(
 ) -> tuple[list[float], list[str]]:
     if rng is None:
         rng = random
-    # Generate random initial values
+    # Generate random initial values with standardized rounding
     initial_values = [
-        rng.uniform(value_range[0], value_range[1]) for _ in range(num_initial_values)
+        standardize_float_rounding(rng.uniform(value_range[0], value_range[1]), rng)
+        for _ in range(num_initial_values)
     ]
     operations = [rng.choice(OP_NAMES) for _ in range(depth)]
     return initial_values, operations

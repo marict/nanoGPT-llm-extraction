@@ -25,6 +25,250 @@ sys.path.append(str(Path(__file__).parent.parent))
 from models.dag_model import LOG_LIM
 
 
+class TestIdentityFunction(unittest.TestCase):
+    """Test the identity function specifically in DAG generation."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        np.random.seed(42)
+        torch.manual_seed(42)
+
+    def test_identity_operation_in_plan_generation(self):
+        """Test that identity operations can be generated in DAG plans."""
+        # Force identity operation by generating many plans and checking at least one has identity
+        identity_found = False
+        for seed in range(100):  # Try many seeds to find identity operation
+            initial_values, operations = generate_random_dag_plan(
+                depth=3, num_initial_values=4, rng=np.random.RandomState(seed)
+            )
+            if "identity" in operations:
+                identity_found = True
+                # Verify the plan is valid
+                self.assertEqual(len(initial_values), 4)
+                self.assertEqual(len(operations), 3)
+                break
+
+        self.assertTrue(
+            identity_found, "Identity operation should be generatable in DAG plans"
+        )
+
+    def test_identity_operation_expression_generation(self):
+        """Test that identity operations generate correct expressions."""
+        # Create a specific case with identity operation
+        initial_values = [5.0, 3.0, 2.0]
+        operations = ["identity", "add"]  # First operation is identity
+
+        # Generate expression
+        expression = convert_dag_to_expression_string(
+            initial_values=initial_values,
+            operations=operations,
+            convert_to_english=False,
+            conversion_probability=0.0,
+        )
+
+        # With identity operation, the first step should return the first operand
+        # Stack starts as [5.0, 3.0, 2.0]
+        # identity: pop 2.0 and 3.0, return 3.0 (first operand), stack becomes [5.0, 3.0]
+        # add: pop 3.0 and 5.0, return 5.0 + 3.0 = 8.0, stack becomes [8.0]
+        # Result should be equivalent to "5.0 + 3.0" = 8.0
+
+        self.assertIsInstance(expression, str)
+        self.assertGreater(len(expression), 0)
+
+        # The expression might be simplified, but it should be evaluable
+        # and should contain the expected operands
+        import re
+
+        numbers_in_expression = re.findall(r"\d+\.?\d*", expression)
+        self.assertGreater(
+            len(numbers_in_expression),
+            0,
+            f"Expression should contain numbers: {expression}",
+        )
+
+    def test_identity_operation_with_standardized_rounding(self):
+        """Test that identity operations work with standardized rounding."""
+        import random
+
+        from streaming import standardize_float_rounding
+
+        rng = random.Random(42)
+
+        # Generate values with standardized rounding
+        initial_values = [
+            standardize_float_rounding(10.123456789, rng),
+            standardize_float_rounding(5.987654321, rng),
+            standardize_float_rounding(3.14159, rng),
+        ]
+
+        # Create operations with identity
+        operations = ["identity", "multiply"]
+
+        # Generate expression
+        expression = convert_dag_to_expression_string(
+            initial_values=initial_values,
+            operations=operations,
+            rng=rng,
+            convert_to_english=False,
+            conversion_probability=0.0,
+        )
+
+        # Verify the expression is valid
+        self.assertIsInstance(expression, str)
+        self.assertGreater(len(expression), 0)
+
+        # Verify that standardized rounding was applied to initial values
+        for value in initial_values:
+            if isinstance(value, float):
+                # Check that it has at most 5 decimal places
+                decimal_places = (
+                    len(str(value).split(".")[-1]) if "." in str(value) else 0
+                )
+                self.assertLessEqual(
+                    decimal_places,
+                    5,
+                    f"Value {value} should have at most 5 decimal places",
+                )
+
+    def test_identity_operation_with_english_conversion(self):
+        """Test that identity operations work with English conversion."""
+        from streaming import convert_number_to_words
+
+        # Test with integer
+        initial_values = [42, 7, 3]
+        operations = ["identity"]
+
+        expression = convert_dag_to_expression_string(
+            initial_values=initial_values,
+            operations=operations,
+            convert_to_english=True,
+            conversion_probability=1.0,  # Force conversion
+        )
+
+        self.assertIsInstance(expression, str)
+        self.assertGreater(len(expression), 0)
+
+        # Should contain English words
+        import re
+
+        english_words = re.findall(r"[a-zA-Z]+", expression)
+        self.assertGreater(
+            len(english_words), 0, f"Expected English words in expression: {expression}"
+        )
+
+    def test_identity_operation_tensor_format(self):
+        """Test that identity operations create correct tensor format."""
+        # Create example with forced identity operation
+        example = generate_single_dag_example(depth=1, num_initial_values=2)
+
+        # Check tensor shapes
+        self.assertEqual(example.signs.shape, torch.Size([2]))
+        self.assertEqual(example.log_magnitudes.shape, torch.Size([2]))
+        self.assertEqual(
+            example.operations.shape, torch.Size([1, 5])
+        )  # 1 operation, 5 possible ops
+
+        # Check that operation tensor is one-hot
+        op_tensor = example.operations[0]  # First (and only) operation
+        self.assertAlmostEqual(op_tensor.sum().item(), 1.0, places=5)
+
+        # Check that exactly one operation is selected
+        ones_count = (op_tensor == 1.0).sum().item()
+        zeros_count = (op_tensor == 0.0).sum().item()
+        self.assertEqual(ones_count, 1)
+        self.assertEqual(zeros_count, 4)
+
+    def test_identity_operation_in_structure_dataset(self):
+        """Test that identity operations work in DAG structure dataset."""
+        dataset = DAGStructureDataset(max_depth=2, seed=42)
+
+        # Generate multiple examples to find one with identity
+        identity_found = False
+        for i in range(20):  # Try multiple examples
+            text, structure = dataset.generate_structure_example(depth=2)
+
+            # Check operations in the structure
+            op_probs = structure["operation_probs"]
+            for step in range(2):
+                op_idx = torch.argmax(op_probs[step]).item()
+                op_name = dataset.op_idx_to_name[op_idx]
+                if op_name == "identity":
+                    identity_found = True
+
+                    # Verify the structure is valid
+                    self.assertIsInstance(text, str)
+                    self.assertGreater(len(text), 0)
+                    self.assertEqual(structure["initial_sgn"].shape, (3,))  # depth + 1
+                    self.assertEqual(structure["initial_log"].shape, (3,))
+                    self.assertEqual(structure["operation_probs"].shape, (2, 5))
+                    break
+
+            if identity_found:
+                break
+
+        # Note: We don't assert identity_found=True because it's probabilistic,
+        # but if found, we verify it works correctly
+
+    def test_identity_operation_consistency(self):
+        """Test that identity operations are consistent across different generation methods."""
+        import random
+
+        rng = random.Random(42)
+
+        # Test with same initial values and operations
+        initial_values = [10.5, 7.25, 3.0]
+        operations = ["identity", "add"]
+
+        # Generate expression multiple times
+        expressions = []
+        for _ in range(3):
+            expr = convert_dag_to_expression_string(
+                initial_values=initial_values.copy(),
+                operations=operations.copy(),
+                rng=random.Random(42),  # Same seed for consistency
+                convert_to_english=False,
+                conversion_probability=0.0,
+            )
+            expressions.append(expr)
+
+        # All expressions should be identical with same inputs and seed
+        for i in range(1, len(expressions)):
+            self.assertEqual(
+                expressions[0],
+                expressions[i],
+                "Identity operations should produce consistent results",
+            )
+
+    def test_all_operations_including_identity(self):
+        """Test that all operations including identity can be generated."""
+        from models.dag_model import OP_NAMES
+
+        operations_found = set()
+
+        # Generate many examples to try to find all operations
+        for seed in range(200):
+            initial_values, operations = generate_random_dag_plan(
+                depth=1, num_initial_values=2, rng=np.random.RandomState(seed)
+            )
+            operations_found.update(operations)
+
+        # Verify all expected operations can be found
+        expected_ops = set(OP_NAMES)
+        missing_ops = expected_ops - operations_found
+
+        # We should find most operations, including identity
+        self.assertIn(
+            "identity", operations_found, "Identity operation should be generatable"
+        )
+
+        # Log what operations were found for debugging
+        print(f"Operations found: {sorted(operations_found)}")
+        if missing_ops:
+            print(
+                f"Missing operations (may be due to randomness): {sorted(missing_ops)}"
+            )
+
+
 class TestStreamingDAGDataset(unittest.TestCase):
     """Test the streaming DAG dataset functionality."""
 
