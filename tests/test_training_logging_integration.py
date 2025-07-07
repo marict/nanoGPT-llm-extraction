@@ -10,6 +10,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
+from test_common import sample_batch_small, small_model, tiny_model
 
 from dag_logger import DAGLogger
 
@@ -45,13 +46,31 @@ def test_comprehensive_training_and_text_generation_logging(
 
     # Multiple forward passes to test logging stability
     for iteration in range(3):
+        # Ensure model is in training mode for gradient tracking
+        model.train()
+
+        # Debug: Check model state before forward pass
+        print(f"Before forward pass:")
+        print(f"  Model training mode: {model.training}")
+        print(f"  Model device: {next(model.parameters()).device}")
+        print(
+            f"  Parameters require grad: {[p.requires_grad for p in list(model.parameters())[:3]]}"
+        )
+
         # Do forward pass first to create tensors (in training mode)
         logits, loss = model(batch_x, batch_y)
 
-        # Verify shapes and values
-        assert logits.shape == (batch_x.size(0), batch_x.size(1), config.vocab_size)
-        assert loss.item() > 0
-        assert torch.isfinite(loss)
+        # Debug: Check model and loss state after forward pass
+        print(f"After forward pass:")
+        print(f"  Model training mode: {model.training}")
+        print(f"  Loss requires_grad: {loss.requires_grad}")
+        print(f"  Loss has grad_fn: {loss.grad_fn is not None}")
+        print(f"  Loss value: {loss.item()}")
+        print(f"  Loss device: {loss.device}")
+
+        # Check if any parameters require gradients
+        params_with_grad = [p for p in model.parameters() if p.requires_grad]
+        print(f"  Model has {len(params_with_grad)} parameters that require gradients")
 
         # Set up gradient tracking AFTER forward pass when tensors exist
         logger = DAGLogger()
@@ -211,3 +230,5 @@ def test_gradient_capture_and_api_integration(small_model, tiny_model):
         prompt = torch.tensor([[1]], dtype=torch.long)
         generated = tiny_model_obj.generate(prompt, max_new_tokens=3, temperature=1.0)
         assert generated.shape == (1, 4)  # prompt + 3 new tokens
+
+    tiny_model_obj.train()

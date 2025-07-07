@@ -409,6 +409,10 @@ class DAGPlanPredictor(nn.Module):
                 initial_log: (B, T, num_scratch_nodes) - initial log magnitudes
                 operation_probs: (B, T, dag_depth, n_ops) - probabilities for operations
         """
+        # Clear previously cached tensors
+        self.last_operation_probs = None
+        self.mag_logits = None
+
         B, T, H = original_hidden.shape
 
         # Split hidden state into initial value and dag structure components
@@ -467,15 +471,16 @@ class DAGPlanPredictor(nn.Module):
         scale = math.sqrt(self.n_ops)
         operation_probs = F.softmax(operation_logits * scale / self.temperature, dim=-1)
 
+        # Retain grad for logging.
+        if initial_sgn.requires_grad and initial_sgn.grad_fn is not None:
+            initial_sgn.retain_grad()
+        if initial_log.requires_grad and initial_log.grad_fn is not None:
+            initial_log.retain_grad()
+        if operation_probs.requires_grad and operation_probs.grad_fn is not None:
+            operation_probs.retain_grad()
+
         # Cache for logging
         self.last_operation_probs = operation_probs
-        # Retain grad for loss computation on predictor training (only if requires_grad)
-        if initial_sgn.requires_grad:
-            initial_sgn.retain_grad()
-        if initial_log.requires_grad:
-            initial_log.retain_grad()
-        if operation_probs.requires_grad:
-            operation_probs.retain_grad()
         return initial_sgn, initial_log, operation_probs
 
 
@@ -732,7 +737,6 @@ class DifferentiableDAG(nn.Module):
 
         # Always use dag_depth + 1 initial values for optimal stack-based computation
         self.num_scratch_nodes = config.dag_depth + 1
-
         self.temperature = config.softmax_temperature
 
         # Validate configuration at initialization time
@@ -753,13 +757,19 @@ class DifferentiableDAG(nn.Module):
 
         # Initialize unified plan predictor (predicts both initial values and operations)
         self.plan_predictor = DAGPlanPredictor(config, self.temperature)
-
         self.scalar_to_embed = ScalarToEmbed(config.n_embd)
+
+        self.final_hidden = None
+        self.final_values = None
 
     def forward(
         self,
         original_hidden: torch.Tensor,  # (B, T, H)
     ):
+        # Clear previously cached tensors
+        self.final_hidden = None
+        self.final_values = None
+
         # Generate unified plan (initial values + operations)
         initial_sgn, initial_log, operation_probs = self.plan_predictor(original_hidden)
 
@@ -969,6 +979,9 @@ class GPT(nn.Module):
         loss = None
         if targets is not None:
             loss = self._compute_loss(logits, targets)
+            if torch.is_grad_enabled():
+                assert loss.requires_grad, "Loss does not require grad"
+                assert loss.grad_fn is not None, "Loss has no grad_fn"
 
         return logits, loss
 

@@ -109,27 +109,47 @@ class TestStreamingDAGDataset(unittest.TestCase):
             depth=2, num_initial_values=3
         )  # depth+1 initial values
 
-        self.assertIsInstance(example, DAGExample)
-        self.assertEqual(example.depth, 2)
-        self.assertEqual(len(example.initial_values), 3)  # depth + 1
-        self.assertEqual(len(example.operations), 2)
-        self.assertIsInstance(example.text, str)
-        self.assertGreater(len(example.text), 0)
+        self.assertIsInstance(example, DAGExample, msg="Example is not a DAGExample")
+        self.assertEqual(example.depth, 2, msg="Depth is not 2")
+        self.assertEqual(
+            len(example.initial_values), 3, msg="Initial values length is not 3"
+        )  # depth + 1
+        self.assertEqual(len(example.operations), 2, msg="Operations length is not 2")
+        self.assertIsInstance(example.text, str, msg="Text is not a string")
+        self.assertGreater(len(example.text), 0, msg="Text is empty")
 
         # Check that text is a simple mathematical expression
         # Should contain numbers and operators, but not verbose DAG format
         import re
 
         # Should contain numbers (with potential decimals)
-        self.assertTrue(re.search(r"\d+\.?\d*", example.text))
+        self.assertTrue(
+            re.search(r"\d+\.?\d*", example.text),
+            msg=f"Text does not contain numbers: {example.text}",
+        )
         # Should contain operators
-        self.assertTrue(re.search(r"[\+\-\*/]", example.text))
+        self.assertTrue(
+            re.search(r"[\+\-\*/]", example.text),
+            msg=f"Text does not contain operators: {example.text}",
+        )
 
         # Should NOT contain verbose DAG format elements
-        self.assertNotIn("DAG Computation", example.text)
-        self.assertNotIn("v0 =", example.text)
-        self.assertNotIn("Step", example.text)
-        self.assertNotIn("Final result:", example.text)
+        self.assertNotIn(
+            "DAG Computation",
+            example.text,
+            msg=f"Text contains 'DAG Computation': {example.text}",
+        )
+        self.assertNotIn(
+            "v0 =", example.text, msg=f"Text contains 'v0 =': {example.text}"
+        )
+        self.assertNotIn(
+            "Step", example.text, msg=f"Text contains 'Step': {example.text}"
+        )
+        self.assertNotIn(
+            "Final result:",
+            example.text,
+            msg=f"Text contains 'Final result:': {example.text}",
+        )
 
     def test_generate_dag_dataset(self):
         """Test dataset generation."""

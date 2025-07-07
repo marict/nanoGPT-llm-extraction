@@ -9,6 +9,7 @@ configuration management, loss functions, model setup, and training integration.
 import os
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import patch
 
@@ -797,8 +798,11 @@ class TestIntegration(unittest.TestCase):
 
         # Test evaluation (should not crash)
         device = "cpu"
-        ctx = torch.no_grad()
-
+        ctx = (
+            nullcontext()
+            if device == "cpu"
+            else torch.amp.autocast(device_type=device, dtype=torch.float32)
+        )
         try:
             val_losses = evaluate_dag_model(
                 model, val_loader, device, ctx, self.cfg, eval_iters=2
@@ -973,7 +977,6 @@ class TestIntegration(unittest.TestCase):
         target_sgn = structures["initial_sgn"].to(device)
         target_log = structures["initial_log"].to(device)
         target_ops = structures["operation_probs"].to(device)
-        target_depths = structures["depths"].to(device)
 
         # Training step
         optimizer.zero_grad()
@@ -1069,7 +1072,6 @@ class TestIntegration(unittest.TestCase):
         target_sgn = structures["initial_sgn"].to(device)
         target_log = structures["initial_log"].to(device)
         target_ops = structures["operation_probs"].to(device)
-        target_depths = structures["depths"].to(device)
 
         # Training step
         optimizer.zero_grad()
@@ -1375,8 +1377,11 @@ class TestTrainingIntegration(unittest.TestCase):
 
         # Mock device and context
         device = "cpu"
-        ctx = torch.no_grad()
-
+        ctx = (
+            nullcontext()
+            if device == "cpu"
+            else torch.amp.autocast(device_type=device, dtype=torch.float32)
+        )
         # Create config with matching sequence length
         cfg = DAGTrainConfig(
             eval_iters=1,  # Just one iteration to avoid issues

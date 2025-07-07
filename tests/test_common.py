@@ -45,21 +45,21 @@ STANDARD_CONFIG = GPTConfig(
 )
 
 
-@pytest.fixture(scope="session")  # Changed to session scope for maximum reuse
+@pytest.fixture(scope="function")  # Changed to session scope for maximum reuse
 def tiny_model():
     """Tiny model for quick tests."""
     torch.manual_seed(42)  # Ensure deterministic model initialization
     return GPT(TINY_CONFIG), TINY_CONFIG
 
 
-@pytest.fixture(scope="session")  # Changed to session scope for maximum reuse
+@pytest.fixture(scope="function")  # Changed to session scope for maximum reuse
 def small_model():
     """Small model for basic tests."""
     torch.manual_seed(42)  # Ensure deterministic model initialization
     return GPT(SMALL_CONFIG), SMALL_CONFIG
 
 
-@pytest.fixture(scope="module")  # Keep module scope as it's less frequently used
+@pytest.fixture(scope="function")  # Keep module scope as it's less frequently used
 def standard_model():
     """Standard model for comprehensive tests."""
     torch.manual_seed(42)  # Ensure deterministic model initialization
@@ -76,7 +76,7 @@ def sample_batch_tiny():
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="function")
 def sample_batch_small():
     """Optimized sample batch for small model."""
     batch_size = 1  # Reduced from 2
@@ -90,7 +90,7 @@ def sample_batch_small():
     )
 
 
-@pytest.fixture(scope="session")  # Cache batch for reuse
+@pytest.fixture(scope="function")  # Cache batch for reuse
 def cached_sample_batch_tiny():
     """Cached sample batch for tiny model to avoid recreation."""
     torch.manual_seed(42)
@@ -101,7 +101,7 @@ def cached_sample_batch_tiny():
     )
 
 
-@pytest.fixture(scope="session")  # Cache batch for reuse
+@pytest.fixture(scope="function")  # Cache batch for reuse
 def cached_sample_batch_small():
     """Cached sample batch for small model to avoid recreation."""
     torch.manual_seed(42)
@@ -249,7 +249,7 @@ class OptimizedMockModel(torch.nn.Module):
 
 
 # Create a shared mock model instance for reuse
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def shared_mock_model():
     """Shared mock model to avoid repeated instantiation."""
     return OptimizedMockModel()
