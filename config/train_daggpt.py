@@ -5,8 +5,10 @@ block_size = 512
 gradient_accumulation_steps = 1
 
 # Should be enough to show saturation
-max_iters = 50_000
-lr_decay_iters = 50_000
+max_iters = 15_000
+lr_decay_iters = 15_000
+warmup_iters = int(max_iters * 0.05)
+
 
 eval_interval = 1000
 # No math eval by for now until we can get a better model
@@ -21,7 +23,7 @@ dag_depth = 4
 # n_embed must be divisible by n_head
 n_layer = 12
 n_head = 12
-n_embd = 768
+n_embd = n_head * 64
 dropout = 0.01
 bias = True
 
@@ -31,7 +33,6 @@ beta2 = 0.95
 grad_clip = 1.0
 
 decay_lr = True
-warmup_iters = 10_000
 min_lr = 3e-5
 
 dataset = "proofpile"
