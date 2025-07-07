@@ -6,5 +6,6 @@ wandb
 runpod
 datasets
 random-fourier-features-pytorch
+num2words
 
 # Torch comes with the runpod image

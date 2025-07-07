@@ -1,178 +1,117 @@
 #!/usr/bin/env python
-"""
-example_usage.py
-Example of how to use the streaming DAG dataset for training.
-"""
+"""Example usage of the DAG dataset showing text expressions and their tensor labels."""
 
-import sys
-import time
-from pathlib import Path
-
-# Add paths for imports
-sys.path.append(str(Path(__file__).parent))
-sys.path.append(str(Path(__file__).parent.parent.parent))
+import random
 
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from streaming import StreamingDAGDataset, create_dag_dataloaders
+from streaming import DAGStructureDataset
 
 
-def example_simple_streaming():
-    """Example 1: Simple streaming dataset usage."""
-    print("=== Example 1: Simple Streaming Dataset ===")
+def print_example(text: str, structure: dict):
+    """Pretty print a DAG example with its tensor labels."""
+    print("\nText expression (from dataset):")
+    print(f"  {text}")
 
-    # Create a streaming dataset
-    dataset = StreamingDAGDataset(
-        max_depth=5,
-        seed=42,
-    )
+    print("\nInitial values:")
+    initial_values = []
+    for i, (sgn, log) in enumerate(
+        zip(structure["initial_sgn"], structure["initial_log"])
+    ):
+        val = float(sgn) * torch.exp(torch.tensor(float(log)))
+        initial_values.append(val)
+        print(
+            f"  v{i}: sign={float(sgn):.1f}, log_mag={float(log):.3f} → {float(val):.3f}"
+        )
 
-    # Generate a batch of examples
-    tokens, text = dataset.generate_batch(batch_size=10)
-    print(f"Generated {len(tokens)} tokens from 10 examples")
+    print("\nOperations (one-hot) and actual computation:")
+    op_names = ["add", "subtract", "multiply", "divide", "identity"]
+    values = initial_values.copy()
 
-    # Show first example
-    examples = text.split("\n---\n")
-    print(f"\nFirst example:")
-    print(examples[0])
+    for i, probs in enumerate(structure["operation_probs"]):
+        op_idx = torch.argmax(probs).item()
+        op_name = op_names[op_idx]
 
-    # Generate specific number of tokens
-    tokens = dataset.generate_tokens(5000)
-    print(f"\nGenerated exactly {len(tokens)} tokens")
+        # Get operand indices from the DAG plan
+        if i < len(structure["operations"]):
+            op1_idx, op2_idx, _ = structure["operations"][i]
+            val1, val2 = values[op1_idx], values[op2_idx]
 
+            # Compute result
+            if op_name == "add":
+                result = val1 + val2
+                op_str = f"{val1:.3f} + {val2:.3f} = {result:.3f}"
+            elif op_name == "subtract":
+                result = val1 - val2
+                op_str = f"{val1:.3f} - {val2:.3f} = {result:.3f}"
+            elif op_name == "multiply":
+                result = val1 * val2
+                op_str = f"{val1:.3f} * {val2:.3f} = {result:.3f}"
+            elif op_name == "divide":
+                result = val1 / val2
+                op_str = f"{val1:.3f} / {val2:.3f} = {result:.3f}"
+            else:  # identity
+                result = val1
+                op_str = f"keep {val1:.3f}"
 
-def example_dataloader_usage():
-    """Example 2: Using the dataloader for training."""
-    print("\n=== Example 2: DataLoader Usage ===")
+            values.append(result)
 
-    # Create train and validation loaders
-    train_loader, val_loader = create_dag_dataloaders(
-        train_examples_per_batch=500,  # Generate 500 examples per batch
-        val_examples_per_batch=100,  # Generate 100 examples per batch
-        batch_size=8,  # Training batch size
-        block_size=512,  # Sequence length
-        max_depth=4,
-        train_seed=42,
-        val_seed=43,
-    )
+            print(f"  Step {i}: {op_name}")
+            print(f"    Using v{op1_idx} and v{op2_idx}: {op_str}")
+            probs_str = ", ".join(f"{float(p):.1f}" for p in probs)
+            print(f"    Probabilities: [{probs_str}]")
 
-    # Simulate training for a few batches
-    print("Simulating training...")
-    for i, (inputs, targets) in enumerate(train_loader):
-        print(f"Training batch {i}: inputs {inputs.shape}, targets {targets.shape}")
+    print("\nActual computation being performed:")
+    if len(structure["operations"]) >= 2:
+        op1_idx_0, op2_idx_0, _ = structure["operations"][0]
+        op1_idx_1, op2_idx_1, _ = structure["operations"][1]
+        op_idx_1 = torch.argmax(structure["operation_probs"][1]).item()
+        op_name_1 = op_names[op_idx_1]
 
-        # Here you would do your forward pass, loss computation, etc.
-        # loss = model(inputs, targets)
-        # loss.backward()
-        # optimizer.step()
-
-        if i >= 3:  # Just test a few batches
-            break
-
-    # Test validation
-    print("\nTesting validation...")
-    for i, (inputs, targets) in enumerate(val_loader):
-        print(f"Validation batch {i}: inputs {inputs.shape}, targets {targets.shape}")
-        if i >= 1:  # Just test a couple
-            break
-
-
-def example_training_loop():
-    """Example 3: Simple training loop with DAG data."""
-    print("\n=== Example 3: Simple Training Loop ===")
-
-    # Create a tiny model for demonstration
-    class TinyModel(nn.Module):
-        def __init__(self, vocab_size, embed_dim=128):
-            super().__init__()
-            self.embedding = nn.Embedding(vocab_size, embed_dim)
-            self.transformer = nn.TransformerEncoder(
-                nn.TransformerEncoderLayer(embed_dim, nhead=4, batch_first=True),
-                num_layers=2,
-            )
-            self.lm_head = nn.Linear(embed_dim, vocab_size)
-
-        def forward(self, x):
-            x = self.embedding(x)
-            x = self.transformer(x)
-            return self.lm_head(x)
-
-    # Create model and optimizer
-    model = TinyModel(vocab_size=50257)  # GPT-2 vocab size
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
-    criterion = nn.CrossEntropyLoss()
-
-    # Create dataloader
-    train_loader, _ = create_dag_dataloaders(
-        train_examples_per_batch=100,
-        batch_size=4,
-        block_size=128,
-        max_depth=3,
-        train_seed=42,
-    )
-
-    # Training loop
-    model.train()
-    print("Training tiny model on DAG data...")
-
-    start_time = time.time()
-    for step, (inputs, targets) in enumerate(train_loader):
-        # Forward pass
-        logits = model(inputs)
-        loss = criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
-
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        if step % 10 == 0:
-            print(f"Step {step}: loss = {loss.item():.4f}")
-
-        if step >= 50:  # Just a few steps for demo
-            break
-
-    duration = time.time() - start_time
-    print(f"Completed 50 training steps in {duration:.2f}s")
-    print(f"Average time per step: {duration/50:.3f}s")
+        if op_name_1 == "identity":
+            # For identity operations, show just the first operation's result
+            op_idx_0 = torch.argmax(structure["operation_probs"][0]).item()
+            op_name_0 = op_names[op_idx_0]
+            if op_name_0 == "add":
+                print(
+                    f"  {initial_values[op1_idx_0]:.3f} + {initial_values[op2_idx_0]:.3f}"
+                )
+            elif op_name_0 == "subtract":
+                print(
+                    f"  {initial_values[op1_idx_0]:.3f} - {initial_values[op2_idx_0]:.3f}"
+                )
+            elif op_name_0 == "multiply":
+                print(
+                    f"  {initial_values[op1_idx_0]:.3f} * {initial_values[op2_idx_0]:.3f}"
+                )
+            else:  # divide
+                print(
+                    f"  {initial_values[op1_idx_0]:.3f} / {initial_values[op2_idx_0]:.3f}"
+                )
+        else:
+            # For non-identity operations, show the full computation
+            if op1_idx_1 == 0:  # First operand is v0
+                print(
+                    f"  {initial_values[0]:.3f} * ({initial_values[op1_idx_0]:.3f} - {initial_values[op2_idx_0]:.3f})"
+                )
+            else:  # First operand is result of previous operation
+                print(
+                    f"  ({initial_values[op1_idx_0]:.3f} - {initial_values[op2_idx_0]:.3f}) * {initial_values[op2_idx_1]:.3f}"
+                )
+    else:
+        print("  Simple computation with < 2 operations")
 
 
-def example_benchmarking():
-    """Example 4: Benchmarking generation speed."""
-    print("\n=== Example 4: Benchmarking ===")
+def main():
+    # Create dataset with fixed seed for reproducibility
+    dataset = DAGStructureDataset(max_depth=2, seed=42)
 
-    dataset = StreamingDAGDataset(max_depth=6, seed=42)
-
-    # Test different batch sizes
-    batch_sizes = [10, 100, 1000]
-    for batch_size in batch_sizes:
-        print(f"\nTesting batch size {batch_size}...")
-
-        start_time = time.time()
-        tokens, _ = dataset.generate_batch(batch_size)
-        duration = time.time() - start_time
-
-        print(f"  Generated {len(tokens)} tokens in {duration:.3f}s")
-        print(f"  Rate: {len(tokens)/duration:.0f} tokens/sec")
-        print(f"  Rate: {batch_size/duration:.0f} examples/sec")
+    # Generate a few examples
+    print("Generating DAG examples with depth=2...")
+    for i in range(3):
+        print(f"\n=== Example {i+1} ===")
+        text, structure = dataset.generate_structure_example(depth=2)
+        print_example(text, structure)
 
 
 if __name__ == "__main__":
-    print("🚀 DAG Dataset Streaming Examples")
-    print("=" * 50)
-
-    # Run all examples
-    example_simple_streaming()
-    example_dataloader_usage()
-    example_training_loop()
-    example_benchmarking()
-
-    print(f"\n✅ All examples completed successfully!")
-    print("\nKey benefits of streaming DAG dataset:")
-    print("  • Zero disk storage required")
-    print("  • Infinite variety with different seeds")
-    print("  • Fast generation (~5000 examples/sec)")
-    print("  • Perfect reproducibility")
-    print("  • Memory efficient")
-    print("  • Drop-in replacement for file-based datasets")
+    main()

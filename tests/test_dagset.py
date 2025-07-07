@@ -15,11 +15,11 @@ import torch
 sys.path.append(str(Path(__file__).parent.parent / "data" / "dagset"))
 
 from streaming import (DAGDataLoader, DAGExample, DAGStructureDataset,
-                       StreamingDAGDataset, create_dag_dataloaders,
+                       StreamingDAGDataset, convert_dag_to_expression_string,
+                       create_dag_dataloaders,
                        create_dag_structure_dataloaders,
-                       execute_dag_computation, format_dag_as_text,
-                       generate_dag_dataset, generate_random_dag_plan,
-                       generate_random_initial_value,
+                       execute_dag_computation, generate_dag_dataset,
+                       generate_random_dag_plan, generate_random_initial_value,
                        generate_single_dag_example)
 
 # Import DAG operations for direct testing
@@ -104,31 +104,39 @@ class TestStreamingDAGDataset(unittest.TestCase):
         self.assertAlmostEqual(log1, expected_log, places=3)
 
     def test_generate_single_dag_example(self):
-        """Test single DAG example generation (structure-only)."""
-        example = generate_single_dag_example(depth=2, num_initial_values=1)
+        """Test single DAG example generation (simple expression format)."""
+        example = generate_single_dag_example(
+            depth=2, num_initial_values=3
+        )  # depth+1 initial values
 
         self.assertIsInstance(example, DAGExample)
         self.assertEqual(example.depth, 2)
-        self.assertEqual(len(example.initial_values), 1)
+        self.assertEqual(len(example.initial_values), 3)  # depth + 1
         self.assertEqual(len(example.operations), 2)
         self.assertIsInstance(example.text, str)
         self.assertGreater(len(example.text), 0)
 
-        # Check that structure-only text contains expected elements
-        self.assertIn("DAG Computation", example.text)
-        self.assertIn("v0 =", example.text)
-        self.assertIn("Step 1:", example.text)
-        self.assertIn("Step 2:", example.text)
+        # Check that text is a simple mathematical expression
+        # Should contain numbers and operators, but not verbose DAG format
+        import re
 
-        # Structure-only mode doesn't include computation results
+        # Should contain numbers (with potential decimals)
+        self.assertTrue(re.search(r"\d+\.?\d*", example.text))
+        # Should contain operators
+        self.assertTrue(re.search(r"[\+\-\*/]", example.text))
+
+        # Should NOT contain verbose DAG format elements
+        self.assertNotIn("DAG Computation", example.text)
+        self.assertNotIn("v0 =", example.text)
+        self.assertNotIn("Step", example.text)
         self.assertNotIn("Final result:", example.text)
-        self.assertNotIn("Result:", example.text)
 
     def test_generate_dag_dataset(self):
         """Test dataset generation."""
         # Generate a small dataset
         examples = generate_dag_dataset(
-            num_examples=10, max_depth=3, num_initial_values=1
+            num_examples=10,
+            max_depth=3,  # num_initial_values will default to max_depth+1
         )
 
         self.assertEqual(len(examples), 10)
@@ -138,7 +146,7 @@ class TestStreamingDAGDataset(unittest.TestCase):
             self.assertIsInstance(example, DAGExample)
             self.assertGreaterEqual(example.depth, 1)
             self.assertLessEqual(example.depth, 3)
-            self.assertEqual(len(example.initial_values), 1)
+            self.assertEqual(len(example.initial_values), 3 + 1)  # max_depth + 1
             self.assertEqual(len(example.operations), example.depth)
             self.assertIsInstance(example.text, str)
             self.assertGreater(len(example.text), 0)
@@ -331,14 +339,24 @@ class TestDAGStructureDataset(unittest.TestCase):
         # Test single example generation
         text, structure = dataset.generate_structure_example(depth=2)
 
-        # Verify text is a string
+        # Verify text is a string (simple mathematical expression)
         self.assertIsInstance(text, str)
         self.assertGreater(len(text), 0)
-        self.assertIn("DAG Computation", text)
+        # Should be a simple math expression, not verbose DAG format
+        import re
+
+        self.assertTrue(re.search(r"\d+\.?\d*", text))  # Contains numbers
+        self.assertTrue(re.search(r"[\+\-\*/]", text))  # Contains operators
 
         # Verify structure is a dictionary with correct keys
         self.assertIsInstance(structure, dict)
-        expected_keys = {"initial_sgn", "initial_log", "operation_probs", "depth"}
+        expected_keys = {
+            "initial_sgn",
+            "initial_log",
+            "operation_probs",
+            "depth",
+            "operations",
+        }
         self.assertEqual(set(structure.keys()), expected_keys)
 
         # Verify tensor shapes
@@ -365,14 +383,10 @@ class TestDAGStructureDataset(unittest.TestCase):
             sgn = structure["initial_sgn"]
             log_mag = structure["initial_log"]
 
-            # Only first value should be non-zero (single initial value)
-            self.assertNotEqual(sgn[0].item(), 0.0)
-            self.assertNotEqual(log_mag[0].item(), 0.0)
-
-            # Remaining values should be zero (padding)
-            for i in range(1, num_nodes):
-                self.assertEqual(sgn[i].item(), 0.0)
-                self.assertEqual(log_mag[i].item(), 0.0)
+            # All initial values should be non-zero (we now use depth+1 initial values)
+            for i in range(num_nodes):
+                self.assertNotEqual(sgn[i].item(), 0.0)
+                self.assertNotEqual(log_mag[i].item(), 0.0)
 
             # Verify operation probabilities are one-hot
             op_probs = structure["operation_probs"]
@@ -403,9 +417,18 @@ class TestDAGStructureDataset(unittest.TestCase):
             op_idx = torch.argmax(op_probs[step]).item()
             operation_names.append(dataset.op_idx_to_name[op_idx])
 
-        # The structure should encode the same operations mentioned in the text
+        # Verify structure has valid operations
+        # Simple expressions don't contain operation names, but we can check symbols
+        # Just verify that we have valid operations and text is a mathematical expression
+        import re
+
+        self.assertTrue(re.search(r"\d+\.?\d*", text))  # Contains numbers
+        self.assertTrue(re.search(r"[\+\-\*/]", text))  # Contains operators
+
+        # Verify all operations are valid
+        valid_ops = {"add", "subtract", "multiply", "divide", "identity"}
         for op_name in operation_names:
-            self.assertIn(op_name, text)
+            self.assertIn(op_name, valid_ops)
 
     def test_batch_generation_and_padding(self):
         """Test batch generation with proper padding."""
@@ -701,6 +724,293 @@ class TestDAGStructureDataset(unittest.TestCase):
 
         except Exception as e:
             self.fail(f"Loss computation failed: {e}")
+
+    def test_structure_label_correctness(self):
+        """Test that structure labels exactly match the ground truth computation."""
+        # Create a dataset with fixed seed for reproducibility
+        dataset = DAGStructureDataset(max_depth=2, seed=42)
+
+        # Generate a simple example with depth 2
+        text, structure = dataset.generate_structure_example(depth=2)
+        print("\nDebug information:")
+        print(f"Text expression: {text}")
+
+        # Extract the operations from the one-hot vectors
+        op_probs = structure["operation_probs"]
+        operations = []
+        for step in range(2):  # depth = 2
+            op_idx = torch.argmax(op_probs[step]).item()
+            operations.append(dataset.op_idx_to_name[op_idx])
+        print(f"Operations: {operations}")
+
+        # Get initial values
+        initial_values = []
+        for i in range(3):  # depth + 1 = 3 initial values
+            sign = structure["initial_sgn"][i].item()
+            log_mag = structure["initial_log"][i].item()
+            initial_values.append((sign, log_mag))
+        print(f"Initial values (sign, log_mag): {initial_values}")
+
+        # Convert initial values to actual numbers for stack-based execution
+        stack = []
+        for sign, log_mag in initial_values:
+            if log_mag == 0.0:
+                number = 0.0 if sign == 0.0 else sign * 1.0
+            else:
+                number = sign * np.exp(log_mag)
+            stack.append(number)
+        print(f"Initial stack: {stack}")
+
+        # Execute operations in stack-based order to match text generation
+        results = stack.copy()  # Keep original values for verification
+        for op_name in operations:
+            if len(stack) >= 2:
+                b = stack.pop()  # Second operand
+                a = stack.pop()  # First operand
+
+                if op_name == "add":
+                    result = a + b
+                elif op_name == "subtract":
+                    result = a - b
+                elif op_name == "multiply":
+                    result = a * b
+                elif op_name == "divide":
+                    result = a / b
+                elif op_name == "identity":
+                    result = a  # Discard b
+
+                stack.append(result)
+                results.append(result)
+
+        print(f"Stack-based execution results: {results}")
+
+        # Extract all numbers from the text
+        import re
+
+        text_numbers = [float(x) for x in re.findall(r"-?\d+\.?\d*", text)]
+        print(f"Numbers found in text: {text_numbers}")
+
+        # Verify operation probabilities match the actual operations
+        for step, op_name in enumerate(operations):
+            op_idx = dataset.op_name_to_idx[op_name]
+            step_probs = structure["operation_probs"][step]
+
+            # Should be one-hot with 1.0 at the correct operation index
+            for i in range(len(step_probs)):
+                expected = 1.0 if i == op_idx else 0.0
+                self.assertEqual(step_probs[i].item(), expected)
+
+        # Verify each number in the text matches a computed value (allowing for small rounding differences)
+        for text_num in text_numbers:
+            # Look for a matching computed value
+            found_match = False
+            for computed_num in results:
+                # Use relative tolerance for larger numbers, absolute for smaller ones
+                if abs(computed_num) > 1.0:
+                    if (
+                        abs((computed_num - text_num) / computed_num) < 0.01
+                    ):  # 1% relative tolerance
+                        found_match = True
+                        break
+                else:
+                    if (
+                        abs(computed_num - text_num) < 0.01
+                    ):  # 0.01 absolute tolerance for small numbers
+                        found_match = True
+                        break
+            self.assertTrue(
+                found_match,
+                f"No match found for text number {text_num} in computed values {results}",
+            )
+
+
+class TestExpressionMatching(unittest.TestCase):
+    """Test that generated expressions match actual DAG computations."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        np.random.seed(42)
+        torch.manual_seed(42)
+
+    def test_expression_matches_computation_single_example(self):
+        """Test that a single example's expression matches its computation."""
+        from dag_model import op_names
+
+        # Generate a single example
+        example = generate_single_dag_example(depth=2, num_initial_values=3)
+
+        # Get initial values and operations
+        initial_values = []
+        for j in range(len(example.initial_values)):
+            sign, log_mag = example.initial_values[j]
+            val = sign * np.exp(log_mag)
+            initial_values.append(val)
+
+        # Execute operations and track intermediate results
+        values = initial_values.copy()
+        operations = []
+
+        # Get operations from the raw operations list
+        raw_operations = example.operations
+        for step, (op1_idx, op2_idx, op_name) in enumerate(raw_operations):
+            val1, val2 = values[op1_idx], values[op2_idx]
+
+            # Compute result
+            if op_name == "add":
+                result = val1 + val2
+            elif op_name == "subtract":
+                result = val1 - val2
+            elif op_name == "multiply":
+                result = val1 * val2
+            elif op_name == "divide":
+                result = val1 / val2
+            else:  # identity
+                result = val1
+
+            values.append(result)
+            operations.append((op1_idx, op2_idx, op_name))
+
+        # Generate the expected expression
+        expected_expr = convert_dag_to_expression_string(
+            initial_values=[
+                (1.0 if v >= 0 else -1.0, float(np.log(abs(v))))
+                for v in initial_values[: example.depth + 1]
+            ],
+            operations=operations,
+            use_parentheses=True,
+            rng=np.random.RandomState(42),
+        )
+
+        # Verify expressions match (ignoring whitespace and small decimal differences)
+        def normalize_expr(expr):
+            import re
+
+            # Remove all whitespace and convert to lowercase
+            expr = "".join(expr.split())
+            # Replace decimal numbers with rounded versions (2 decimal places)
+            numbers = re.findall(r"-?\d+\.\d+", expr)
+            for num in numbers:
+                rounded = f"{float(num):.2f}"
+                expr = expr.replace(num, rounded)
+            return expr
+
+        generated = normalize_expr(example.text)
+        expected = normalize_expr(expected_expr)
+
+        self.assertEqual(
+            generated,
+            expected,
+            f"Generated expression '{example.text}' does not match expected '{expected_expr}'",
+        )
+
+    def test_expression_matches_computation_multiple_seeds(self):
+        """Test multiple examples with different seeds to verify various operation combinations."""
+        test_seeds = [42, 43, 44, 45]
+
+        for seed in test_seeds:
+            with self.subTest(seed=seed):
+                # Set random state
+                np.random.seed(seed)
+                torch.manual_seed(seed)
+
+                # Generate example
+                example = generate_single_dag_example(depth=2, num_initial_values=3)
+
+                # Get initial values and operations
+                initial_values = []
+                for j in range(len(example.initial_values)):
+                    sign, log_mag = example.initial_values[j]
+                    val = sign * np.exp(log_mag)
+                    initial_values.append(val)
+
+                # Execute operations and track intermediate results
+                values = initial_values.copy()
+                operations = []
+
+                # Get operations from the raw operations list
+                raw_operations = example.operations
+                for step, (op1_idx, op2_idx, op_name) in enumerate(raw_operations):
+                    val1, val2 = values[op1_idx], values[op2_idx]
+
+                    # Compute result
+                    if op_name == "add":
+                        result = val1 + val2
+                    elif op_name == "subtract":
+                        result = val1 - val2
+                    elif op_name == "multiply":
+                        result = val1 * val2
+                    elif op_name == "divide":
+                        result = val1 / val2
+                    else:  # identity
+                        result = val1
+
+                    values.append(result)
+                    operations.append((op1_idx, op2_idx, op_name))
+
+                # Generate the expected expression
+                expected_expr = convert_dag_to_expression_string(
+                    initial_values=[
+                        (1.0 if v >= 0 else -1.0, float(np.log(abs(v))))
+                        for v in initial_values[: example.depth + 1]
+                    ],
+                    operations=operations,
+                    use_parentheses=True,
+                    rng=np.random.RandomState(42),  # Use fixed seed for reproducibility
+                )
+
+                # Verify expressions match (ignoring whitespace and small decimal differences)
+                def normalize_expr(expr):
+                    import re
+
+                    # Remove all whitespace and convert to lowercase
+                    expr = "".join(expr.split())
+                    # Replace decimal numbers with rounded versions (2 decimal places)
+                    numbers = re.findall(r"-?\d+\.\d+", expr)
+                    for num in numbers:
+                        rounded = f"{float(num):.2f}"
+                        expr = expr.replace(num, rounded)
+                    return expr
+
+                generated = normalize_expr(example.text)
+                expected = normalize_expr(expected_expr)
+
+                self.assertEqual(
+                    generated,
+                    expected,
+                    f"Seed {seed}: Generated expression '{example.text}' does not match expected '{expected_expr}'",
+                )
+
+    def test_english_conversion_integration(self):
+        """Test that English conversion works correctly with the integrated approach."""
+        # Test with English conversion enabled
+        example = generate_single_dag_example(
+            depth=2,
+            num_initial_values=3,
+            convert_to_english=True,
+            conversion_probability=1.0,
+        )
+
+        # Verify the text contains English words
+        self.assertIsInstance(example.text, str)
+        self.assertGreater(len(example.text), 0)
+
+        # Should contain English words (not just numbers and symbols)
+        import re
+
+        english_words = re.findall(r"[a-zA-Z]+", example.text)
+        self.assertGreater(
+            len(english_words),
+            0,
+            f"Expected English words in '{example.text}', but found none",
+        )
+
+        # Should contain mathematical operators (either as symbols or words)
+        operators = re.findall(
+            r"[\+\-\*/]|plus|minus|times|divided|multiplied", example.text.lower()
+        )
+        self.assertGreater(
+            len(operators), 0, f"Expected operators in '{example.text}', but found none"
+        )
 
 
 if __name__ == "__main__":

@@ -8,12 +8,14 @@ NOTE: Currently this is incomplete and not used until we have the DAG structure 
 
 import math
 import random
+import re
 import sys
 from pathlib import Path
 from typing import Dict, Iterator, List, Tuple
 
 import numpy as np
 import torch
+from num2words import num2words
 from tiktoken import get_encoding
 
 # Add parent directories to path for imports
@@ -23,6 +25,172 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from dag_model import (LOG_LIM, add_log_space, divide_log_space,
                        identity_log_space, multiply_log_space, op_names,
                        subtract_log_space)
+
+# Operator name mappings to English equivalents
+OPERATOR_TO_ENGLISH = {
+    "add": ["plus", "added to", "combined with"],
+    "subtract": ["minus", "subtracted from", "less"],
+    "multiply": ["times", "multiplied by", "scaled by"],
+    "divide": ["divided by", "over", "split by"],
+    "identity": ["copied as", "set to", "same as"],
+}
+
+# Sign mappings
+SIGN_TO_ENGLISH = {"+1.0": ["positive", "plus"], "-1.0": ["negative", "minus"]}
+
+
+def convert_number_to_words(number: float, use_words: bool = True) -> str:
+    """Convert a number to its English word equivalent.
+
+    Args:
+        number: The number to convert
+        use_words: Whether to convert to words or keep as digits
+
+    Returns:
+        String representation (either words or original format)
+    """
+    if not use_words:
+        return str(number)
+
+    # Handle special cases for common decimal values
+    if abs(number) < 0.001:
+        return "zero"
+
+    # For integers, use num2words directly
+    if number == int(number):
+        return num2words(int(number))
+
+    # For decimals, convert the parts separately
+    if "." in str(number):
+        parts = str(number).split(".")
+        integer_part = int(parts[0]) if parts[0] else 0
+        decimal_part = parts[1]
+
+        result = num2words(integer_part) if integer_part != 0 else "zero"
+        result += " point"
+
+        # Convert each decimal digit to words
+        for digit in decimal_part[:6]:  # Limit to 6 decimal places
+            result += " " + num2words(int(digit))
+
+        return result
+
+    return str(number)
+
+
+def convert_operator_to_english(operator: str, rng: random.Random = None) -> str:
+    """Convert an operator to its English equivalent.
+
+    Args:
+        operator: The operator name
+        rng: Random number generator
+
+    Returns:
+        English equivalent of the operator
+    """
+    if rng is None:
+        rng = random
+
+    if operator in OPERATOR_TO_ENGLISH:
+        return rng.choice(OPERATOR_TO_ENGLISH[operator])
+    return operator
+
+
+def convert_sign_to_english(sign_str: str, rng: random.Random = None) -> str:
+    """Convert a sign to its English equivalent.
+
+    Args:
+        sign_str: The sign string (e.g., "+1.0", "-1.0")
+        rng: Random number generator
+
+    Returns:
+        English equivalent of the sign
+    """
+    if rng is None:
+        rng = random
+
+    if sign_str in SIGN_TO_ENGLISH:
+        return rng.choice(SIGN_TO_ENGLISH[sign_str])
+    return sign_str
+
+
+def convert_math_expression_to_english(
+    expression: str, conversion_probability: float = 0.3, rng: random.Random = None
+) -> str:
+    """Convert a mathematical expression to English words with per-token probability.
+
+    Args:
+        expression: Mathematical expression like "5.22 - 3.213 / 2.32"
+        conversion_probability: Probability of converting each individual token
+        rng: Random number generator
+
+    Returns:
+        Mixed English/numeric like "five point two two - three point two one three divided by 2.32"
+    """
+    if rng is None:
+        rng = random
+
+    # Symbol to English word mappings
+    symbol_to_english = {
+        "+": ["plus", "added to"],
+        "-": ["minus", "subtract", "less"],
+        "*": ["times", "multiplied by", "times"],
+        "/": ["divided by", "over", "divide by"],
+    }
+
+    # Split the expression into tokens (numbers, operators, parentheses)
+    tokens = re.findall(r"\d+\.?\d*|\+|\-|\*|/|\(|\)", expression)
+
+    converted_tokens = []
+    for token in tokens:
+        if token in symbol_to_english:
+            # Randomly convert operator to English based on probability
+            if rng.random() < conversion_probability:
+                converted_tokens.append(rng.choice(symbol_to_english[token]))
+            else:
+                converted_tokens.append(token)
+        elif token in ["(", ")"]:
+            # Randomly convert parentheses to words
+            if (
+                token == "(" and rng.random() < conversion_probability * 0.5
+            ):  # Lower probability for parentheses
+                converted_tokens.append("open parenthesis")
+            elif token == ")" and rng.random() < conversion_probability * 0.5:
+                converted_tokens.append("close parenthesis")
+            else:
+                converted_tokens.append(token)
+        elif re.match(r"\d+\.?\d*", token):
+            # Randomly convert number to words based on probability
+            number = float(token)
+            if rng.random() < conversion_probability:
+                converted_tokens.append(convert_number_to_words(number, True))
+            else:
+                converted_tokens.append(token)
+        else:
+            # Keep token as is
+            converted_tokens.append(token)
+
+    return " ".join(converted_tokens)
+
+
+def convert_dag_text_to_english(
+    text: str, conversion_probability: float = 0.3, rng: random.Random = None
+) -> str:
+    """Convert numbers and operators in DAG text to English words per-token.
+
+    Args:
+        text: Original text (now simple math expressions)
+        conversion_probability: Probability of converting each individual token (0.0 to 1.0)
+        rng: Random number generator
+
+    Returns:
+        Text with mixed English/numeric tokens
+    """
+    if rng is None:
+        rng = random
+
+    # For simple mathematical expressions, apply per-token conversion
+    return convert_math_expression_to_english(text, conversion_probability, rng)
 
 
 class DAGExample:
@@ -83,12 +251,17 @@ def generate_random_dag_plan(
     num_available_values = num_initial_values
 
     for step in range(depth):
-        # Randomly select two operands from available values
-        operand1_idx = rng.randint(0, num_available_values - 1)
-        operand2_idx = rng.randint(0, num_available_values - 1)
-
-        # Randomly select an operation
+        # Randomly select an operation first
         operation_name = rng.choice(op_names)
+
+        if operation_name == "identity" or num_available_values == 1:
+            # For identity operations or when only one value is available,
+            # use the same operand twice
+            operand1_idx = rng.randint(0, num_available_values - 1)
+            operand2_idx = operand1_idx
+        else:
+            # Select two different operands using random.sample
+            operand1_idx, operand2_idx = rng.sample(range(num_available_values), 2)
 
         operations.append((operand1_idx, operand2_idx, operation_name))
 
@@ -145,68 +318,189 @@ def execute_dag_computation(
     return result_values
 
 
-def generate_single_dag_example(
-    depth: int,
-    num_initial_values: int = 1,
-    value_range: tuple[float, float] = (-10.0, 10.0),
+def convert_dag_to_expression_string(
+    initial_values: list[tuple[float, float]],
+    operations: list[tuple[int, int, str]],
+    use_parentheses: bool = True,
     rng: random.Random = None,
-) -> DAGExample:
-    """Generate a single DAG computation example (structure-only).
+    convert_to_english: bool = False,
+    conversion_probability: float = 0.3,
+) -> str:
+    """Convert DAG structure to a simple mathematical expression string following stack-based execution.
+
+    The DAG executes as follows:
+    1. Start with initial values on a stack
+    2. For each operation, use the specified operand indices
+    3. Apply operation with operand1 as first operand, operand2 as second operand
+    4. Push result back onto stack
+    5. For identity operations, keep first operand and discard second operand
 
     Args:
-        depth: Depth of the DAG computation
-        num_initial_values: Number of initial values
-        value_range: Range for initial values
-        rng: Random number generator to use
+        initial_values: List of (sign, log_magnitude) initial values
+        operations: List of (operand1_idx, operand2_idx, operation_name) operations
+        use_parentheses: Whether to add parentheses for clarity
+        rng: Random number generator
+        convert_to_english: Whether to potentially convert numbers/operators to English
+        conversion_probability: Probability of converting to English (0.0 to 1.0)
 
     Returns:
-        DAG computation example with structure only (no computed results)
+        Simple mathematical expression string like "1 * (2 - 3/4)"
     """
     if rng is None:
         rng = random
 
-    # Generate initial values
+    # Convert initial values back to regular numbers and round for display
+    values = []  # List of (value, expression) tuples
+    for sign, log_mag in initial_values:
+        if log_mag == 0.0:
+            number = 0.0 if sign == 0.0 else sign * 1.0
+        else:
+            number = sign * np.exp(log_mag)
+        # Round to 3 decimal places for consistent display
+        number = round(number, 3)
+        values.append((number, f"{number:.3f}"))
+
+    if len(operations) == 0:
+        # Just a single number
+        result = values[0][1] if values else "1.0"
+    else:
+        # Operation symbols for display
+        op_symbols = {
+            "add": "+",
+            "subtract": "-",
+            "multiply": "*",
+            "divide": "/",
+            "identity": None,  # Special case - no operator needed
+        }
+
+        # Process each operation in sequence
+        for op_idx, (operand1_idx, operand2_idx, operation_name) in enumerate(
+            operations
+        ):
+            # Get the operands - note that operand indices refer to positions in the values list
+            val1, expr1 = values[operand1_idx]
+            val2, expr2 = values[operand2_idx]
+
+            if operation_name == "identity":
+                # For identity, just keep the first operand
+                result_val = val1
+                result_expr = expr1
+            else:
+                symbol = op_symbols[operation_name]
+
+                # Compute the actual result
+                if operation_name == "add":
+                    result_val = val1 + val2
+                elif operation_name == "subtract":
+                    result_val = val1 - val2
+                elif operation_name == "multiply":
+                    result_val = val1 * val2
+                else:  # divide
+                    result_val = val1 / val2
+
+                # Round the result consistently
+                result_val = round(result_val, 3)
+
+                # Add parentheses based on operation precedence
+                if operation_name in ["multiply", "divide"]:
+                    # Higher precedence operations - check if operands need parentheses
+                    if "+" in expr1 or "-" in expr1:
+                        expr1 = f"({expr1})"
+                    if "+" in expr2 or "-" in expr2:
+                        expr2 = f"({expr2})"
+                elif operation_name in ["subtract", "divide"]:
+                    # Non-associative operations - always parenthesize second operand if it has operators
+                    if any(op in expr2 for op in ["+", "-", "*", "/"]):
+                        expr2 = f"({expr2})"
+
+                # Combine operands with operator
+                result_expr = f"{expr1} {symbol} {expr2}"
+
+                # Add parentheses around the entire expression if needed
+                if op_idx < len(operations) - 1:
+                    next_op = operations[op_idx + 1][2]
+                    if next_op in ["multiply", "divide"] and operation_name in [
+                        "add",
+                        "subtract",
+                    ]:
+                        result_expr = f"({result_expr})"
+
+            # Add result to values list - this becomes available for next operation
+            values.append((result_val, result_expr))
+
+        # Return the final expression
+        result = values[-1][1]
+
+    # Apply English conversion if requested
+    if convert_to_english:
+        result = convert_dag_text_to_english(result, conversion_probability, rng)
+
+    return result
+
+
+def generate_single_dag_example(
+    depth: int,
+    num_initial_values: int = None,
+    value_range: tuple[float, float] = (0.1, 100.0),
+    rng: random.Random = None,
+    convert_to_english: bool = False,
+    conversion_probability: float = 0.3,
+) -> DAGExample:
+    """Generate a single DAG computation example as a simple math expression.
+
+    Args:
+        depth: Depth of the DAG computation
+        num_initial_values: Number of initial values
+        value_range: Range for values in the expression
+        rng: Random number generator to use
+
+    Returns:
+        DAG computation example with simple expression format
+    """
+    if rng is None:
+        rng = random
+
+    # Determine number of initial values to match DAG predictor expectations
+    if num_initial_values is None:
+        # For DAG with depth n, we need n+1 initial values
+        num_initial_values = depth + 1
+
+    # Step 1: Generate initial values using existing logic
     initial_values = []
     for _ in range(num_initial_values):
         initial_values.append(
             generate_random_initial_value(value_range=value_range, rng=rng)
         )
 
-    # Generate DAG plan
+    # Step 2: Generate DAG operations using existing logic
     operations = generate_random_dag_plan(depth, num_initial_values, rng)
 
-    # Format as text (structure-only)
-    text_lines = []
-    text_lines.append(f"DAG Computation (depth={depth}):")
-    text_lines.append("")
-
-    # Show initial values
-    for i, (sign, log_mag) in enumerate(initial_values):
-        text_lines.append(f"v{i} = (sign={sign:+.1f}, log_mag={log_mag:.6f})")
-
-    text_lines.append("")
-
-    # Show computation steps (structure only)
-    for step, (operand1_idx, operand2_idx, operation_name) in enumerate(operations):
-        result_idx = num_initial_values + step
-        text_lines.append(
-            f"Step {step + 1}: v{result_idx} = v{operand1_idx} {operation_name} v{operand2_idx}"
-        )
-
-    text_lines.append("")
-    text = "\n".join(text_lines)
+    # Step 3: Convert DAG structure to simple expression string
+    expression = convert_dag_to_expression_string(
+        initial_values=initial_values,
+        operations=operations,
+        use_parentheses=True,
+        rng=rng,
+        convert_to_english=convert_to_english,
+        conversion_probability=conversion_probability,
+    )
 
     return DAGExample(
-        text=text, depth=depth, initial_values=initial_values, operations=operations
+        text=expression,
+        depth=depth,
+        initial_values=initial_values,
+        operations=operations,
     )
 
 
 def generate_dag_dataset(
     num_examples: int = 10000,
     max_depth: int = 8,
-    num_initial_values: int = 1,
-    value_range: tuple[float, float] = (-10.0, 10.0),
+    num_initial_values: int = None,
+    value_range: tuple[float, float] = (0.1, 100.0),
     rng: random.Random = None,
+    convert_to_english: bool = False,
+    conversion_probability: float = 0.3,
 ) -> list[DAGExample]:
     """Generate a dataset of DAG computation examples (structure-only).
 
@@ -232,23 +526,16 @@ def generate_dag_dataset(
 
         # Generate example (structure-only for training efficiency)
         example = generate_single_dag_example(
-            depth, num_initial_values, value_range, rng
+            depth,
+            num_initial_values,
+            value_range,
+            rng,
+            convert_to_english,
+            conversion_probability,
         )
         examples.append(example)
 
     return examples
-
-
-def format_dag_as_text(example: DAGExample) -> str:
-    """Format a DAG computation as text for language modeling.
-
-    Args:
-        example: DAG computation example
-
-    Returns:
-        Formatted text representation
-    """
-    return example.text
 
 
 class StreamingDAGDataset:
@@ -257,10 +544,12 @@ class StreamingDAGDataset:
     def __init__(
         self,
         max_depth: int = 8,
-        num_initial_values: int = 1,
-        value_range: tuple[float, float] = (-10.0, 10.0),
+        num_initial_values: int = None,
+        value_range: tuple[float, float] = (0.1, 100.0),
         seed: int = 42,
         tokenizer: str = "gpt2",
+        convert_to_english: bool = False,
+        english_conversion_probability: float = 0.3,
     ):
         """Initialize the streaming DAG dataset.
 
@@ -270,12 +559,19 @@ class StreamingDAGDataset:
             value_range: Range for initial values
             seed: Random seed for reproducibility
             tokenizer: Tokenizer to use (default: gpt2)
+            convert_to_english: Whether to potentially convert numbers/operators to English
+            english_conversion_probability: Probability of converting to English (0.0 to 1.0)
         """
         self.max_depth = max_depth
-        self.num_initial_values = num_initial_values
+        # Set num_initial_values to match DAG predictor expectations
+        self.num_initial_values = (
+            num_initial_values if num_initial_values is not None else max_depth + 1
+        )
         self.value_range = value_range
         self.seed = seed
         self.tokenizer = tokenizer
+        self.convert_to_english = convert_to_english
+        self.english_conversion_probability = english_conversion_probability
 
         # Initialize tokenizer
         self.enc = get_encoding(tokenizer)
@@ -300,12 +596,14 @@ class StreamingDAGDataset:
             num_initial_values=self.num_initial_values,
             value_range=self.value_range,
             rng=self.random_state,
+            convert_to_english=self.convert_to_english,
+            conversion_probability=self.english_conversion_probability,
         )
 
         # Convert to text
         all_text = []
         for example in examples:
-            all_text.append(format_dag_as_text(example))
+            all_text.append(example.text)
 
         # Join with separators
         full_text = "\n---\n".join(all_text)
@@ -462,6 +760,8 @@ def create_dag_dataloaders(
     max_depth: int = 8,
     train_seed: int = 42,
     val_seed: int = 43,
+    convert_to_english: bool = False,
+    english_conversion_probability: float = 0.3,
 ) -> tuple[DAGDataLoader, DAGDataLoader]:
     """Create train and validation data loaders.
 
@@ -473,6 +773,8 @@ def create_dag_dataloaders(
         max_depth: DAG depth (all examples will have this depth)
         train_seed: Seed for training data
         val_seed: Seed for validation data
+        convert_to_english: Whether to potentially convert numbers/operators to English
+        english_conversion_probability: Probability of converting to English (0.0 to 1.0)
 
     Returns:
         Tuple of (train_loader, val_loader)
@@ -481,11 +783,15 @@ def create_dag_dataloaders(
     train_dataset = StreamingDAGDataset(
         max_depth=max_depth,
         seed=train_seed,
+        convert_to_english=convert_to_english,
+        english_conversion_probability=english_conversion_probability,
     )
 
     val_dataset = StreamingDAGDataset(
         max_depth=max_depth,
         seed=val_seed,
+        convert_to_english=convert_to_english,
+        english_conversion_probability=english_conversion_probability,
     )
 
     # Create data loaders
@@ -515,11 +821,13 @@ class DAGStructureDataset:
     def __init__(
         self,
         max_depth: int = 8,
-        num_initial_values: int = 1,
-        value_range: tuple[float, float] = (-10.0, 10.0),
+        num_initial_values: int = None,
+        value_range: tuple[float, float] = (0.1, 100.0),
         seed: int = 42,
         tokenizer: str = "gpt2",
         max_seq_length: int = 512,
+        convert_to_english: bool = False,
+        english_conversion_probability: float = 0.3,
     ):
         """Initialize the DAG structure dataset.
 
@@ -530,12 +838,19 @@ class DAGStructureDataset:
             seed: Random seed
             tokenizer: Tokenizer to use
             max_seq_length: Maximum sequence length for text inputs
+            convert_to_english: Whether to potentially convert numbers/operators to English
+            english_conversion_probability: Probability of converting to English (0.0 to 1.0)
         """
         self.max_depth = max_depth
-        self.num_initial_values = num_initial_values
+        # Set num_initial_values to match DAG predictor expectations
+        self.num_initial_values = (
+            num_initial_values if num_initial_values is not None else max_depth + 1
+        )
         self.value_range = value_range
         self.seed = seed
         self.max_seq_length = max_seq_length
+        self.convert_to_english = convert_to_english
+        self.english_conversion_probability = english_conversion_probability
 
         # Initialize tokenizer
         self.enc = get_encoding(tokenizer)
@@ -564,6 +879,8 @@ class DAGStructureDataset:
             num_initial_values=self.num_initial_values,
             value_range=self.value_range,
             rng=self.random_state,
+            convert_to_english=self.convert_to_english,
+            conversion_probability=self.english_conversion_probability,
         )
 
         # Extract text
@@ -611,6 +928,7 @@ class DAGStructureDataset:
             "initial_log": initial_log,
             "operation_probs": operation_probs,
             "depth": torch.tensor(depth, dtype=torch.long),
+            "operations": example.operations,  # Include the raw operations list
         }
 
     def generate_batch(
@@ -707,6 +1025,8 @@ def create_dag_structure_dataloaders(
     max_depth: int = 8,
     train_seed: int = 42,
     val_seed: int = 43,
+    convert_to_english: bool = False,
+    english_conversion_probability: float = 0.3,
 ) -> Tuple[Iterator, Iterator]:
     """Create train and validation structure dataloaders.
 
@@ -716,6 +1036,8 @@ def create_dag_structure_dataloaders(
         max_depth: DAG depth (all examples will have this exact depth)
         train_seed: Seed for training data
         val_seed: Seed for validation data
+        convert_to_english: Whether to potentially convert numbers/operators to English
+        english_conversion_probability: Probability of converting to English (0.0 to 1.0)
 
     Returns:
         Tuple of (train_loader, val_loader)
@@ -724,11 +1046,15 @@ def create_dag_structure_dataloaders(
     train_dataset = DAGStructureDataset(
         max_depth=max_depth,
         seed=train_seed,
+        convert_to_english=convert_to_english,
+        english_conversion_probability=english_conversion_probability,
     )
 
     val_dataset = DAGStructureDataset(
         max_depth=max_depth,
         seed=val_seed,
+        convert_to_english=convert_to_english,
+        english_conversion_probability=english_conversion_probability,
     )
 
     # Create dataloaders
@@ -739,59 +1065,20 @@ def create_dag_structure_dataloaders(
 
 
 if __name__ == "__main__":
-    # Quick test
-    print("Testing streaming DAG dataset...")
+    # Simple example usage
+    print("DAG Streaming Dataset Example")
+    print("=" * 40)
 
+    # Create a dataset
     dataset = StreamingDAGDataset(max_depth=3, seed=42)
 
     # Generate a small batch
-    tokens, text = dataset.generate_batch(5)
-    print(f"Generated {len(tokens)} tokens from 5 examples")
+    tokens, text = dataset.generate_batch(3)
+    print(f"Generated {len(tokens)} tokens from 3 examples")
 
-    # Show first example
-    lines = text.split("\n")[:10]
-    print("\nFirst few lines:")
-    for line in lines:
-        print(f"  {line}")
+    # Show examples
+    print("\nGenerated examples:")
+    for i, example in enumerate(text.split("\n---\n")):
+        print(f"Example {i+1}: {example}")
 
-    print("\n✅ Streaming dataset test passed!")
-
-    # Test new structure dataset
-    print("\nTesting DAG structure dataset...")
-
-    structure_dataset = DAGStructureDataset(max_depth=3, seed=42)
-
-    # Generate a small batch
-    texts, structures = structure_dataset.generate_batch(2)
-
-    print(f"Generated {len(texts)} text-structure pairs")
-    print(f"Structure tensor shapes:")
-    for key, tensor in structures.items():
-        print(f"  {key}: {tensor.shape}")
-
-    # Show first example
-    print(f"\nFirst example text (first 200 chars):")
-    print(f"  {texts[0][:200]}...")
-
-    print(f"\nFirst example structure:")
-    print(f"  initial_sgn: {structures['initial_sgn'][0]}")
-    print(f"  initial_log: {structures['initial_log'][0]}")
-    print(f"  operation_probs[0]: {structures['operation_probs'][0]}")
-    print(f"  depth: {structures['depths'][0]}")
-
-    print("\n✅ Structure dataset test passed!")
-
-    # Test dataloader
-    print("\nTesting structure dataloader...")
-    train_loader, val_loader = create_dag_structure_dataloaders(
-        train_batch_size=4, val_batch_size=2, max_depth=3
-    )
-
-    # Get one batch from train loader
-    texts, structures = next(train_loader)
-    print(f"Dataloader generated batch with {len(texts)} examples")
-    print(f"Batch structure shapes:")
-    for key, tensor in structures.items():
-        print(f"  {key}: {tensor.shape}")
-
-    print("\n✅ All tests passed!")
+    print("\n✅ Example completed successfully!")
