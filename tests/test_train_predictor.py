@@ -1199,11 +1199,18 @@ class TestDataLoaderIntegration(unittest.TestCase):
             for text in texts:
                 self.assertIsInstance(text, str)
                 self.assertGreater(len(text), 0)
-                # Should contain mathematical expressions
+                # Should contain mathematical expressions (numbers or English words)
                 import re
 
-                self.assertTrue(re.search(r"\d+\.?\d*", text))  # Contains numbers
-                # May or may not contain operators (single numbers are valid)
+                has_numbers = re.search(r"\d+\.?\d*", text)
+                has_english_words = re.search(r"[a-zA-Z]+", text)
+
+                # With 30% English conversion, expressions may be entirely in English
+                self.assertTrue(
+                    has_numbers or has_english_words,
+                    f"Text should contain numbers or English words: '{text}'",
+                )
+                # May or may not contain operators (single numbers/words are valid)
                 # self.assertTrue(re.search(r'[\+\-\*/]', text))  # Contains operators
 
             # Check structure tensors
