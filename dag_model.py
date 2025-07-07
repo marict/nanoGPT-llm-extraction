@@ -118,9 +118,7 @@ class Block(nn.Module):
         return x
 
 
-# ---------------------------------------------------------------------------
-# DAG Log-space arithmetic utilities
-# ---------------------------------------------------------------------------
+# Log-space arithmetic utilities
 LOG_LIM = 15.0  # Bound on log-magnitudes to avoid numerical instabilities
 SIGN_SCALE = 5.0  # Controls softness of sign prediction at intake
 GRAD_CAP = 1.0  # try 0.1–10.0 depending on bfloat16/float16 range
@@ -129,11 +127,6 @@ GRAD_CAP = 1.0  # try 0.1–10.0 depending on bfloat16/float16 range
 def _clip_log(log_t: torch.Tensor) -> torch.Tensor:
     """Symmetric tanh clipping for log magnitudes."""
     return torch.tanh(log_t / LOG_LIM) * LOG_LIM
-
-
-# ---------------------------------------------------------------------------
-# Smooth log rescaling (replaces hard _clip_log inside DAG loop)
-# ---------------------------------------------------------------------------
 
 
 def _rms_rescale(prev_logs: torch.Tensor, new_log: torch.Tensor) -> torch.Tensor:
@@ -154,31 +147,18 @@ def _rms_rescale(prev_logs: torch.Tensor, new_log: torch.Tensor) -> torch.Tensor
     return new_log * scale.squeeze(-1)
 
 
-# ---------------------------------------------------------------------------
 # Debug utility
-# ---------------------------------------------------------------------------
-
-
-# Enable expensive NaN/Inf debug checks when environment variable is set.
-# Usage: DAGGPT_DEBUG_NANS=1 python train.py ...
 ENABLE_DEBUG_NAN_CHECKS = os.getenv("DAGGPT_DEBUG_NANS", "0") == "1"
 if ENABLE_DEBUG_NAN_CHECKS:
     print("dag_model: DEBUG_NAN_CHECKS is enabled")
 
 
 def _debug_check(op_name: str, *tensors: torch.Tensor):
-    """Verbose debug checker.
-    Prints detailed information (shape, dtype, min/mean/max, and a handful of offending
-    indices/values) the moment a non-finite value is detected in *any* of the provided
-    tensors. This makes it easier to pinpoint the precise source of NaNs/Infs during
-    training without flooding the log with entire tensor dumps.
-    """
+    """Check tensors for NaN/Inf values and print detailed debug info when found."""
     for idx, t in enumerate(tensors):
-        # Skip None entries just in case
         if t is None:
             continue
 
-        # Fast path: only continue if something is non-finite
         if torch.isfinite(t).all():
             continue
 
@@ -187,13 +167,11 @@ def _debug_check(op_name: str, *tensors: torch.Tensor):
         nan_cnt = int(nan_mask.sum())
         inf_cnt = int(inf_mask.sum())
 
-        # Basic tensor meta
         print(
             f"[DEBUG] {op_name}: tensor#{idx} shape={tuple(t.shape)} dtype={t.dtype} "
             f"-> NaN: {nan_cnt}  Inf: {inf_cnt}"
         )
 
-        # Compute simple stats on finite values (cast to fp32 for safety)
         finite_vals = t[torch.isfinite(t)].float()
         if finite_vals.numel() > 0:
             stats = (
@@ -203,7 +181,7 @@ def _debug_check(op_name: str, *tensors: torch.Tensor):
             )
             print(f"           finite stats (min/mean/max): {stats}")
 
-        # Show up to first 5 bad indices & their values for pinpointing
+        # Show first 5 bad indices for debugging
         bad_idx = (~torch.isfinite(t)).nonzero(as_tuple=False)
         for j, coord in enumerate(bad_idx[:5]):
             coord_tuple = tuple(coord.tolist())
@@ -282,11 +260,11 @@ def add_log_space(
     zero_x = sx == 0
     zero_y = sy == 0
 
-    # Initialise outputs
+    # Initialize outputs
     s_out = torch.zeros_like(sx)
     l_out = torch.zeros_like(lx)
 
-    # Only-x / only-y shortcuts ------------------------------------------------
+    # Handle cases where only one operand is non-zero
     only_x = (~zero_x) & zero_y
     only_y = zero_x & (~zero_y)
     s_out = torch.where(only_x, sx, s_out)
@@ -294,19 +272,18 @@ def add_log_space(
     s_out = torch.where(only_y, sy, s_out)
     l_out = torch.where(only_y, ly, l_out)
 
-    # Both non-zero branch -----------------------------------------------------
+    # Both operands non-zero
     both_nz = (~zero_x) & (~zero_y)
     same_sign = (sx * sy) > 0
 
-    # --- Same-sign path (addition of magnitudes) -----------------------------
+    # Same sign: add magnitudes
     same_branch = both_nz & same_sign
-    # Use a common sign (either +1 or -1) – sx and sy have identical sign here
     common_sgn = torch.sign(sx)
     s_same, l_same = _add_logs_same_sign(common_sgn, lx, ly, ignore_clip)
     s_out = torch.where(same_branch, s_same, s_out)
     l_out = torch.where(same_branch, l_same, l_out)
 
-    # --- Opposite-sign path (subtraction of magnitudes) ----------------------
+    # Opposite sign: subtract magnitudes
     opp_branch = both_nz & (~same_sign)
     bigger_is_x = lx >= ly
     big_log = torch.where(bigger_is_x, lx, ly)
@@ -326,7 +303,7 @@ def add_log_space(
     s_out = torch.where(opp_branch, new_sgn, s_out)
     l_out = torch.where(opp_branch, new_log, l_out)
 
-    # Final clip & (optional) debug ------------------------------------------
+    # Final clipping and debug checks
     if not ignore_clip:
         l_out = _clip_log(l_out)
     if ENABLE_DEBUG_NAN_CHECKS:
@@ -341,7 +318,7 @@ def subtract_log_space(
     ly: torch.Tensor,
     ignore_clip: bool = False,
 ):
-    # Subtraction = addition with negated second operand
+    """Subtraction in log-space by negating the second operand."""
     s_out, l_out = add_log_space(sx, lx, -sy, ly, ignore_clip)
     if ENABLE_DEBUG_NAN_CHECKS:
         _debug_check("subtract_log_space", s_out, l_out)
@@ -354,7 +331,6 @@ def identity_log_space(
     return sx, lx
 
 
-# Replace op list with log-space versions (order important for op_names)
 op_funcs = [
     add_log_space,
     subtract_log_space,
@@ -376,114 +352,324 @@ def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
 
 
 class DAGPlanPredictor(nn.Module):
-    """Predicts complete DAG execution plans for all tokens in batch."""
+    """Predicts both initial values and operation choices for stack-based DAG execution."""
 
     def __init__(self, config, temperature: float = 10):
         super().__init__()
         self.dag_depth = config.dag_depth
         self.temperature = temperature
-        self.block_size = config.block_size
-
-        # Token-local scratch length: initial value + one new value per step
-        self.num_scratch_nodes = config.dag_depth + 1
         self.n_ops = len(op_funcs)  # Number of operations
+        self.num_scratch_nodes = config.dag_depth + 1
 
-        # Total plan dimensions per token per step: [operand1, operand2, operation]
-        self.plan_dim = 2 * self.num_scratch_nodes + self.n_ops
-
-        # Predictor: hidden_state (+ sign, log) -> full DAG plan
+        # Predictor: hidden_state -> initial_values + operation choices
+        # Output: 2 * num_scratch_nodes (initial values) + dag_depth * n_ops (operations)
+        output_dim = 2 * self.num_scratch_nodes + config.dag_depth * self.n_ops
         self.predictor = nn.Sequential(
-            nn.Linear(config.n_embd + 2, config.n_embd),
+            nn.Linear(config.n_embd, config.n_embd),
             nn.GELU(),
-            nn.Linear(config.n_embd, config.dag_depth * self.plan_dim),
+            nn.Linear(config.n_embd, output_dim),
         )
 
         # Store last predictions for logging
-        self.last_operation_probs_full: torch.Tensor | None = None
-        self.last_operand1_probs: torch.Tensor | None = None
-        self.last_operand2_probs: torch.Tensor | None = None
+        self.last_operation_probs: torch.Tensor | None = None
+        self.mag_logits: torch.Tensor | None = None  # for logging
 
-    def forward(self, hidden_states: torch.Tensor, seed_feat: torch.Tensor):
+    def forward(self, hidden_states: torch.Tensor):
         """
-        Predict complete DAG plans for all tokens, maintaining causality.
+        Predict both initial values and operation choices for stack-based execution.
 
         Args:
             hidden_states: (B, T, H) - hidden states for all tokens
-            seed_feat: (B, T, 2) - [sign, log] features per token (log already clipped)
         Returns:
-            operand1_probs: (B, T, dag_depth, max_nodes) - probabilities for operand 1
-            operand2_probs: (B, T, dag_depth, max_nodes) - probabilities for operand 2
+            initial_sgn: (B, T, num_scratch_nodes) - initial signs
+            initial_log: (B, T, num_scratch_nodes) - initial log magnitudes
             operation_probs: (B, T, dag_depth, n_ops) - probabilities for operations
         """
-        # Vectorised forward pass (no explicit Python loop over tokens)
         B, T, H = hidden_states.shape
 
-        # --- concatenate sign & log with hidden state -----------------------
-        mixed = torch.cat([hidden_states, seed_feat], dim=-1)  # (B,T,H+2)
+        # Reshape for batch processing
+        hidden_flat = hidden_states.reshape(B * T, H)
+        plan_output = self.predictor(hidden_flat)
+        plan_output = plan_output.view(B, T, -1)  # (B, T, output_dim)
 
-        # Since B x T is processed independantly, this doesn't leak causality.
-        mixed = mixed.reshape(B * T, H + 2)
-        raw_plan = self.predictor(mixed)
-        raw_plan = raw_plan.view(
-            B, T, self.dag_depth, self.plan_dim
-        )  # (B, T, D, plan_dim)
-        dag_plan_logits = raw_plan  # alias for clarity
+        # Split the output into initial values and operations
+        initial_values_size = 2 * self.num_scratch_nodes
+        initial_values_raw = plan_output[
+            ..., :initial_values_size
+        ]  # (B, T, 2 * num_scratch_nodes)
+        operation_logits_raw = plan_output[
+            ..., initial_values_size:
+        ]  # (B, T, dag_depth * n_ops)
 
-        # Split into operand and operation logits
-        operand1_logits = dag_plan_logits[..., : self.num_scratch_nodes]
-        operand2_logits = dag_plan_logits[
-            ..., self.num_scratch_nodes : 2 * self.num_scratch_nodes
-        ]
-        operation_logits = dag_plan_logits[
-            ...,
-            2 * self.num_scratch_nodes : 2 * self.num_scratch_nodes + self.n_ops,
-        ]
+        # Process initial values
+        sign_logits = initial_values_raw[..., : self.num_scratch_nodes]
+        mag_logits = initial_values_raw[..., self.num_scratch_nodes :]
+
+        # Save for logging
+        self.mag_logits = mag_logits
+
+        # Convert to sign and log magnitude format
+        initial_sgn = torch.tanh(sign_logits * SIGN_SCALE)
+        initial_log = LOG_LIM * torch.sigmoid(mag_logits)
+
+        # Process operation logits
+        operation_logits = operation_logits_raw.view(B, T, self.dag_depth, self.n_ops)
 
         # Clamp logits before softmax for numerical stability
-        operand1_logits = safe_clamp(operand1_logits)
-        operand2_logits = safe_clamp(operand2_logits)
         operation_logits = safe_clamp(operation_logits)
 
         # Standard softmax with temperature scaling
-        # Scale to prevent underflow.
-        scale = math.sqrt(self.n_ops)  # or math.log(self.n_ops)
-        operand1_probs = F.softmax(operand1_logits * scale / self.temperature, dim=-1)
-        operand2_probs = F.softmax(operand2_logits * scale / self.temperature, dim=-1)
+        scale = math.sqrt(self.n_ops)
         operation_probs = F.softmax(operation_logits * scale / self.temperature, dim=-1)
 
-        # Cache tensors for external logging/debugging
-        self.last_operation_probs_full = operation_probs
-        self.last_operand1_probs = operand1_probs
-        self.last_operand2_probs = operand2_probs
+        # Cache for logging
+        self.last_operation_probs = operation_probs
 
-        return operand1_probs, operand2_probs, operation_probs
+        return initial_sgn, initial_log, operation_probs
+
+
+def apply_log_op(
+    s1: torch.Tensor,
+    l1: torch.Tensor,
+    s2: torch.Tensor,
+    l2: torch.Tensor,
+    op_probs: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply a predicted op to log-space values using soft selection over ops."""
+    # Apply all operations
+    add_sgn, add_log = add_log_space(s1, l1, s2, l2)
+    sub_sgn, sub_log = subtract_log_space(s1, l1, s2, l2)
+    mul_sgn, mul_log = multiply_log_space(s1, l1, s2, l2)
+    div_sgn, div_log = divide_log_space(s1, l1, s2, l2)
+    id_sgn, id_log = identity_log_space(s1, l1)
+
+    # Stack results
+    ops_sgn = torch.stack(
+        [add_sgn, sub_sgn, mul_sgn, div_sgn, id_sgn], dim=-1
+    )  # (B, T, 5)
+    ops_log = torch.stack(
+        [add_log, sub_log, mul_log, div_log, id_log], dim=-1
+    )  # (B, T, 5)
+
+    # Apply soft selection using probabilities
+    result_sgn = (ops_sgn * op_probs).sum(dim=-1)  # (B, T)
+    result_log = (ops_log * op_probs).sum(dim=-1)  # (B, T)
+
+    return result_sgn, result_log
+
+
+def stack_based_execution_buffered(
+    initial_values_sgn: torch.Tensor,
+    initial_values_log: torch.Tensor,
+    ops: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Execute stack-based DAG computation using pre-allocated buffers.
+
+    This avoids tensor concatenations at each step, improving memory efficiency.
+    Uses careful indexing to preserve autograd compatibility.
+
+    Args:
+        initial_values_sgn: (B, T, num_initial) - initial stack signs
+        initial_values_log: (B, T, num_initial) - initial stack log magnitudes
+        ops: (B, T, depth, n_ops) - operation probabilities for each step
+
+    Returns:
+        final_sgn: (B, T) - final sign
+        final_log: (B, T) - final log magnitude
+    """
+    B, T, num_initial = initial_values_sgn.shape
+    depth = ops.shape[2]
+
+    # Pre-allocate buffers for the entire computation
+    # We need at most num_initial slots (starts with num_initial, reduces by 1 each step)
+    buffer_sgn = torch.zeros(
+        B,
+        T,
+        num_initial,
+        device=initial_values_sgn.device,
+        dtype=initial_values_sgn.dtype,
+    )
+    buffer_log = torch.zeros(
+        B,
+        T,
+        num_initial,
+        device=initial_values_log.device,
+        dtype=initial_values_log.dtype,
+    )
+
+    # Initialize buffers with initial values
+    buffer_sgn = buffer_sgn + initial_values_sgn  # Use addition to preserve gradients
+    buffer_log = buffer_log + initial_values_log
+
+    current_size = num_initial
+
+    for step in range(depth):
+        # Runtime check: ensure we have at least 2 elements to operate on
+        if current_size < 2:
+            raise RuntimeError(
+                f"Stack underflow at step {step}: only {current_size} elements remaining, need at least 2"
+            )
+
+        # Extract top two elements (last two in current active region)
+        top_sgn = buffer_sgn[..., current_size - 1]  # (B, T)
+        second_sgn = buffer_sgn[..., current_size - 2]  # (B, T)
+        top_log = buffer_log[..., current_size - 1]  # (B, T)
+        second_log = buffer_log[..., current_size - 2]  # (B, T)
+
+        # Apply operation
+        result_sgn, result_log = apply_log_op(
+            second_sgn, second_log, top_sgn, top_log, ops[:, :, step]
+        )
+
+        # Apply RMS rescaling to keep magnitudes bounded
+        if current_size > 1:
+            prev_logs_slice = buffer_log[
+                ..., : current_size - 1
+            ]  # (B, T, current_size-1)
+            result_log = _rms_rescale(prev_logs_slice, result_log)
+
+        # Update buffer: replace second-to-last element with result
+        # Use advanced indexing to avoid in-place operations that break autograd
+        new_buffer_sgn = buffer_sgn.clone()
+        new_buffer_log = buffer_log.clone()
+
+        # Update the element at position current_size-2 with the result
+        new_buffer_sgn[..., current_size - 2] = result_sgn
+        new_buffer_log[..., current_size - 2] = result_log
+
+        # Update buffers (safe for autograd)
+        buffer_sgn = new_buffer_sgn
+        buffer_log = new_buffer_log
+
+        # Reduce active size
+        current_size -= 1
+
+    # Return final result (should be at position 0)
+    return buffer_sgn[..., 0], buffer_log[..., 0]
+
+
+def stack_based_execution(
+    initial_values_sgn: torch.Tensor,
+    initial_values_log: torch.Tensor,
+    ops: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Execute stack-based DAG computation.
+
+    Args:
+        initial_values_sgn: (B, T, num_initial) - initial stack signs
+        initial_values_log: (B, T, num_initial) - initial stack log magnitudes
+        ops: (B, T, depth, n_ops) - operation probabilities for each step
+
+    Returns:
+        final_sgn: (B, T) - final sign
+        final_log: (B, T) - final log magnitude
+    """
+    # Use the buffered implementation for better performance
+    return stack_based_execution_buffered(initial_values_sgn, initial_values_log, ops)
+
+
+def stack_based_execution_original(
+    initial_values_sgn: torch.Tensor,
+    initial_values_log: torch.Tensor,
+    ops: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Original stack-based execution (kept for testing/fallback).
+
+    Args:
+        initial_values_sgn: (B, T, num_initial) - initial stack signs
+        initial_values_log: (B, T, num_initial) - initial stack log magnitudes
+        ops: (B, T, depth, n_ops) - operation probabilities for each step
+
+    Returns:
+        final_sgn: (B, T) - final sign
+        final_log: (B, T) - final log magnitude
+    """
+    B, T, num_initial = initial_values_sgn.shape
+    depth = ops.shape[2]
+
+    # Note: Configuration validation moved to DifferentiableDAG.__init__
+
+    # Keep track of current values at each position
+    # We'll build new tensors at each step to avoid in-place modifications
+    current_sgn = initial_values_sgn  # (B, T, num_initial)
+    current_log = initial_values_log  # (B, T, num_initial)
+
+    stack_size = num_initial
+
+    for step in range(depth):
+        # Runtime check: ensure we have at least 2 elements to operate on
+        if stack_size < 2:
+            raise RuntimeError(
+                f"Stack underflow at step {step}: only {stack_size} elements remaining, need at least 2"
+            )
+
+        # Pop top two elements (take last two in stack)
+        top_sgn = current_sgn[..., stack_size - 1]  # (B, T)
+        second_sgn = current_sgn[..., stack_size - 2]  # (B, T)
+        top_log = current_log[..., stack_size - 1]  # (B, T)
+        second_log = current_log[..., stack_size - 2]  # (B, T)
+
+        # Apply operation
+        result_sgn, result_log = apply_log_op(
+            second_sgn, second_log, top_sgn, top_log, ops[:, :, step]
+        )
+
+        # Apply RMS rescaling to keep magnitudes bounded
+        prev_logs_slice = current_log[..., : stack_size - 1]  # (B, T, stack_size-1)
+        result_log = _rms_rescale(prev_logs_slice, result_log)
+
+        # Create new tensors for the updated stack
+        # Keep the elements before the second-to-top position, update the second-to-top with result
+        if stack_size > 2:
+            # Keep elements [0, ..., stack_size-3], then result at stack_size-2
+            new_sgn = torch.cat(
+                [
+                    current_sgn[..., : stack_size - 2],  # Elements before second-to-top
+                    result_sgn.unsqueeze(-1),  # New result
+                ],
+                dim=-1,
+            )
+            new_log = torch.cat(
+                [
+                    current_log[..., : stack_size - 2],  # Elements before second-to-top
+                    result_log.unsqueeze(-1),  # New result
+                ],
+                dim=-1,
+            )
+        else:
+            # Only two elements, result becomes the only element
+            new_sgn = result_sgn.unsqueeze(-1)
+            new_log = result_log.unsqueeze(-1)
+
+        current_sgn = new_sgn
+        current_log = new_log
+        stack_size -= 1
+
+    # Return final result (should be at position 0)
+    return current_sgn[..., 0], current_log[..., 0]
 
 
 class ScalarToEmbed(nn.Module):
-    """Map sign & log magnitude → H-dim embedding using Fourier bases.
-
-    Expects input tensor of shape (B,T,2) where:
-       feat[...,0] = sign ∈ [-1,1]
-       feat[...,1] = log magnitude ≥ 0 (already clipped)
-    """
+    """Map sign & log magnitude to embedding using Fourier bases."""
 
     def __init__(self, hidden: int, sigma=1.0, feat_dim: int = 32):
         super().__init__()
         self.ff = PositionalEncoding(sigma, feat_dim)
-        # +2 for sign and raw log magnitude, +2*feat_dim for periodic encodings
         self.proj = nn.Linear(2 * feat_dim + 2, hidden)
 
-    def forward(self, feat: torch.Tensor) -> torch.Tensor:  # (B,T,2)
-        sign = feat[..., 0:1]  # preserve dims
+    def forward(self, feat: torch.Tensor) -> torch.Tensor:
+        sign = feat[..., 0:1]
         logmag = feat[..., 1:2]
-        trig = self.ff(logmag)  # (B,T,2*feat_dim)
-        concat = torch.cat((sign, logmag, trig), dim=-1)  # (B,T,2*feat_dim+2)
-        return self.proj(concat)  # (B,T,H)
+        trig = self.ff(logmag)
+        concat = torch.cat((sign, logmag, trig), dim=-1)
+        return self.proj(concat)
 
 
 # ---------------------------------------------------------------------------
 # DAG computation
-# ---------------------------------------------------------------------------
 class DifferentiableDAG(nn.Module):
     def __init__(
         self,
@@ -492,163 +678,73 @@ class DifferentiableDAG(nn.Module):
         super().__init__()
         self.hidden_dim = config.n_embd
         self.dag_depth = config.dag_depth
+
+        # Always use dag_depth + 1 initial values for optimal stack-based computation
         self.num_scratch_nodes = config.dag_depth + 1
+
         self.temperature = config.softmax_temperature
+
+        # Validate configuration at initialization time
+        if self.dag_depth < 1:
+            raise ValueError(
+                f"DAG depth must be at least 1 to ensure ≥2 initial values, got {self.dag_depth}. "
+                f"Use dag_depth=0 for standard GPT or dag_depth≥1 for DAG-augmented GPT."
+            )
+
+        # Validate we have enough initial values for the requested depth
+        if self.dag_depth >= self.num_scratch_nodes:
+            raise ValueError(
+                f"Cannot execute {self.dag_depth} DAG steps with only {self.num_scratch_nodes} initial values. "
+                f"Each step consumes one value, need at least {self.dag_depth + 1} initial values."
+            )
 
         self.pre_dag = Block(config)
         self.post_dag = Block(config)
 
-        # Initialize plan predictor
+        # Initialize unified plan predictor (predicts both initial values and operations)
         self.plan_predictor = DAGPlanPredictor(config, self.temperature)
 
         self.scalar_to_embed = ScalarToEmbed(config.n_embd)
-        # Seed head: LayerNorm → 2-dim projection
-        self.seed_norm = LayerNorm(config.n_embd, bias=config.bias)
-        self.embed_to_signlog = nn.Linear(config.n_embd, 2)
-        self.mag_logits = None  # for logging
 
     def forward(
         self,
-        original_hidden: torch.Tensor,  # (B, T, H) - batch, time, hidden
+        original_hidden: torch.Tensor,  # (B, T, H)
     ):
-        # Pre-process hidden states before value extraction
+        # Pre-process hidden states
         incoming_hidden = self.pre_dag(original_hidden)
 
         if ENABLE_DEBUG_NAN_CHECKS:
             _debug_check("incoming_hidden", incoming_hidden)
 
-        # Predict sign & magnitude in bounded range
-        seed_h = self.seed_norm(incoming_hidden)
+        # Generate unified plan (initial values + operations)
+        initial_sgn, initial_log, operation_probs = self.plan_predictor(incoming_hidden)
 
         if ENABLE_DEBUG_NAN_CHECKS:
-            _debug_check("seed_h", seed_h)
+            _debug_check("initial_values", initial_sgn, initial_log)
 
-        signlog = self.embed_to_signlog(seed_h)  # (B,T,2)
-
-        if ENABLE_DEBUG_NAN_CHECKS:
-            _debug_check("signlog", signlog)
-        sign_logits = signlog[..., 0]
-        mag_logits = signlog[..., 1]
-
-        # Save mag_logits for logging
-        self.mag_logits = mag_logits
-
-        # Sign in (−1,1) with optional sharpness scaling
-        init_sgn = torch.tanh(sign_logits * SIGN_SCALE)
-
-        # Magnitude: map (−∞,∞)→(0,LOG_LIM) via sigmoid
-        init_log = LOG_LIM * torch.sigmoid(mag_logits)
-
-        if ENABLE_DEBUG_NAN_CHECKS:
-            _debug_check("seed", init_sgn, init_log)
-
-        # Signed log magnitude seed for plan predictor
-        seed_feat = torch.stack((init_sgn, init_log), dim=-1)  # (B,T,2)
-
-        # ------------------------------------------------------------------ #
-        # Scratch value buffers (B,T,S)  with S = dag_depth+1
-        # We avoid repeated torch.stack() calls by pre-allocating the full
-        # buffer and writing in-place. k tracks the index of the last valid
-        # entry (0-based).
-        # ------------------------------------------------------------------ #
-
-        # Pre-allocate scratch buffers once and write in-place
-        B, T, _ = original_hidden.shape
-        S_max = self.num_scratch_nodes  # = dag_depth + 1
-        sgn_buf = init_sgn.new_empty(B, T, S_max)
-        log_buf = init_log.new_empty(B, T, S_max)
-
-        # slot 0 holds the seed values
-        sgn_buf[..., 0] = init_sgn
-        log_buf[..., 0] = init_log
-
-        # Generate DAG plan (vectorised) using signed-log seed
-        operand1_probs, operand2_probs, operation_probs = self.plan_predictor(
-            incoming_hidden, seed_feat
+        # Execute stack-based computation
+        final_sgn, final_log = stack_based_execution(
+            initial_sgn, initial_log, operation_probs
         )
 
-        for k in range(self.dag_depth):
-            att1 = operand1_probs[:, :, k, :]  # (B,T,S_max)
-            att2 = operand2_probs[:, :, k, :]
-            op_w = operation_probs[:, :, k, :]  # (B,T,n_ops)
+        if ENABLE_DEBUG_NAN_CHECKS:
+            _debug_check("final_values", final_sgn, final_log)
 
-            S_curr = k + 1  # valid scratch nodes so far
-            att1_step = att1[..., :S_curr]
-            att2_step = att2[..., :S_curr]
+        # Convert result to embedding
+        final_feat = torch.stack((final_sgn, final_log), dim=-1)
+        final_hidden = self.scalar_to_embed(final_feat)
 
-            # Clone slices so subsequent in-place writes to the base buffers
-            # don't invalidate Autograd versioning of the tensors used below.
-            current_sgn = sgn_buf[..., :S_curr].clone()  # (B,T,S_curr)
-            current_log = log_buf[..., :S_curr].clone()
-
-            # ---- Sign discretisation -------------------------------------
-            # We want forward values exactly in {−1, +1} (needed by downstream
-            # log-space ops) *but* we also want gradients to flow.  Use a
-            # straight-through estimator (STE): discrete sign in the forward
-            # pass, identity gradient in the backward pass.
-
-            v1_sgn_raw = (att1_step * current_sgn).sum(-1)
-            v2_sgn_raw = (att2_step * current_sgn).sum(-1)
-
-            def _ste_sign(x: torch.Tensor):
-                """Straight-through estimator for sign."""
-                disc = torch.sign(x)
-                disc = torch.where(disc == 0, torch.ones_like(disc), disc)
-                # Replace forward value but keep raw grad
-                return disc + (x - disc).detach()
-
-            v1_sgn = _ste_sign(v1_sgn_raw)
-            v2_sgn = _ste_sign(v2_sgn_raw)
-
-            # Log magnitudes are mixed linearly; this is a heuristic but preserves differentiability
-            v1_log = (att1_step * current_log).sum(-1)
-            v2_log = (att2_step * current_log).sum(-1)
-
-            # Apply the 5 operations (vectorised, no Python loop)
-            add_sgn, add_log = add_log_space(v1_sgn, v1_log, v2_sgn, v2_log)
-            sub_sgn, sub_log = subtract_log_space(v1_sgn, v1_log, v2_sgn, v2_log)
-            mul_sgn, mul_log = multiply_log_space(v1_sgn, v1_log, v2_sgn, v2_log)
-            div_sgn, div_log = divide_log_space(v1_sgn, v1_log, v2_sgn, v2_log)
-            id_sgn, id_log = identity_log_space(v1_sgn, v1_log)
-
-            outs_sgn_t = torch.stack(
-                (add_sgn, sub_sgn, mul_sgn, div_sgn, id_sgn), dim=-1
-            )
-            outs_log_t = torch.stack(
-                (add_log, sub_log, mul_log, div_log, id_log), dim=-1
-            )
-
-            new_sgn = (op_w * outs_sgn_t).sum(-1)
-            new_log = (op_w * outs_log_t).sum(-1)
-            prev_logs_slice = log_buf[..., :S_curr]  # (B,T,S_curr)
-            new_log_scaled = _rms_rescale(prev_logs_slice, new_log)
-
-            # In-place write to next slot (k+1)
-            sgn_buf[..., k + 1] = new_sgn
-            log_buf[..., k + 1] = new_log_scaled
-
-        final_sgn = sgn_buf[..., self.dag_depth]
-        final_log = log_buf[..., self.dag_depth]
-
-        final_feat = torch.stack((final_sgn, final_log), dim=-1)  # (B,T,2)
-
-        # Convert final nodes to hidden states.
-        final_hidden = self.scalar_to_embed(final_feat)  # (B,T,H)
-
-        # Mix token information via post dag block.
+        # Apply post-processing
         final_hidden = self.post_dag(final_hidden)
 
         # Cache for logging
         self.final_hidden = final_hidden
-        # Store signed-log for logging compatibility
-        self.final_values = (sgn_buf * log_buf).permute(0, 2, 1).contiguous()  # (B,S,T)
+        self.final_values = (initial_sgn * initial_log).permute(0, 2, 1).contiguous()
 
         return final_hidden
 
 
-# ---------------------------------------------------------------------------
 # GPT configuration
-# ---------------------------------------------------------------------------
 @dataclass
 class GPTConfig:
     block_size: int = 1024
@@ -662,13 +758,13 @@ class GPTConfig:
     bias: bool = (
         True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     )
-    dag_depth: int = 4  # 0 = standard GPT, >0 = DAG-augmented GPT
+    dag_depth: int = (
+        4  # 0 = standard GPT, >0 = DAG-augmented GPT (minimum 1 for ≥2 initial values)
+    )
     softmax_temperature: float = 20.0
 
 
-# ---------------------------------------------------------------------------
-# Main GPT model (with optional DAG augmentation)
-# ---------------------------------------------------------------------------
+# Main GPT model
 class GPT(nn.Module):
     """GPT Language Model with optional DAG augmentation.
 
@@ -680,6 +776,14 @@ class GPT(nn.Module):
         super().__init__()
         assert config.vocab_size is not None
         assert config.block_size is not None
+
+        # Validate dag_depth
+        if config.dag_depth < 0:
+            raise ValueError(
+                f"DAG depth cannot be negative, got {config.dag_depth}. "
+                f"Use dag_depth=0 for standard GPT or dag_depth≥1 for DAG-augmented GPT."
+            )
+
         self.config = config
 
         self.transformer = nn.ModuleDict(
@@ -786,41 +890,35 @@ class GPT(nn.Module):
 
             return logits, loss
 
-        # DAG augmentation mode - simplified interface
-        original_hidden = hidden.clone()  # Keep original for mixing
+        # DAG augmentation mode
+        original_hidden = hidden.clone()
 
-        # Store original hidden states for logging
+        # Store for logging
         self.last_original_hidden = original_hidden
 
         if ENABLE_DEBUG_NAN_CHECKS:
             _debug_check("original_hidden", original_hidden)
 
-        # Run DAG processing (handles everything internally)
+        # Run DAG processing
         dag_hidden = self.dag(original_hidden)
 
-        # Store complete tensor for detailed analysis (before mixing)
+        # Store for logging
         self.final_values = self.dag.final_values
 
-        # ------------------------------------------------------------------ #
-        # Per-token gating mechanism
-        # gate_{B,T,1} = σ( mean_dag + mean_orig ) where
-        #   mean_dag  = ⟨dag_hidden * w_d⟩_H
-        #   mean_orig = ⟨original_hidden * w_o⟩_H
-        # Both w_d and w_o are learnable vectors of size H.
-        # ------------------------------------------------------------------ #
+        # Per-token gating: mix original and DAG hidden states
         gate_logits = (
             (dag_hidden * self.gate_w_d).mean(-1, keepdim=True)
             + (original_hidden * self.gate_w_o).mean(-1, keepdim=True)
             + self.gate_b
         )
-        gate = torch.sigmoid(gate_logits)  # (B,T,1) in (0,1)
+        gate = torch.sigmoid(gate_logits)
 
-        # Store gate for logging
+        # Store for logging
         self.last_gate = gate
 
         mixed_hidden = original_hidden + gate * dag_hidden
 
-        # Store mixed hidden states for logging
+        # Store for logging
         self.last_mixed_hidden = mixed_hidden
 
         logits = self.lm_head(mixed_hidden)
@@ -831,9 +929,7 @@ class GPT(nn.Module):
         return logits, loss
 
     def crop_block_size(self, block_size):
-        # model surgery to decrease the block size if necessary
-        # e.g. we may load the GPT2 pretrained model checkpoint (block size 1024)
-        # but want to use a smaller block size for some smaller, simpler model
+        """Adjust model to use a smaller block size if needed."""
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
         self.transformer.wpe.weight = nn.Parameter(
@@ -846,14 +942,13 @@ class GPT(nn.Module):
     @classmethod
     def from_pretrained(cls, model_type, override_args=None):
         assert model_type in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}
-        override_args = override_args or {}  # default to empty dict
-        # only dropout can be overridden see more notes below
+        override_args = override_args or {}
         assert all(k == "dropout" for k in override_args)
         from transformers import GPT2LMHeadModel
 
         print("loading weights from pretrained gpt: %s" % model_type)
 
-        # n_layer, n_head and n_embd are determined from model_type
+        # Model configurations
         config_args = {
             "gpt2": dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
             "gpt2-medium": dict(n_layer=24, n_head=16, n_embd=1024),  # 350M params
@@ -861,53 +956,46 @@ class GPT(nn.Module):
             "gpt2-xl": dict(n_layer=48, n_head=25, n_embd=1600),  # 1558M params
         }[model_type]
         print("forcing vocab_size=50257, block_size=1024, bias=True")
-        config_args["vocab_size"] = 50257  # always 50257 for GPT model checkpoints
-        config_args["block_size"] = 1024  # always 1024 for GPT model checkpoints
-        config_args["bias"] = True  # always True for GPT model checkpoints
-        # we can override the dropout rate, if desired
+        config_args["vocab_size"] = 50257
+        config_args["block_size"] = 1024
+        config_args["bias"] = True
         if "dropout" in override_args:
             print(f"overriding dropout rate to {override_args['dropout']}")
             config_args["dropout"] = override_args["dropout"]
-        # create a from-scratch initialized minGPT model
+
+        # Create model and load weights
         config = GPTConfig(**config_args)
         model = cls(config)
         sd = model.state_dict()
         sd_keys = sd.keys()
-        sd_keys = [
-            k for k in sd_keys if not k.endswith(".attn.bias")
-        ]  # discard this mask / buffer, not a param
+        sd_keys = [k for k in sd_keys if not k.endswith(".attn.bias")]
 
-        # init a huggingface/transformers model
+        # Load HuggingFace model
         model_hf = GPT2LMHeadModel.from_pretrained(model_type)
         sd_hf = model_hf.state_dict()
 
-        # copy while ensuring all of the parameters are aligned and match in names and shapes
+        # Copy weights with proper handling of Conv1D layers
         sd_keys_hf = sd_hf.keys()
-        sd_keys_hf = [
-            k for k in sd_keys_hf if not k.endswith(".attn.masked_bias")
-        ]  # ignore these, just a buffer
-        sd_keys_hf = [
-            k for k in sd_keys_hf if not k.endswith(".attn.bias")
-        ]  # same, just the mask (buffer)
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith(".attn.masked_bias")]
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith(".attn.bias")]
         transposed = [
             "attn.c_attn.weight",
             "attn.c_proj.weight",
             "mlp.c_fc.weight",
             "mlp.c_proj.weight",
         ]
-        # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
-        # this means that we have to transpose these weights when we import them
+
         assert len(sd_keys_hf) == len(
             sd_keys
         ), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
         for k in sd_keys_hf:
             if any(k.endswith(w) for w in transposed):
-                # special treatment for the Conv1D weights we need to transpose
+                # Transpose Conv1D weights
                 assert sd_hf[k].shape[::-1] == sd[k].shape
                 with torch.no_grad():
                     sd[k].copy_(sd_hf[k].t())
             else:
-                # vanilla copy over the other parameters
+                # Direct copy
                 assert sd_hf[k].shape == sd[k].shape
                 with torch.no_grad():
                     sd[k].copy_(sd_hf[k])
@@ -915,14 +1003,12 @@ class GPT(nn.Module):
         return model
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
-        # start with all of the candidate parameters
+        # Get all parameters that require gradients
         param_dict = {pn: p for pn, p in self.named_parameters()}
-        # filter out those that do not require grad
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
-        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
-        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+
+        # Create optimizer groups: 2D params get weight decay, others don't
         decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-        # Add gate parameters to decay_params
         nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
         optim_groups = [
             {"params": decay_params, "weight_decay": weight_decay},
@@ -936,7 +1022,8 @@ class GPT(nn.Module):
         print(
             f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
         )
-        # Create AdamW optimizer and use the fused version if it is available
+
+        # Use fused AdamW if available on CUDA
         fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and device_type == "cuda"
         extra_args = dict(fused=True) if use_fused else dict()
@@ -948,59 +1035,55 @@ class GPT(nn.Module):
         return optimizer
 
     def estimate_mfu(self, fwdbwd_per_iter, dt):
-        """estimate model flops utilization (MFU) in units of A100 bfloat16 peak FLOPS"""
-        # first estimate the number of flops we do per iteration.
-        # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
+        """Estimate model FLOPs utilization (MFU) in units of A100 bfloat16 peak FLOPS."""
+        # Estimate FLOPs per iteration (see PaLM paper Appendix B)
         N = self.get_num_params()
         cfg = self.config
         L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd // cfg.n_head, cfg.block_size
         flops_per_token = 6 * N + 12 * L * H * Q * T
         flops_per_fwdbwd = flops_per_token * T
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
-        # express our flops throughput as ratio of A100 bfloat16 peak flops
-        flops_achieved = flops_per_iter * (1.0 / dt)  # per second
-        flops_promised = 312e12  # A100 GPU bfloat16 peak flops is 312 TFLOPS
+
+        # Express as ratio of A100 peak FLOPS
+        flops_achieved = flops_per_iter * (1.0 / dt)
+        flops_promised = 312e12  # A100 GPU bfloat16 peak FLOPS
         mfu = flops_achieved / flops_promised
         return mfu
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
-        """
-        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
-        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
-        """
+        """Generate text by sampling from the model."""
         for _ in range(max_new_tokens):
-            # if the sequence context is growing too long we must crop it at block_size
+            # Crop context if too long
             idx_cond = (
                 idx
                 if idx.size(1) <= self.config.block_size
                 else idx[:, -self.config.block_size :]
             )
-            # forward the model to get the logits for the index in the sequence
+
+            # Get logits and apply temperature
             logits, _ = self(idx_cond)
-            # pluck the logits at the final step and scale by desired temperature
             logits = logits[:, -1, :] / temperature
-            # optionally crop the logits to only the top k options
+
+            # Apply top-k filtering if specified
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float("Inf")
 
-            # Normalize logits magnitude instead of hard clipping
+            # Normalize and sample
             logits_std = logits.std(dim=-1, keepdim=True).clamp_min(1e-3)
             logits = logits / logits_std
             probs = F.softmax(logits, dim=-1)
 
-            # Handle edge cases (NaN/inf values)
+            # Handle edge cases
             if torch.isnan(probs).any() or torch.isinf(probs).any():
                 probs = torch.ones_like(probs) / probs.size(-1)
             else:
                 probs = torch.clamp(probs, min=1e-10)
                 probs = probs / probs.sum(dim=-1, keepdim=True)
 
-            # sample from the distribution
+            # Sample next token
             idx_next = torch.multinomial(probs, num_samples=1)
-            # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx

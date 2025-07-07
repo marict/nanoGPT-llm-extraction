@@ -168,14 +168,14 @@ class DAGLogger:
         if not hasattr(model.dag, "plan_predictor"):
             raise RuntimeError("DAG model missing 'plan_predictor'; cannot log.")
 
-        if not hasattr(model.dag.plan_predictor, "last_operation_probs_full"):
+        if not hasattr(model.dag.plan_predictor, "last_operation_probs"):
             raise RuntimeError(
-                "plan_predictor missing 'last_operation_probs_full'; cannot log gradients/probs."
+                "plan_predictor missing 'last_operation_probs'; cannot log gradients/probs."
             )
 
-        if model.dag.plan_predictor.last_operation_probs_full is None:
+        if model.dag.plan_predictor.last_operation_probs is None:
             raise RuntimeError(
-                "'last_operation_probs_full' is None – logging disabled. Aborting to avoid waste."
+                "'last_operation_probs' is None – logging disabled. Aborting to avoid waste."
             )
 
         # Extract node values (both traditional and detailed)
@@ -188,7 +188,7 @@ class DAGLogger:
         mixed_hidden = model.last_mixed_hidden
         final_values = model.final_values
         last_gate = model.last_gate
-        mag_logits = model.dag.mag_logits
+        mag_logits = model.dag.plan_predictor.mag_logits
 
         if original_hidden is None:
             raise RuntimeError("model should contain original_hidden")
@@ -201,7 +201,7 @@ class DAGLogger:
         if last_gate is None:
             raise RuntimeError("model should contain last_gate")
         if mag_logits is None:
-            raise RuntimeError("model should contain mag_logits")
+            raise RuntimeError("plan_predictor should contain mag_logits")
 
         hidden_norm = original_hidden[:, -1].norm(dim=-1).mean().detach().item()
         dag_norm = dag_hidden[:, -1].norm(dim=-1).mean().detach().item()
@@ -232,9 +232,9 @@ class DAGLogger:
 
         # Operation probability statistics (average over batch, time and DAG steps)
         with torch.no_grad():
-            if model.dag.plan_predictor.last_operation_probs_full is None:
-                raise RuntimeError("last_operation_probs_full is None")
-            probs = model.dag.plan_predictor.last_operation_probs_full.detach()
+            if model.dag.plan_predictor.last_operation_probs is None:
+                raise RuntimeError("last_operation_probs is None")
+            probs = model.dag.plan_predictor.last_operation_probs.detach()
             mean_probs = probs.mean(dim=(0, 1, 2))  # (n_ops,)
             self.logging_data["op_probs"] = {
                 op_name: float(mean_probs[i].item())
@@ -502,14 +502,14 @@ class DAGLogger:
             model.dag, "plan_predictor"
         ), "DAG missing plan_predictor attribute"
         assert hasattr(
-            model.dag.plan_predictor, "last_operation_probs_full"
-        ), "Plan predictor missing last_operation_probs_full"
+            model.dag.plan_predictor, "last_operation_probs"
+        ), "Plan predictor missing last_operation_probs"
         assert (
-            model.dag.plan_predictor.last_operation_probs_full is not None
-        ), "last_operation_probs_full is None"
+            model.dag.plan_predictor.last_operation_probs is not None
+        ), "last_operation_probs is None"
         assert (
-            model.dag.plan_predictor.last_operation_probs_full.requires_grad
-        ), "last_operation_probs_full does not require gradients"
+            model.dag.plan_predictor.last_operation_probs.requires_grad
+        ), "last_operation_probs does not require gradients"
 
         def save_op_grad(grad):
             if grad is None:
@@ -526,9 +526,7 @@ class DAGLogger:
             for i, op_name in enumerate(op_names):
                 self.captured_gradients[f"grad/op/{op_name}"] = float(op_grads[i])
 
-        hook = model.dag.plan_predictor.last_operation_probs_full.register_hook(
-            save_op_grad
-        )
+        hook = model.dag.plan_predictor.last_operation_probs.register_hook(save_op_grad)
         self.gradient_hooks.append(hook)
 
     def _collect_op_metrics(self, model) -> Dict[str, float]:
@@ -537,18 +535,14 @@ class DAGLogger:
         Returns values normalised to [0,1] where 1 = ideal.
         """
 
-        if not hasattr(model.dag.plan_predictor, "last_operation_probs_full"):
+        if not hasattr(model.dag.plan_predictor, "last_operation_probs"):
             raise RuntimeError(
-                "plan_predictor missing 'last_operation_probs_full'; cannot log op metrics."
+                "plan_predictor missing 'last_operation_probs'; cannot log op metrics."
             )
-        if model.dag.plan_predictor.last_operation_probs_full is None:
-            raise RuntimeError(
-                "'last_operation_probs_full' is None cannot log op metrics."
-            )
+        if model.dag.plan_predictor.last_operation_probs is None:
+            raise RuntimeError("'last_operation_probs' is None cannot log op metrics.")
 
-        probs = (
-            model.dag.plan_predictor.last_operation_probs_full.detach()
-        )  # (B,T,D,n_ops)
+        probs = model.dag.plan_predictor.last_operation_probs.detach()  # (B,T,D,n_ops)
         n_ops = probs.size(-1)
         eps = 1e-12
 

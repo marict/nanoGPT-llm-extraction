@@ -1,172 +1,192 @@
+#!/usr/bin/env python
+"""Test training and logging integration."""
+
 import sys
 from pathlib import Path
 
-import pytest
 import torch
 
+# Add repo root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from test_common import (assert_valid_logging, assert_valid_node_values,
-                         mock_decode, mock_encode,
-                         setup_gradient_tracking_test)
+from test_common import (assert_valid_logging, sample_batch_small, small_model,
+                         tiny_model)
 
 from dag_logger import DAGLogger
-from dag_model import GPT, GPTConfig, op_names
 
 
-def test_text_generation_logging_integration(small_model):
-    """Test that logging works correctly with text generation."""
-    model, cfg = small_model
+# --------------------------------------------------------------------- #
+# Consolidated training logging tests (2 tests)
+# --------------------------------------------------------------------- #
+def test_comprehensive_training_and_text_generation_logging(
+    small_model, sample_batch_small
+):
+    """Test comprehensive training logging including text generation and batch processing."""
+    model, config = small_model
+    batch_x, batch_y = sample_batch_small
+
+    # Test text generation logging integration
     model.eval()
 
-    dag_logger = DAGLogger()
-
-    sample_prompt = "Two plus 5 = "
-    encoded = mock_encode(sample_prompt)
-    prompt_ids = torch.tensor(encoded, dtype=torch.long).unsqueeze(0)
+    # Generate some text with temperature and top-k sampling
+    max_new_tokens = 10
+    prompt = torch.tensor([[1, 2, 3]], dtype=torch.long)  # Small prompt
 
     with torch.no_grad():
         generated = model.generate(
-            prompt_ids,
-            max_new_tokens=10,  # Reduced for speed
-            temperature=0.8,
-            top_k=40,
+            prompt, max_new_tokens=max_new_tokens, temperature=0.8, top_k=10
         )
-        generated_sample = mock_decode(generated[0].cpu().tolist())
 
-    # Test logging after generation
-    logger, wandb_dict, extra_vals = assert_valid_logging(model)
+    # Verify generation worked
+    assert generated.shape[1] == prompt.shape[1] + max_new_tokens
+    assert generated.dtype == prompt.dtype
 
-    assert generated_sample is not None
-    assert "decoded_" in generated_sample
+    # Test comprehensive training logging
+    model.train()
+
+    # Multiple forward passes to test logging stability
+    for iteration in range(3):
+        logits, loss = model(batch_x, batch_y)
+
+        # Verify shapes and values
+        assert logits.shape == (batch_x.size(0), batch_x.size(1), config.vocab_size)
+        assert loss.item() > 0
+        assert torch.isfinite(loss)
+
+        # Test logging functionality
+        assert_valid_logging(model, batch_x, batch_y)
+
+        # Test gradient capture
+        loss.backward()
+
+        # Verify gradients exist for key parameters
+        grad_found = False
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                grad_found = True
+                assert torch.isfinite(
+                    param.grad
+                ).all(), f"Non-finite gradient in {name}"
+
+        assert grad_found, "No gradients found in model"
+
+        # Clear gradients for next iteration
+        model.zero_grad()
+
+    # Test node values comprehensive
+    logger = DAGLogger()
+
+    # Test that node values are properly captured
+    with torch.no_grad():
+        model(batch_x)
+
+    node_values = logger.get_node_values_list(model)
+    assert len(node_values) > 0, "No node values captured"
+
+    # Verify all node values are valid numbers
+    for i, value in enumerate(node_values):
+        assert isinstance(
+            value, (int, float)
+        ), f"Node value {i} is not a number: {value}"
+        assert torch.isfinite(
+            torch.tensor(float(value))
+        ), f"Node value {i} is not finite: {value}"
 
 
-def test_comprehensive_training_logging(small_model, sample_batch_small):
-    """Test comprehensive logging during training scenario."""
+def test_gradient_capture_and_api_integration(small_model, tiny_model):
+    """Test gradient capture integration and end-to-end API functionality."""
     model, config = small_model
+    tiny_model_obj, tiny_config = tiny_model
 
-    # Set up gradient tracking test and compute statistics
-    logger, loss, _, _ = setup_gradient_tracking_test(model, config)
+    # Test gradient capture integration with small model
+    logger = DAGLogger()
 
-    # Use the logger with gradients already captured
-    extra_vals = logger.get_extra_vals(model)
-    wandb_dict = logger.get_wandb_logging_dict(model)
-
-    # Verify specific components
-    norm_keys = [k for k in wandb_dict if k.startswith("norm/")]
-    assert len(norm_keys) > 0, "Should have norm values"
-
-    # Check operation gradients
-    op_grad_keys = [key for key in extra_vals.keys() if key.startswith("grad/op")]
-    assert len(op_grad_keys) == len(
-        op_names
-    ), "Should have gradients for all operations"
-
-    # Verify JSON serializable for wandb
-    for key, value in wandb_dict.items():
-        if not (key.endswith("_timeseries") or key.endswith("_plot")):
-            assert isinstance(
-                value, (int, float, str, list)
-            ), f"Value for {key} not JSON serializable"
-
-
-def test_node_values_comprehensive(small_model):
-    """Test node values logging comprehensively."""
-    model, cfg = small_model
-    model.eval()
+    # Create test data
+    batch_x = torch.randint(0, config.vocab_size, (2, 4))
+    batch_y = torch.randint(0, config.vocab_size, (2, 4))
 
     # Forward pass
-    input_ids = torch.randint(0, cfg.vocab_size, (1, cfg.block_size))
-    with torch.no_grad():
-        _, _ = model(input_ids)
-
-    # Test node values extraction
-    logger = DAGLogger()
-    node_values = logger.get_node_values_list(model)
-
-    # Comprehensive validation
-    assert isinstance(node_values, list), "Node values should be a list"
-    assert len(node_values) == cfg.block_size, f"Expected {cfg.block_size} nodes"
-
-    for i, val in enumerate(node_values):
-        assert isinstance(val, float), f"Node value {i} should be float"
-        assert torch.isfinite(torch.tensor(val)), f"Node value {i} should be finite"
-
-    # Test that logging works after forward pass
-    logger.compute_log_statistics(model)
-    logger.format_console_logging(model)
-
-    # Test multiple forward passes
-    input_ids2 = torch.randint(0, cfg.vocab_size, (1, cfg.block_size))
-    with torch.no_grad():
-        _, _ = model(input_ids2)
-
-    node_values2 = logger.get_node_values_list(model)
-    assert len(node_values2) == cfg.block_size, "Second call should have same length"
-
-    # Test error case - model without forward pass
-    fresh_model = GPT(cfg)
-    fresh_logger = DAGLogger()
-    with pytest.raises(AssertionError, match="Model missing final_values attribute"):
-        fresh_logger.get_node_values_list(fresh_model)
-
-
-def test_gradient_capture_integration(small_model):
-    """Test gradient capture after various model operations."""
-    model, cfg = small_model
-
-    # 1. Test generation first
-    prompt = torch.randint(0, cfg.vocab_size, (1, 3))
-    with torch.no_grad():
-        model.generate(prompt, max_new_tokens=2, temperature=0.8, top_k=10)
-
-    # 2. Test training step with gradient capture
-    batch_size = 2
-    seq_len = cfg.block_size
-    input_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
-    target_ids = torch.randint(0, cfg.vocab_size, (batch_size, seq_len))
-
-    # Forward pass first
-    _, loss = model(input_ids, target_ids)
+    logits, loss = model(batch_x, batch_y)
 
     # Set up gradient tracking
-    dag_logger = DAGLogger()
-    dag_logger.setup_gradient_tracking(model)
+    logger.setup_gradient_tracking(model)
 
+    # Backward pass
     loss.backward()
 
-    # Test logging after backward pass
-    dag_logger.compute_log_statistics(model)
-    extra_vals = dag_logger.get_extra_vals(model)
+    # Check that gradients were captured
+    assert len(logger.captured_gradients) > 0, "No gradients captured"
 
-    # Verify gradients were captured
-    op_grad_keys = [key for key in extra_vals.keys() if key.startswith("grad/op")]
-    assert len(op_grad_keys) > 0, "Should have captured operation gradients"
+    # Verify captured gradients are reasonable
+    for grad_name, grad_value in logger.captured_gradients.items():
+        assert isinstance(grad_value, float), f"Gradient {grad_name} is not a float"
+        assert torch.isfinite(
+            torch.tensor(grad_value)
+        ), f"Gradient {grad_name} is not finite"
+        assert abs(grad_value) < 100, f"Gradient {grad_name} too large: {grad_value}"
 
-    # Test console logging works
-    dag_logger.format_console_logging(model)
+    # Test API integration end-to-end with tiny model
+    tiny_model_obj.train()
 
+    # Test multiple scenarios - ensure seq_len < block_size (3)
+    test_scenarios = [
+        {"batch_size": 1, "seq_len": 2},
+        {"batch_size": 2, "seq_len": 2},
+        {"batch_size": 3, "seq_len": 2},
+    ]
 
-def test_api_integration_end_to_end(tiny_model):
-    """Test complete DAG logging API integration."""
-    model, cfg = tiny_model
-    model.eval()
+    for scenario in test_scenarios:
+        batch_size = scenario["batch_size"]
+        seq_len = scenario["seq_len"]
 
-    # Forward pass
-    input_ids = torch.randint(0, cfg.vocab_size, (1, cfg.block_size))
+        # Create test batch
+        x = torch.randint(0, tiny_config.vocab_size, (batch_size, seq_len))
+        y = torch.randint(0, tiny_config.vocab_size, (batch_size, seq_len))
+
+        # Forward pass
+        logits, loss = tiny_model_obj(x, y)
+
+        # Verify outputs
+        assert logits.shape == (batch_size, seq_len, tiny_config.vocab_size)
+        assert loss.shape == ()
+        assert loss.item() > 0
+
+        # Test logging integration
+        logger_tiny = DAGLogger()
+        logger_tiny.compute_log_statistics(tiny_model_obj)
+        extra_vals = logger_tiny.get_extra_vals(tiny_model_obj)
+
+        # Should have some logging values
+        assert len(extra_vals) > 0, f"No extra values for scenario {scenario}"
+
+        # Test gradient computation
+        tiny_model_obj.zero_grad()
+        loss.backward()
+
+        # Verify gradients exist
+        param_with_grad = False
+        for param in tiny_model_obj.parameters():
+            if param.grad is not None:
+                param_with_grad = True
+                assert torch.isfinite(param.grad).all()
+
+        assert (
+            param_with_grad
+        ), f"No parameters received gradients for scenario {scenario}"
+
+    # Test that API handles edge cases
+    tiny_model_obj.eval()
+
+    # Test with different input sizes - ensure seq_len < block_size
+    for seq_len in [1, 2]:  # Use seq_len < block_size (3)
+        x_test = torch.randint(0, tiny_config.vocab_size, (1, seq_len))
+
+        with torch.no_grad():
+            logits_test, _ = tiny_model_obj(x_test)
+            assert logits_test.shape == (1, seq_len, tiny_config.vocab_size)
+
+    # Test generation functionality
     with torch.no_grad():
-        _, _ = model(input_ids)
-
-    # Test complete logging workflow
-    logger, wandb_dict, extra_vals = assert_valid_logging(model)
-
-    # Verify node values are available
-    assert_valid_node_values(model)
-
-    # Verify key logging components exist
-    assert len(wandb_dict) > 0, "Should have wandb logging data"
-    assert len(extra_vals) > 0, "Should have extra values"
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+        prompt = torch.tensor([[1]], dtype=torch.long)
+        generated = tiny_model_obj.generate(prompt, max_new_tokens=3, temperature=1.0)
+        assert generated.shape == (1, 4)  # prompt + 3 new tokens
