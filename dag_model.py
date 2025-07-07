@@ -484,7 +484,7 @@ class DAGPlanPredictor(nn.Module):
         return initial_sgn, initial_log, operation_probs
 
 
-def apply_log_op(
+def apply_op(
     s1: torch.Tensor,
     l1: torch.Tensor,
     s2: torch.Tensor,
@@ -514,7 +514,7 @@ def apply_log_op(
     return result_sgn, result_log
 
 
-def stack_based_execution_buffered(
+def execute_stack(
     initial_values_sgn: torch.Tensor,
     initial_values_log: torch.Tensor,
     ops: torch.Tensor,
@@ -574,7 +574,7 @@ def stack_based_execution_buffered(
         second_log = buffer_log[..., current_size - 2]  # (B, T)
 
         # Apply operation
-        result_sgn, result_log = apply_log_op(
+        result_sgn, result_log = apply_op(
             second_sgn, second_log, top_sgn, top_log, ops[:, :, step]
         )
 
@@ -623,7 +623,7 @@ def stack_based_execution(
         final_log: (B, T) - final log magnitude
     """
     # Use the buffered implementation for better performance
-    return stack_based_execution_buffered(initial_values_sgn, initial_values_log, ops)
+    return execute_stack(initial_values_sgn, initial_values_log, ops)
 
 
 def stack_based_execution_original(
@@ -669,7 +669,7 @@ def stack_based_execution_original(
         second_log = current_log[..., stack_size - 2]  # (B, T)
 
         # Apply operation
-        result_sgn, result_log = apply_log_op(
+        result_sgn, result_log = apply_op(
             second_sgn, second_log, top_sgn, top_log, ops[:, :, step]
         )
 

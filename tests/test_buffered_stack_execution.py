@@ -10,7 +10,7 @@ import pytest
 import torch
 
 sys.path.append(".")
-from dag_model import (GPT, GPTConfig, stack_based_execution_buffered,
+from dag_model import (GPT, GPTConfig, execute_stack,
                        stack_based_execution_original)
 
 
@@ -47,7 +47,7 @@ class TestBufferedStackExecution:
             result_sgn_orig, result_log_orig = stack_based_execution_original(
                 initial_sgn, initial_log, ops
             )
-            result_sgn_buff, result_log_buff = stack_based_execution_buffered(
+            result_sgn_buff, result_log_buff = execute_stack(
                 initial_sgn, initial_log, ops
             )
 
@@ -97,7 +97,7 @@ class TestBufferedStackExecution:
         grad_ops_orig = ops_logits_orig.grad.clone()
 
         # Test buffered implementation
-        result_sgn_buff, result_log_buff = stack_based_execution_buffered(
+        result_sgn_buff, result_log_buff = execute_stack(
             initial_sgn_buff, initial_log_buff, ops_buff
         )
         loss_buff = result_sgn_buff.sum() + result_log_buff.sum()
@@ -136,9 +136,7 @@ class TestBufferedStackExecution:
         result_sgn_orig, result_log_orig = stack_based_execution_original(
             initial_sgn, initial_log, ops
         )
-        result_sgn_buff, result_log_buff = stack_based_execution_buffered(
-            initial_sgn, initial_log, ops
-        )
+        result_sgn_buff, result_log_buff = execute_stack(initial_sgn, initial_log, ops)
 
         assert torch.allclose(result_sgn_orig, result_sgn_buff, atol=1e-6)
         assert torch.allclose(result_log_orig, result_log_buff, atol=1e-6)
@@ -159,7 +157,7 @@ class TestBufferedStackExecution:
             stack_based_execution_original(initial_sgn, initial_log, ops)
 
         with pytest.raises(RuntimeError, match="Stack underflow"):
-            stack_based_execution_buffered(initial_sgn, initial_log, ops)
+            execute_stack(initial_sgn, initial_log, ops)
 
     # --------------------------------------------------------------------- #
     # Consolidated device and dtype compatibility (1 test)
@@ -189,9 +187,7 @@ class TestBufferedStackExecution:
             ops = torch.softmax(ops_logits, dim=-1)
 
             # Should work without errors
-            result_sgn, result_log = stack_based_execution_buffered(
-                initial_sgn, initial_log, ops
-            )
+            result_sgn, result_log = execute_stack(initial_sgn, initial_log, ops)
 
             assert result_sgn.device == device
             assert result_log.device == device
@@ -208,9 +204,7 @@ class TestBufferedStackExecution:
             ops_logits = torch.randn(batch_size, seq_len, dag_depth, 5, dtype=dtype)
             ops = torch.softmax(ops_logits, dim=-1)
 
-            result_sgn, result_log = stack_based_execution_buffered(
-                initial_sgn, initial_log, ops
-            )
+            result_sgn, result_log = execute_stack(initial_sgn, initial_log, ops)
 
             assert result_sgn.dtype == dtype
             assert result_log.dtype == dtype
@@ -296,7 +290,7 @@ class TestBufferedStackExecution:
         result_sgn_orig, result_log_orig = stack_based_execution_original(
             initial_sgn_extreme, initial_log_extreme, ops_extreme
         )
-        result_sgn_buff, result_log_buff = stack_based_execution_buffered(
+        result_sgn_buff, result_log_buff = execute_stack(
             initial_sgn_extreme, initial_log_extreme, ops_extreme
         )
 
@@ -326,9 +320,7 @@ class TestBufferedStackExecution:
         result_sgn_orig, result_log_orig = stack_based_execution_original(
             initial_sgn, initial_log, ops
         )
-        result_sgn_buff, result_log_buff = stack_based_execution_buffered(
-            initial_sgn, initial_log, ops
-        )
+        result_sgn_buff, result_log_buff = execute_stack(initial_sgn, initial_log, ops)
 
         # Basic performance comparison - both should complete in reasonable time
         # and produce identical results
@@ -342,7 +334,7 @@ class TestBufferedStackExecution:
         # Small timing test
         start_time = time.time()
         for _ in range(5):
-            stack_based_execution_buffered(initial_sgn, initial_log, ops)
+            execute_stack(initial_sgn, initial_log, ops)
         buffered_time = time.time() - start_time
 
         start_time = time.time()
@@ -375,9 +367,7 @@ def test_performance_comparison():
     result_sgn_orig, result_log_orig = stack_based_execution_original(
         initial_sgn, initial_log, ops
     )
-    result_sgn_buff, result_log_buff = stack_based_execution_buffered(
-        initial_sgn, initial_log, ops
-    )
+    result_sgn_buff, result_log_buff = execute_stack(initial_sgn, initial_log, ops)
 
     assert torch.allclose(result_sgn_orig, result_sgn_buff, atol=1e-6)
     assert torch.allclose(result_log_orig, result_log_buff, atol=1e-6)
@@ -387,7 +377,7 @@ def test_performance_comparison():
 
     start_time = time.time()
     for _ in range(10):
-        stack_based_execution_buffered(initial_sgn, initial_log, ops)
+        execute_stack(initial_sgn, initial_log, ops)
     total_time = time.time() - start_time
 
     # Should complete 10 iterations in reasonable time (< 1 second)

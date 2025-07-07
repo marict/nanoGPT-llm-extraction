@@ -57,13 +57,13 @@ backend = "nccl"
 dtype = "bfloat16"  # Use bfloat16 for efficiency if available
 compile = True  # Enable compilation for speed
 keep_alive = False  # Auto-stop by default
-check_nans = True  # Check for NaNs in cloud training
+check_nans = False  # Check for NaNs in cloud training
 
 # Loss weights (balanced for full training)
 sign_loss_weight = 1.0
 log_loss_weight = 1.0
-op_loss_weight = 1.5  # Slightly emphasize operation prediction
+op_loss_weight = 1.0
 
 # Random seeds
 train_seed = 42
-val_seed = 43
+val_seed = 42

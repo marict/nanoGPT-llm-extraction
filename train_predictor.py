@@ -782,7 +782,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
     t0 = time.time()
     raw_model = model.module if ddp else model
-    running_mfu = -1.0
 
     while iter_num <= cfg.max_iters:
         # Learning rate scheduling
@@ -790,8 +789,11 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
-        # Evaluation
-        if iter_num % cfg.eval_interval == 0 and master_process:
+        # Evaluation: run every <eval_interval> iterations, but **skip** iter 0
+        # (unless we are in eval-only mode, in which case we still evaluate once).
+        if master_process and (
+            (iter_num > 0 and iter_num % cfg.eval_interval == 0) or cfg.eval_only
+        ):
             print(
                 f"[{time.time() - setup_start:.2f}s] Running evaluation at iter {iter_num}"
             )
@@ -950,7 +952,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         # Optimization step
         if cfg.grad_clip > 0:
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(dag_params, cfg.grad_clip)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
 
         scaler.step(optimizer)
         scaler.update()
