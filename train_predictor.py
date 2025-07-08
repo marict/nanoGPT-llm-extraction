@@ -231,10 +231,7 @@ def parse_args() -> argparse.ArgumentParser:
         description="Train DAG predictor on structure prediction"
     )
     parser.add_argument(
-        "config",
-        type=str,
-        help="Path to config file",
-        default="config/train_predictor_default.py",
+        "config", nargs="?", default="config/train_predictor_default.py"
     )
     parser.add_argument("--wandb-api-key", type=str, help="Weights & Biases API key")
     parser.add_argument("--wandb-run-id", type=str, help="Resume existing wandb run")
