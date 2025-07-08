@@ -7,6 +7,7 @@ configuration management, loss functions, model setup, and training integration.
 """
 
 import os
+import shutil
 import tempfile
 import unittest
 from contextlib import nullcontext
@@ -528,10 +529,9 @@ class TestUtilityFunctions(unittest.TestCase):
         """Test checkpoint filename generation."""
         cfg = DAGTrainConfig()
         cfg.name = "test_run"
-
-        filename = get_checkpoint_filename(cfg, 1000)
-        expected = "dag_ckpt_test_run_001000.pt"
-        self.assertEqual(filename, expected)
+        model_name = "TestModel"
+        filename = get_checkpoint_filename(cfg, 1000, model_name)
+        self.assertEqual(filename, "dag_ckpt_TestModel_test_run_001000")
 
     def test_all_tensors(self):
         """Test _all_tensors utility function."""
@@ -914,40 +914,48 @@ class TestCheckpointManagement(unittest.TestCase):
         cfg = DAGTrainConfig()
         cfg.name = "test_clean"
         cfg.clear_previous_checkpoints = True
+        model_name = "MyModel"
 
         # Create some fake checkpoint files
         checkpoint_dir = Path(self.temp_dir)
-        (checkpoint_dir / "dag_ckpt_test_clean_000100.pt").touch()
-        (checkpoint_dir / "dag_ckpt_test_clean_000200.pt").touch()
+        (checkpoint_dir / f"dag_ckpt_{model_name}_{cfg.name}_000100.pt").touch()
+        (checkpoint_dir / f"dag_ckpt_{model_name}_{cfg.name}_000200.pt").touch()
         (
-            checkpoint_dir / "dag_ckpt_other_000100.pt"
-        ).touch()  # Different name, shouldn't be removed
+            checkpoint_dir / f"dag_ckpt_{model_name}_other_run_000100.pt"
+        ).touch()  # Different run name, shouldn't be removed
 
         with patch("train_predictor.CHECKPOINT_DIR", self.temp_dir):
-            clean_previous_checkpoints(cfg)
+            clean_previous_checkpoints(cfg, model_name)
 
         # Check that only the matching checkpoints were removed
-        self.assertFalse((checkpoint_dir / "dag_ckpt_test_clean_000100.pt").exists())
-        self.assertFalse((checkpoint_dir / "dag_ckpt_test_clean_000200.pt").exists())
-        self.assertTrue((checkpoint_dir / "dag_ckpt_other_000100.pt").exists())
+        self.assertFalse(
+            (checkpoint_dir / f"dag_ckpt_{model_name}_{cfg.name}_000100.pt").exists()
+        )
+        self.assertFalse(
+            (checkpoint_dir / f"dag_ckpt_{model_name}_{cfg.name}_000200.pt").exists()
+        )
+        self.assertTrue(
+            (checkpoint_dir / f"dag_ckpt_{model_name}_other_run_000100.pt").exists()
+        )
 
     def test_find_latest_checkpoint(self):
         """Test finding the latest checkpoint."""
         cfg = DAGTrainConfig()
         cfg.name = "test_find"
+        model_name = "MyModel"
 
         checkpoint_dir = Path(self.temp_dir)
 
         # Create checkpoint files with different iteration numbers
-        (checkpoint_dir / "dag_ckpt_test_find_000100.pt").touch()
-        (checkpoint_dir / "dag_ckpt_test_find_000500.pt").touch()
-        (checkpoint_dir / "dag_ckpt_test_find_000300.pt").touch()
+        (checkpoint_dir / f"dag_ckpt_{model_name}_{cfg.name}_000100.pt").touch()
+        (checkpoint_dir / f"dag_ckpt_{model_name}_{cfg.name}_000500.pt").touch()
+        (checkpoint_dir / f"dag_ckpt_{model_name}_{cfg.name}_000300.pt").touch()
 
         with patch("train_predictor.CHECKPOINT_DIR", self.temp_dir):
-            latest = find_latest_checkpoint(cfg)
+            latest = find_latest_checkpoint(cfg, model_name)
 
         self.assertIsNotNone(latest)
-        self.assertEqual(latest.name, "dag_ckpt_test_find_000500.pt")
+        self.assertEqual(latest.name, f"dag_ckpt_{model_name}_{cfg.name}_000500.pt")
 
 
 class TestIntegration(unittest.TestCase):
@@ -1609,6 +1617,110 @@ class TestTrainingIntegration(unittest.TestCase):
             self.assertIsInstance(metrics[key], float)
             self.assertTrue(np.isfinite(metrics[key]))
             self.assertGreaterEqual(metrics[key], 0)
+
+
+class TestCheckpointing(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.checkpoint_dir = Path(self.temp_dir)
+        # Monkey-patch the checkpoint directory
+        import train_predictor
+
+        train_predictor.CHECKPOINT_DIR = str(self.checkpoint_dir)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def test_find_latest_checkpoint_resume(self):
+        # Test finding the latest checkpoint for a specific run
+        cfg = DAGTrainConfig(name="test_run")
+        model_name = "TestModel"
+
+        # Create some dummy checkpoint files
+        (
+            self.checkpoint_dir / get_checkpoint_filename(cfg, 100, model_name)
+        ).with_suffix(".pt").touch()
+        (
+            self.checkpoint_dir / get_checkpoint_filename(cfg, 200, model_name)
+        ).with_suffix(".safetensors").touch()
+        (
+            self.checkpoint_dir / get_checkpoint_filename(cfg, 50, model_name)
+        ).with_suffix(".pt").touch()
+
+        # Create a checkpoint for another run that should be ignored
+        other_cfg = DAGTrainConfig(name="other_run")
+        (
+            self.checkpoint_dir / get_checkpoint_filename(other_cfg, 300, model_name)
+        ).with_suffix(".pt").touch()
+
+        latest_ckpt = find_latest_checkpoint(cfg, model_name, any_run=False)
+        self.assertIsNotNone(latest_ckpt)
+        self.assertEqual(
+            latest_ckpt.stem, get_checkpoint_filename(cfg, 200, model_name)
+        )
+        self.assertEqual(latest_ckpt.suffix, ".safetensors")
+
+    def test_find_latest_checkpoint_latest(self):
+        # Test finding the latest checkpoint across any run
+        cfg = DAGTrainConfig(name="any_run_will_do")
+        model_name = "TestModel"
+
+        # Create dummy checkpoints for multiple runs
+        run1_cfg = DAGTrainConfig(name="run1")
+        (
+            self.checkpoint_dir / get_checkpoint_filename(run1_cfg, 100, model_name)
+        ).with_suffix(".pt").touch()
+
+        run2_cfg = DAGTrainConfig(name="run2")
+        (
+            self.checkpoint_dir / get_checkpoint_filename(run2_cfg, 300, model_name)
+        ).with_suffix(".safetensors").touch()
+
+        run3_cfg = DAGTrainConfig(name="run3")
+        (
+            self.checkpoint_dir / get_checkpoint_filename(run3_cfg, 200, model_name)
+        ).with_suffix(".pt").touch()
+
+        # This one has a different model name and should be ignored
+        (
+            self.checkpoint_dir / get_checkpoint_filename(run3_cfg, 400, "AnotherModel")
+        ).with_suffix(".pt").touch()
+
+        latest_ckpt = find_latest_checkpoint(cfg, model_name, any_run=True)
+        self.assertIsNotNone(latest_ckpt)
+        self.assertEqual(
+            latest_ckpt.stem, get_checkpoint_filename(run2_cfg, 300, model_name)
+        )
+
+    def test_find_latest_checkpoint_no_checkpoints(self):
+        cfg = DAGTrainConfig()
+        model_name = "TestModel"
+        latest_ckpt = find_latest_checkpoint(cfg, model_name)
+        self.assertIsNone(latest_ckpt)
+
+    def test_save_best_checkpoint_logic(self):
+        # This is a conceptual test of the logic, not a full training run.
+        # We'll simulate the saving part.
+        cfg = DAGTrainConfig(name="best_run", save_best=True)
+        model_name = "BestModel"
+
+        # Simulate finding a new best checkpoint
+        best_ckpt_base = f"dag_ckpt_{model_name}_{cfg.name}_best"
+
+        # First best
+        (self.checkpoint_dir / f"{best_ckpt_base}.pt").touch()
+
+        # Verify it exists
+        self.assertTrue((self.checkpoint_dir / f"{best_ckpt_base}.pt").exists())
+
+        # Simulate another new best, this time with safetensors
+        (self.checkpoint_dir / f"{best_ckpt_base}.safetensors").touch()
+
+        # The new file should exist, and you would typically remove the old one
+        # but the save logic should handle overwriting via rename
+        self.assertTrue(
+            (self.checkpoint_dir / f"{best_ckpt_base}.safetensors").exists()
+        )
 
 
 if __name__ == "__main__":

@@ -115,15 +115,26 @@ def _safe_torch_save(obj, path: Path, retries: int = 1) -> None:
     for attempt in range(retries + 1):
         try:
             if _HAVE_ST and _all_tensors(obj):
-                _st.save_file(obj, str(tmp_path.with_suffix(".safetensors")))
-                tmp_path = tmp_path.with_suffix(".safetensors")
+                # Use safetensors for pure tensor checkpoints
+                final_path = path.with_suffix(".safetensors")
+                _st.save_file(obj, str(tmp_path))
             else:
-                fallback_path = tmp_path.with_suffix(".pt")
-                torch.save(obj, fallback_path, _use_new_zipfile_serialization=False)
-                tmp_path = fallback_path
+                # Fallback to torch.save for mixed-type or no-safetensors state
+                final_path = path.with_suffix(".pt")
+                torch.save(obj, tmp_path, _use_new_zipfile_serialization=False)
 
-            tmp_path.replace(path)
-            return
+            try:
+                # Perform atomic rename
+                tmp_path.rename(final_path)
+                return
+            except Exception as exc:
+                if attempt >= retries:
+                    raise CheckpointSaveError(
+                        f"Failed to rename temporary checkpoint {tmp_path} to {final_path}: {exc}"
+                    ) from exc
+                print(
+                    f"Retrying checkpoint rename ({attempt+1}/{retries}) due to error: {exc}"
+                )
         except Exception as exc:  # noqa: BLE001
             if attempt >= retries:
                 raise CheckpointSaveError(
@@ -154,8 +165,9 @@ class DAGTrainConfig:
     eval_iters: int = 50
     eval_only: bool = False
     always_save_checkpoint: bool = True
+    save_best: bool = False  # If True, save a single best checkpoint
     clear_previous_checkpoints: bool = False
-    init_from: str = "scratch"
+    init_from: str = "scratch"  # "scratch", "resume", or "latest"
 
     name: str = "dag_pretrain"  # Project/run name
 
@@ -311,12 +323,12 @@ def get_lr(it: int, *, cfg: DAGTrainConfig) -> float:
     return cfg.min_lr + coeff * (cfg.learning_rate - cfg.min_lr)
 
 
-def get_checkpoint_filename(cfg: DAGTrainConfig, iter_num: int) -> str:
-    """Generate checkpoint filename."""
-    return f"dag_ckpt_{cfg.name}_{iter_num:06d}.pt"
+def get_checkpoint_filename(cfg: DAGTrainConfig, iter_num: int, model_name: str) -> str:
+    """Generate checkpoint filename without extension."""
+    return f"dag_ckpt_{model_name}_{cfg.name}_{iter_num:06d}"
 
 
-def clean_previous_checkpoints(cfg: DAGTrainConfig) -> None:
+def clean_previous_checkpoints(cfg: DAGTrainConfig, model_name: str) -> None:
     """Remove previous checkpoints if requested."""
     if not cfg.clear_previous_checkpoints:
         return
@@ -325,7 +337,7 @@ def clean_previous_checkpoints(cfg: DAGTrainConfig) -> None:
     if not checkpoint_dir.exists():
         return
 
-    pattern = f"dag_ckpt_{cfg.name}_*.pt"
+    pattern = f"dag_ckpt_{model_name}_{cfg.name}_*.*"
     removed_count = 0
     for ckpt_file in checkpoint_dir.glob(pattern):
         try:
@@ -338,13 +350,19 @@ def clean_previous_checkpoints(cfg: DAGTrainConfig) -> None:
         print(f"Removed {removed_count} previous checkpoints")
 
 
-def find_latest_checkpoint(cfg: DAGTrainConfig) -> Path | None:
+def find_latest_checkpoint(
+    cfg: DAGTrainConfig, model_name: str, any_run: bool = False
+) -> Path | None:
     """Find the latest checkpoint for resuming training."""
     checkpoint_dir = Path(CHECKPOINT_DIR)
     if not checkpoint_dir.exists():
         return None
 
-    pattern = f"dag_ckpt_{cfg.name}_*.pt"
+    if any_run:
+        pattern = f"dag_ckpt_{model_name}_*_*.*"
+    else:
+        pattern = f"dag_ckpt_{model_name}_{cfg.name}_*.*"
+
     checkpoints = list(checkpoint_dir.glob(pattern))
 
     if not checkpoints:
@@ -651,8 +669,11 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         seed_offset = 0
         ddp_world_size = 1
 
+    model_name = PredictorOnlyModel.__name__
+
     # Clean previous checkpoints
-    clean_previous_checkpoints(cfg)
+    if master_process:
+        clean_previous_checkpoints(cfg, model_name)
 
     # W&B initialization
     if master_process:
@@ -752,21 +773,34 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         )
         model = PredictorOnlyModel(model_config)
         iter_num, best_val_loss = 0, 1e9
-    elif cfg.init_from == "resume":
-        print(f"[{time.time() - setup_start:.2f}s] Resuming from checkpoint")
-        ckpt_path = find_latest_checkpoint(cfg)
+    elif cfg.init_from in ["resume", "latest"]:
+        print(
+            f"[{time.time() - setup_start:.2f}s] Resuming from checkpoint (mode: {cfg.init_from})"
+        )
+        any_run = cfg.init_from == "latest"
+        ckpt_path = find_latest_checkpoint(cfg, model_name, any_run=any_run)
+
         if ckpt_path is None:
-            raise ValueError(f"No checkpoint found for resuming")
-        checkpoint = torch.load(ckpt_path, map_location=device)
-        # Create model with saved config
-        saved_config = PredictorOnlyConfig(**checkpoint["model_config"])
-        model = PredictorOnlyModel(saved_config)
-        state_dict = {
-            k.removeprefix("_orig_mod."): v for k, v in checkpoint["model"].items()
-        }
-        model.load_state_dict(state_dict)
-        iter_num = checkpoint["iter_num"]
-        best_val_loss = checkpoint["best_val_loss"]
+            if any_run:
+                print(
+                    f"[{time.time() - setup_start:.2f}s] No checkpoint found. Starting from scratch."
+                )
+                model = PredictorOnlyModel(model_config)
+                iter_num, best_val_loss = 0, 1e9
+            else:
+                raise ValueError(f"No checkpoint found for run '{cfg.name}' to resume.")
+        else:
+            print(f"[{time.time() - setup_start:.2f}s] Loading checkpoint {ckpt_path}")
+            checkpoint = torch.load(ckpt_path, map_location=device)
+            # Create model with saved config
+            saved_config = PredictorOnlyConfig(**checkpoint["model_config"])
+            model = PredictorOnlyModel(saved_config)
+            state_dict = {
+                k.removeprefix("_orig_mod."): v for k, v in checkpoint["model"].items()
+            }
+            model.load_state_dict(state_dict)
+            iter_num = checkpoint["iter_num"]
+            best_val_loss = checkpoint["best_val_loss"]
     else:
         raise ValueError(f"Unsupported init_from {cfg.init_from}")
 
@@ -871,13 +905,35 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     # Store validation metrics for combined logging with training metrics
                     pending_val_metrics = val_log_dict
 
-                if (
-                    cfg.always_save_checkpoint
-                    or eval_losses["total_loss"] < best_val_loss
-                ):
+                is_new_best = eval_losses["total_loss"] < best_val_loss
+                if is_new_best:
                     best_val_loss = eval_losses["total_loss"]
-                    if iter_num > 0:
-                        checkpoint_path = get_checkpoint_filename(cfg, iter_num)
+
+                if iter_num > 0:
+                    if cfg.save_best and is_new_best:
+                        # Save a single checkpoint for the best model
+                        checkpoint_base = (
+                            f"dag_ckpt_{raw_model.__class__.__name__}_{cfg.name}_best"
+                        )
+                        checkpoint_path = Path(CHECKPOINT_DIR) / checkpoint_base
+                        print(f"saving new best checkpoint to {checkpoint_path}")
+                        checkpoint = {
+                            "model": raw_model.state_dict(),
+                            "optimizer": optimizer.state_dict(),
+                            "model_config": model_config.__dict__,
+                            "iter_num": iter_num,
+                            "best_val_loss": best_val_loss,
+                        }
+                        _safe_torch_save(checkpoint, checkpoint_path)
+
+                    if cfg.always_save_checkpoint or (
+                        not cfg.save_best and is_new_best
+                    ):
+                        # Save a checkpoint with the iteration number
+                        checkpoint_base = get_checkpoint_filename(
+                            cfg, iter_num, raw_model.__class__.__name__
+                        )
+                        checkpoint_path = Path(CHECKPOINT_DIR) / checkpoint_base
                         print(f"saving checkpoint to {checkpoint_path}")
                         checkpoint = {
                             "model": raw_model.state_dict(),
@@ -886,7 +942,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                             "iter_num": iter_num,
                             "best_val_loss": best_val_loss,
                         }
-                        _safe_torch_save(checkpoint, Path(checkpoint_path))
+                        _safe_torch_save(checkpoint, checkpoint_path)
 
                 model.train()
 
