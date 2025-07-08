@@ -161,10 +161,12 @@ class DAGTrainConfig:
 
     # DAG dataset parameters
     max_dag_depth: int = 8
-    value_range: tuple[float, float] = (
-        -100.0,
-        100.0,
-    )  # Allow negative values for meaningful sign prediction
+    max_digits: int = (
+        4  # Maximum number of integer digits for uniform digit distribution
+    )
+    max_decimal_places: int = (
+        None  # Auto-derived from max_digits for uniform string distribution
+    )
     train_examples_per_batch: int = 1000
     val_examples_per_batch: int = 100
 
@@ -720,9 +722,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         max_depth=cfg.dag_depth,  # All examples have exactly this depth to match the model
         train_seed=cfg.train_seed,
         val_seed=cfg.val_seed,
-        value_range=cfg.value_range,
         english_conversion_rate=cfg.english_conversion_rate,
         permutation_probability=cfg.permutation_probability,
+        max_digits=cfg.max_digits,
+        max_decimal_places=cfg.max_decimal_places,
     )
 
     # --------------------------------------------------------------------- #

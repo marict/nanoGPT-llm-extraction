@@ -64,9 +64,11 @@ from data.dagset import StreamingDAGDataset
 
 # Create custom dataset
 dataset = StreamingDAGDataset(
-    max_depth=5,
-    value_range=(-20.0, 20.0),  # Custom value range
-    seed=123,
+    max_depth=6,
+    convert_to_english=True,
+    english_conversion_probability=0.3,
+    max_digits=4,  # Uniform digit count distribution
+    max_decimal_places=3,  # Uniform decimal places
 )
 
 # Generate specific amounts

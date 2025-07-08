@@ -29,7 +29,10 @@ dataset = "dagset"  # Use DAG dataset for predictor training
 
 # DAG dataset parameters
 max_dag_depth = 4
-value_range = (-10.0, 10.0)  # Allow negative values for meaningful sign prediction
+max_digits = 4  # Maximum number of integer digits for uniform digit distribution
+max_decimal_places = (
+    None  # Auto-derived from max_digits for uniform string distribution
+)
 
 train_examples_per_batch = 100
 val_examples_per_batch = 20

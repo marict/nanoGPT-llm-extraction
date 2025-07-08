@@ -21,10 +21,8 @@ dataset = "dagset"  # Use DAG dataset for predictor training
 
 # DAG dataset parameters
 max_dag_depth = 6  # Match the model dag_depth for consistency
-value_range = (
-    -10000.0,
-    10000.0,
-)  # Allow negative values for meaningful sign prediction
+max_digits = 4  # Maximum number of integer digits for uniform digit distribution
+max_decimal_places = 6  # Seems like a reasonable rounding for the numbers initially
 
 # OPTIMIZED: Significantly increase data generation for better GPU utilization
 train_examples_per_batch = 8000  # Increased from 4000 - match larger batch sizes

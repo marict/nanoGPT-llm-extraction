@@ -59,7 +59,7 @@ def test_mixed_conversion():
         # Generate a DAG example
         depth = 2 + i % 3  # Depths 2, 3, 4
         dag_example = generate_single_dag_example(
-            depth=depth, value_range=(1.0, 100.0), rng=random.Random(100 + i)
+            depth=depth, max_digits=3, rng=random.Random(100 + i)
         )
 
         # Apply mixed conversion

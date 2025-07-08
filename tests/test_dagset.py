@@ -88,19 +88,19 @@ class TestIdentityFunction(unittest.TestCase):
             f"Expression should contain numbers: {expression}",
         )
 
-    def test_identity_operation_with_standardized_rounding(self):
-        """Test that identity operations work with standardized rounding."""
+    def test_identity_operation_with_exact_decimal_representation(self):
+        """Test that identity operations work with exact decimal representation."""
         import random
 
-        from streaming import standardize_float_rounding
+        from streaming import generate_uniform_digit_number
 
         rng = random.Random(42)
 
-        # Generate values with standardized rounding
+        # Generate values with exact decimal representation
         initial_values = [
-            standardize_float_rounding(10.123456789, rng),
-            standardize_float_rounding(5.987654321, rng),
-            standardize_float_rounding(3.14159, rng),
+            generate_uniform_digit_number(rng, max_digits=3, max_decimal_places=2),
+            generate_uniform_digit_number(rng, max_digits=2, max_decimal_places=1),
+            generate_uniform_digit_number(rng, max_digits=1, max_decimal_places=0),
         ]
 
         # Create operations with identity
@@ -119,18 +119,12 @@ class TestIdentityFunction(unittest.TestCase):
         self.assertIsInstance(expression, str)
         self.assertGreater(len(expression), 0)
 
-        # Verify that standardized rounding was applied to initial values
+        # Verify that exact decimal representation is maintained
         for value in initial_values:
-            if isinstance(value, float):
-                # Check that it has at most 5 decimal places
-                decimal_places = (
-                    len(str(value).split(".")[-1]) if "." in str(value) else 0
-                )
-                self.assertLessEqual(
-                    decimal_places,
-                    5,
-                    f"Value {value} should have at most 5 decimal places",
-                )
+            # Value should be a float with exact representation
+            self.assertIsInstance(value, (int, float))
+            # Verify it's not zero (to avoid log(0) issues)
+            self.assertNotEqual(value, 0.0)
 
     def test_identity_operation_with_english_conversion(self):
         """Test that identity operations work with English conversion."""

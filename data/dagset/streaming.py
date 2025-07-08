@@ -26,37 +26,6 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from models.dag_model import OP_NAMES
 
 
-def standardize_float_rounding(value: float, rng: random.Random = None) -> float:
-    """Standardize float rounding to 0-5 decimal places.
-
-    Args:
-        value: The float value to round
-        rng: Random number generator for choosing decimal places
-
-    Returns:
-        Float rounded to 0-5 decimal places (never zero)
-    """
-    if rng is None:
-        rng = random
-
-    # Choose number of decimal places (0-5)
-    decimal_places = rng.randint(0, 5)
-
-    # Round to the chosen number of decimal places
-    rounded_value = round(value, decimal_places)
-
-    # Ensure we never return exactly zero to avoid log(0) domain errors
-    if rounded_value == 0.0:
-        # Use a small positive value instead
-        rounded_value = 0.01 if decimal_places >= 2 else 1
-
-    # Convert to int if no decimal places to avoid .0 at the end
-    if decimal_places == 0:
-        return int(rounded_value)
-
-    return rounded_value
-
-
 def convert_number_to_words(number, use_words: bool = True) -> str:
     """Convert a number to its English word equivalent.
 
@@ -78,7 +47,7 @@ def convert_number_to_words(number, use_words: bool = True) -> str:
     is_negative = number < 0
     abs_number = abs(number)
 
-    # Handle integers (including those created by standardize_float_rounding)
+    # Handle integers
     if isinstance(abs_number, int) or (
         isinstance(abs_number, float) and abs_number.is_integer()
     ):
@@ -215,19 +184,89 @@ class DAGExample:
     operations: torch.Tensor  # for training - [D x num_ops] one-hot tensor
 
 
+def generate_uniform_digit_number(
+    rng: random.Random,
+    max_digits: int = 4,
+    max_decimal_places: int = None,
+) -> float:
+    """Generate a number with uniform distribution over digit count combinations.
+
+    This creates uniform distribution over string representations that the tokenizer sees,
+    rather than uniform distribution over numerical values.
+
+    Args:
+        rng: Random number generator
+        max_digits: Maximum number of integer digits (1 to max_digits)
+        max_decimal_places: Maximum decimal places. If None, derived as max_digits-1
+                           to create more uniform string length distribution
+
+    Returns:
+        Generated number as float
+    """
+    if max_decimal_places is None:
+        # Derive decimal places to create more uniform string lengths
+        # max_digits=4 -> max_decimal_places=3 gives good balance
+        max_decimal_places = max(0, max_digits - 1)
+
+    # Uniformly choose the number of integer digits (1 to max_digits)
+    num_integer_digits = rng.randint(1, max_digits)
+
+    # Uniformly choose the number of decimal places (0 to max_decimal_places)
+    # 0 decimal places = integer
+    num_decimal_places = rng.randint(0, max_decimal_places)
+
+    # Generate integer part with the chosen number of digits
+    if num_integer_digits == 1:
+        # 1-digit: 1 to 9 (excluding 0 to avoid log(0) issues)
+        integer_part = rng.randint(1, 9)
+    else:
+        # n-digit: from 10^(n-1) to 10^n - 1
+        min_val = 10 ** (num_integer_digits - 1)
+        max_val = 10**num_integer_digits - 1
+        integer_part = rng.randint(min_val, max_val)
+
+    # Generate decimal part with the chosen number of decimal places
+    if num_decimal_places == 0:
+        # Integer (no decimal part)
+        decimal_part = 0.0
+    else:
+        # Generate exactly num_decimal_places digits after decimal
+        # For n decimal places: from 0.1...1 to 0.9...9 (n digits)
+        min_decimal = 10 ** (num_decimal_places - 1)
+        max_decimal = 10**num_decimal_places - 1
+        decimal_digits = rng.randint(min_decimal, max_decimal)
+        decimal_part = decimal_digits / (10**num_decimal_places)
+
+    # Combine integer and decimal parts
+    magnitude = integer_part + decimal_part
+
+    # Randomly assign sign
+    sign = rng.choice([-1, 1])
+    value = sign * magnitude
+
+    return value
+
+
 def generate_random_dag_plan(
     depth: int,
     num_initial_values: int = 1,
-    value_range: tuple[float, float] = (-10.0, 10.0),
     rng: random.Random = None,
+    max_digits: int = 4,  # Maximum number of integer digits (1=1-digit, 2=2-digit, etc.)
+    max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
 ) -> tuple[list[float], list[str]]:
     if rng is None:
         rng = random
-    # Generate random initial values with standardized rounding
-    initial_values = [
-        standardize_float_rounding(rng.uniform(value_range[0], value_range[1]), rng)
-        for _ in range(num_initial_values)
-    ]
+
+    # Generate random initial values with uniform digit count distribution
+    # for both integer part and decimal part
+    initial_values = []
+    for _ in range(num_initial_values):
+        # Generate number with uniform digit distribution
+        value = generate_uniform_digit_number(rng, max_digits, max_decimal_places)
+
+        # Apply standardized rounding (though we already have exact decimal representation)
+        initial_values.append(value)
+
     operations = [rng.choice(OP_NAMES) for _ in range(depth)]
     return initial_values, operations
 
@@ -475,22 +514,24 @@ def convert_plan_to_tensors(
 def generate_single_dag_example(
     depth: int,
     num_initial_values: int = None,
-    value_range: tuple[float, float] = (0.1, 100.0),
     rng: random.Random = None,
     convert_to_english: bool = False,
     conversion_probability: float = 0.3,
     permutation_probability: float = 0.5,
+    max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
+    max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
 ) -> DAGExample:
     """Generate a single DAG computation example as a simple math expression.
 
     Args:
         depth: Depth of the DAG computation
         num_initial_values: Number of initial values
-        value_range: Range for values in the expression
         rng: Random number generator to use
         convert_to_english: Whether to convert to English words
         conversion_probability: Probability of English conversion
         permutation_probability: Probability of applying permutation (0.0 = disabled)
+        max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
+        max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
 
     Returns:
         DAG computation example with simple expression format
@@ -503,9 +544,9 @@ def generate_single_dag_example(
         # For DAG with depth n, we need n+1 initial values
         num_initial_values = depth + 1
 
-    # Step 1. Generate random dag plan
+    # Step 1. Generate random dag plan with uniform digit count distribution
     initial_values, operations = generate_random_dag_plan(
-        depth, num_initial_values, value_range, rng
+        depth, num_initial_values, rng, max_digits, max_decimal_places
     )
 
     # Step 2: Convert DAG plan to simple expression string for data
@@ -538,11 +579,12 @@ def generate_dag_dataset(
     num_examples: int = 10000,
     max_depth: int = 8,
     num_initial_values: int = None,
-    value_range: tuple[float, float] = (0.1, 100.0),
     rng: random.Random = None,
     convert_to_english: bool = False,
     conversion_probability: float = 0.3,
     permutation_probability: float = 0.5,
+    max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
+    max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
 ) -> list[DAGExample]:
     """Generate a dataset of DAG computation examples (structure-only).
 
@@ -550,11 +592,12 @@ def generate_dag_dataset(
         num_examples: Number of examples to generate
         max_depth: DAG depth (all examples will have this depth)
         num_initial_values: Number of initial values per example
-        value_range: Range for initial values
         rng: Random number generator to use
         convert_to_english: Whether to convert to English words
         conversion_probability: Probability of English conversion
         permutation_probability: Probability of applying permutation (0.0 = disabled)
+        max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
+        max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
 
     Returns:
         List of DAG examples with structure only (no computed results)
@@ -573,11 +616,12 @@ def generate_dag_dataset(
         example = generate_single_dag_example(
             depth,
             num_initial_values,
-            value_range,
             rng,
             convert_to_english,
             conversion_probability,
             permutation_probability,
+            max_digits,
+            max_decimal_places,
         )
         examples.append(example)
 
@@ -591,36 +635,39 @@ class StreamingDAGDataset:
         self,
         max_depth: int = 8,
         num_initial_values: int = None,
-        value_range: tuple[float, float] = (0.1, 100.0),
         seed: int = 42,
         tokenizer: str = "gpt2",
         convert_to_english: bool = True,
         english_conversion_probability: float = 0.3,
         permutation_probability: float = 0.5,
+        max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
+        max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
     ):
         """Initialize the streaming DAG dataset.
 
         Args:
             max_depth: DAG depth (all examples will have this depth)
             num_initial_values: Number of initial values per example
-            value_range: Range for initial values
             seed: Random seed for reproducibility
             tokenizer: Tokenizer to use (default: gpt2)
             convert_to_english: Whether to potentially convert numbers/operators to English
             english_conversion_probability: Probability of converting to English (0.0 to 1.0)
             permutation_probability: Probability of applying permutation (0.0 = disabled)
+            max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
+            max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
         """
         self.max_depth = max_depth
         # Set num_initial_values to match DAG predictor expectations
         self.num_initial_values = (
             num_initial_values if num_initial_values is not None else max_depth + 1
         )
-        self.value_range = value_range
         self.seed = seed
         self.tokenizer = tokenizer
         self.convert_to_english = convert_to_english
         self.english_conversion_probability = english_conversion_probability
         self.permutation_probability = permutation_probability
+        self.max_digits = max_digits
+        self.max_decimal_places = max_decimal_places
 
         # Initialize tokenizer
         self.enc = get_encoding(tokenizer)
@@ -643,11 +690,12 @@ class StreamingDAGDataset:
             num_examples=batch_size,
             max_depth=self.max_depth,
             num_initial_values=self.num_initial_values,
-            value_range=self.value_range,
             rng=self.random_state,
             convert_to_english=self.convert_to_english,
             conversion_probability=self.english_conversion_probability,
             permutation_probability=self.permutation_probability,
+            max_digits=self.max_digits,
+            max_decimal_places=self.max_decimal_places,
         )
 
         # Convert to text
@@ -803,6 +851,8 @@ def create_dag_dataloaders(
     convert_to_english: bool = False,
     english_conversion_probability: float = 0.3,
     permutation_probability: float = 0.5,
+    max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
+    max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
 ) -> tuple[DAGDataLoader, DAGDataLoader]:
     """Create train and validation data loaders.
 
@@ -817,6 +867,8 @@ def create_dag_dataloaders(
         convert_to_english: Whether to potentially convert numbers/operators to English
         english_conversion_probability: Probability of converting to English (0.0 to 1.0)
         permutation_probability: Probability of applying permutation (0.0 = disabled)
+        max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
+        max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
 
     Returns:
         Tuple of (train_loader, val_loader)
@@ -828,6 +880,8 @@ def create_dag_dataloaders(
         convert_to_english=convert_to_english,
         english_conversion_probability=english_conversion_probability,
         permutation_probability=permutation_probability,
+        max_digits=max_digits,
+        max_decimal_places=max_decimal_places,
     )
 
     val_dataset = StreamingDAGDataset(
@@ -836,6 +890,8 @@ def create_dag_dataloaders(
         convert_to_english=convert_to_english,
         english_conversion_probability=english_conversion_probability,
         permutation_probability=permutation_probability,
+        max_digits=max_digits,
+        max_decimal_places=max_decimal_places,
     )
 
     # Create data loaders
@@ -866,38 +922,41 @@ class DAGStructureDataset:
         self,
         max_depth: int = 8,
         num_initial_values: int = None,
-        value_range: tuple[float, float] = (0.1, 100.0),
         seed: int = 42,
         tokenizer: str = "gpt2",
         max_seq_length: int = 512,
         convert_to_english: bool = False,
         english_conversion_probability: float = 0.3,
         permutation_probability: float = 0.5,
+        max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
+        max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
     ):
         """Initialize the DAG structure dataset.
 
         Args:
             max_depth: DAG depth (all examples will have this depth)
             num_initial_values: Number of initial values per example
-            value_range: Range for initial values
             seed: Random seed
             tokenizer: Tokenizer to use
             max_seq_length: Maximum sequence length for text inputs
             convert_to_english: Whether to potentially convert numbers/operators to English
             english_conversion_probability: Probability of converting to English (0.0 to 1.0)
             permutation_probability: Probability of applying permutation (0.0 = disabled)
+            max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
+            max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
         """
         self.max_depth = max_depth
         # Set num_initial_values to match DAG predictor expectations
         self.num_initial_values = (
             num_initial_values if num_initial_values is not None else max_depth + 1
         )
-        self.value_range = value_range
         self.seed = seed
         self.max_seq_length = max_seq_length
         self.convert_to_english = convert_to_english
         self.english_conversion_probability = english_conversion_probability
         self.permutation_probability = permutation_probability
+        self.max_digits = max_digits
+        self.max_decimal_places = max_decimal_places
 
         # Initialize tokenizer
         self.enc = get_encoding(tokenizer)
@@ -924,11 +983,12 @@ class DAGStructureDataset:
         example = generate_single_dag_example(
             depth=depth,
             num_initial_values=self.num_initial_values,
-            value_range=self.value_range,
             rng=self.random_state,
             convert_to_english=self.convert_to_english,
             conversion_probability=self.english_conversion_probability,
             permutation_probability=self.permutation_probability,
+            max_digits=self.max_digits,
+            max_decimal_places=self.max_decimal_places,
         )
 
         # Extract text
@@ -1069,9 +1129,10 @@ def create_dag_structure_dataloaders(
     max_depth: int = 8,
     train_seed: int = 42,
     val_seed: int = 43,
-    value_range: tuple[float, float] = (-100.0, 100.0),
     english_conversion_rate: float = 0.3,
     permutation_probability: float = 0.5,
+    max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
+    max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
 ) -> Tuple[Iterator, Iterator]:
     """Create train and validation structure dataloaders.
 
@@ -1081,9 +1142,10 @@ def create_dag_structure_dataloaders(
         max_depth: DAG depth (all examples will have this exact depth)
         train_seed: Seed for training data
         val_seed: Seed for validation data
-        value_range: Range for initial values (allows negative values for meaningful sign prediction)
         english_conversion_rate: Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
         permutation_probability: Probability of applying permutation (0.0 = disabled)
+        max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
+        max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
 
     Returns:
         Tuple of (train_loader, val_loader)
@@ -1095,19 +1157,21 @@ def create_dag_structure_dataloaders(
     train_dataset = DAGStructureDataset(
         max_depth=max_depth,
         seed=train_seed,
-        value_range=value_range,
         convert_to_english=convert_to_english,
         english_conversion_probability=english_conversion_rate,
         permutation_probability=permutation_probability,
+        max_digits=max_digits,
+        max_decimal_places=max_decimal_places,
     )
 
     val_dataset = DAGStructureDataset(
         max_depth=max_depth,
         seed=val_seed,
-        value_range=value_range,
         convert_to_english=convert_to_english,
         english_conversion_probability=english_conversion_rate,
         permutation_probability=permutation_probability,
+        max_digits=max_digits,
+        max_decimal_places=max_decimal_places,
     )
 
     # Create dataloaders
@@ -1124,18 +1188,63 @@ if __name__ == "__main__":
 
     # Test the main streaming dataset (used in train.py)
     print("\nTesting StreamingDAGDataset:")
-    dataset = StreamingDAGDataset(max_depth=3, seed=42)
+    dataset = StreamingDAGDataset(
+        max_depth=3, seed=42, max_digits=3
+    )  # max_decimal_places auto-derived as 2
     tokens, text = dataset.generate_batch(3)
     print(f"Generated {len(tokens)} tokens from 3 examples")
     print(f"Sample text:\n{text[:200]}...")
 
     # Test the structure dataset (used in train_predictor.py)
     print("\nTesting DAGStructureDataset:")
-    structure_dataset = DAGStructureDataset(max_depth=3, seed=42)
+    structure_dataset = DAGStructureDataset(
+        max_depth=3, seed=42, max_digits=3
+    )  # max_decimal_places auto-derived as 2
     texts, structures = structure_dataset.generate_batch(2)
     print(f"Generated {len(texts)} structure examples")
     print(f"Structure keys: {list(structures.keys())}")
     print(f"Initial signs shape: {structures['initial_sgn'].shape}")
     print(f"Operation probs shape: {structures['operation_probs'].shape}")
+
+    # Demonstrate integer + decimal digit distribution improvement
+    print("\nTesting auto-derived integer+decimal digit-uniform distribution:")
+    print(f"max_digits=3 -> max_decimal_places auto-derived as {max(0, 3-1)} = 2")
+    from collections import Counter
+
+    def analyze_number_format(num_str):
+        """Analyze number format: (integer_digits, decimal_places)"""
+        if "." in num_str:
+            integer_part, decimal_part = num_str.split(".")
+            integer_digits = len(integer_part.lstrip("-"))
+            decimal_places = len(decimal_part)
+        else:
+            integer_digits = len(num_str.lstrip("-"))
+            decimal_places = 0
+        return (integer_digits, decimal_places)
+
+    format_counts = Counter()
+    for i in range(200):
+        example = dataset.generate_batch(1)[1].split("\n---\n")[0]
+        # Extract numbers from the text (simple approach)
+        import re
+
+        numbers = re.findall(r"-?\d+\.?\d*", example)
+        for num_str in numbers:
+            if num_str not in ["-", ""]:  # Skip non-numbers
+                format_tuple = analyze_number_format(num_str)
+                format_counts[format_tuple] += 1
+
+    print("Number format distribution (integer_digits, decimal_places):")
+    total = sum(format_counts.values())
+    for format_tuple in sorted(format_counts.keys()):
+        count = format_counts[format_tuple]
+        percent = 100 * count / total if total > 0 else 0
+        int_digits, dec_places = format_tuple
+        if dec_places == 0:
+            print(f"  {int_digits}-digit integers: {count:3d} ({percent:5.1f}%)")
+        else:
+            print(
+                f"  {int_digits}-digit + {dec_places}-decimal: {count:3d} ({percent:5.1f}%)"
+            )
 
     print("\n✅ Example completed successfully!")

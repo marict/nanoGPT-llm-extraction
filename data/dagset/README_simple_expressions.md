@@ -111,7 +111,8 @@ train_loader, val_loader = create_dag_structure_dataloaders(
 ## Configuration Options
 
 - `max_depth`: Controls expression complexity (depth=2 → 3 terms, 2 operators)
-- `value_range`: Range for numeric values (default: (0.1, 100.0))
+- `max_digits`: Maximum number of integer digits for uniform digit distribution (default: 4)
+- `max_decimal_places`: Maximum decimal places. If None, auto-derived as max_digits-1 (default: None)
 - `convert_to_english`: Enable English word conversion
 - `english_conversion_probability`: Probability of conversion (0.0 to 1.0)
   - **Note**: For `train_predictor.py` jobs, English conversion is hard-set to 30% and cannot be configured
