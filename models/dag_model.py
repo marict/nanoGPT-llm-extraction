@@ -1,13 +1,7 @@
 """
-Full definition of a GPT Language Model with optional DAG augmentation.
+GPT Language Model with optional DAG augmentation.
 When dag_depth=0, behaves as a standard GPT model.
 When dag_depth>0, uses differentiable DAG for enhanced reasoning.
-
-References:
-1) the official GPT-2 TensorFlow implementation released by OpenAI:
-https://github.com/openai/gpt-2/blob/master/src/model.py
-2) huggingface/transformers PyTorch implementation:
-https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 """
 
 import inspect
@@ -118,9 +112,8 @@ class Block(nn.Module):
         return x
 
 
-# Log-space arithmetic utilities
-LOG_LIM = 10.0  # Bound on log-magnitudes to avoid numerical instabilities
-GRAD_CAP = 0.3  # try 0.1–10.0 depending on bfloat16/float16 range
+LOG_LIM = 10.0
+GRAD_CAP = 0.3
 
 
 def _clip_log(log_t: torch.Tensor) -> torch.Tensor:
@@ -129,65 +122,28 @@ def _clip_log(log_t: torch.Tensor) -> torch.Tensor:
 
 
 def _rms_rescale(prev_logs: torch.Tensor, new_log: torch.Tensor) -> torch.Tensor:
-    """Return a RMS-rescaled version of *new_log* so that, when appended to
-    *prev_logs*, the running RMS equals ``LOG_LIM``.
-
-    No in-place mutation → avoids autograd versioning issues.
-
-    Args:
-        prev_logs: (B,T,S) tensor with existing log magnitudes.
-        new_log:   (B,T)   tensor – the candidate log magnitude to append.
-    Returns:
-        new_log_scaled: (B,T) tensor, rescaled.
-    """
+    """Return a RMS-rescaled version of new_log to keep running RMS at LOG_LIM."""
     slice_ = torch.cat((prev_logs, new_log.unsqueeze(-1)), dim=-1)
     rms = torch.sqrt((slice_**2).mean(dim=-1, keepdim=True) + 1e-6)
     scale = (LOG_LIM / rms).clamp(max=1.0)
     return new_log * scale.squeeze(-1)
 
 
-# Debug utility
 ENABLE_DEBUG_NAN_CHECKS = os.getenv("DAGGPT_DEBUG_NANS", "0") == "1"
-if ENABLE_DEBUG_NAN_CHECKS:
-    print("dag_model: DEBUG_NAN_CHECKS is enabled")
-
 
 def _debug_check(op_name: str, *tensors: torch.Tensor):
-    """Check tensors for NaN/Inf values and print detailed debug info when found."""
+    """Check tensors for NaN/Inf values and print debug info when found."""
+    if not ENABLE_DEBUG_NAN_CHECKS:
+        return
+        
     for idx, t in enumerate(tensors):
-        if t is None:
+        if t is None or torch.isfinite(t).all():
             continue
 
-        if torch.isfinite(t).all():
-            continue
-
-        nan_mask = torch.isnan(t)
-        inf_mask = torch.isinf(t)
-        nan_cnt = int(nan_mask.sum())
-        inf_cnt = int(inf_mask.sum())
-
-        print(
-            f"[DEBUG] {op_name}: tensor#{idx} shape={tuple(t.shape)} dtype={t.dtype} "
-            f"-> NaN: {nan_cnt}  Inf: {inf_cnt}"
-        )
-
-        finite_vals = t[torch.isfinite(t)].float()
-        if finite_vals.numel() > 0:
-            stats = (
-                float(finite_vals.min()),
-                float(finite_vals.mean()),
-                float(finite_vals.max()),
-            )
-            print(f"           finite stats (min/mean/max): {stats}")
-
-        # Show first 5 bad indices for debugging
-        bad_idx = (~torch.isfinite(t)).nonzero(as_tuple=False)
-        for j, coord in enumerate(bad_idx[:5]):
-            coord_tuple = tuple(coord.tolist())
-            bad_val = t[coord_tuple].item()
-            print(f"           [{j}] index={coord_tuple} value={bad_val}")
-
-        raise RuntimeError("NaN/Inf detected; see logs above for details")
+        nan_cnt = int(torch.isnan(t).sum())
+        inf_cnt = int(torch.isinf(t).sum())
+        print(f"[DEBUG] {op_name}: tensor#{idx} -> NaN: {nan_cnt} Inf: {inf_cnt}")
+        raise RuntimeError("NaN/Inf detected")
 
 
 def multiply_log_space(
@@ -201,8 +157,7 @@ def multiply_log_space(
     log_out = lx + ly
     if not ignore_clip:
         log_out = _clip_log(log_out)
-    if ENABLE_DEBUG_NAN_CHECKS:
-        _debug_check("multiply_log_space", sgn_out, log_out)
+    _debug_check("multiply_log_space", sgn_out, log_out)
     return sgn_out, log_out
 
 
@@ -217,16 +172,14 @@ def divide_log_space(
     log_out = lx - ly
     if not ignore_clip:
         log_out = _clip_log(log_out)
-    if ENABLE_DEBUG_NAN_CHECKS:
-        _debug_check("divide_log_space", sgn_out, log_out)
+    _debug_check("divide_log_space", sgn_out, log_out)
     return sgn_out, log_out
 
 
-# Helper when operands share the same sign
 def _add_logs_same_sign(
     sgn: torch.Tensor, lx: torch.Tensor, ly: torch.Tensor, ignore_clip: bool = False
 ):
-    # Perform high-precision accumulation to avoid bf16 overflows
+    """Helper for adding logs with same sign."""
     lx32, ly32 = lx.float(), ly.float()
     l_out = torch.logaddexp(lx32, ly32).to(lx.dtype)
     if not ignore_clip:
@@ -241,20 +194,7 @@ def add_log_space(
     ly: torch.Tensor,
     ignore_clip: bool = False,
 ):
-    """Addition in log-space with sign handling (vectorised).
-    Re-written without data-dependent Python control-flow so Torch Dynamo can
-    capture it. All decisions are expressed with tensor operations.
-
-    Args:
-        sx: (B,T) tensor of signs
-        lx: (B,T) tensor of log magnitudes
-        sy: (B,T) tensor of signs
-        ly: (B,T) tensor of log magnitudes
-        ignore_clip: if True, skip clipping for testing
-    Returns:
-        s_out: (B,T) tensor of signs
-        l_out: (B,T) tensor of log magnitudes
-    """
+    """Addition in log-space with sign handling."""
 
     zero_x = sx == 0
     zero_y = sy == 0
@@ -289,12 +229,10 @@ def add_log_space(
     small_log = torch.where(bigger_is_x, ly, lx)
     big_sgn = torch.where(bigger_is_x, sx, sy)
 
-    # Ensure delta < -1e-3 to keep gradients bounded
     delta32 = (small_log - big_log).float().clamp(max=-1e-3, min=-LOG_LIM)
-    diff32 = torch.log1p(-torch.exp(delta32))  # safe in fp32
+    diff32 = torch.log1p(-torch.exp(delta32))
     diff = diff32.to(lx.dtype)
 
-    # Perfect cancellation case
     zero_res = small_log == big_log
     new_log = torch.where(zero_res, torch.zeros_like(big_log), big_log + diff)
     new_sgn = torch.where(zero_res, torch.zeros_like(big_sgn), big_sgn)
@@ -302,11 +240,9 @@ def add_log_space(
     s_out = torch.where(opp_branch, new_sgn, s_out)
     l_out = torch.where(opp_branch, new_log, l_out)
 
-    # Final clipping and debug checks
     if not ignore_clip:
         l_out = _clip_log(l_out)
-    if ENABLE_DEBUG_NAN_CHECKS:
-        _debug_check("add_log_space", s_out, l_out)
+    _debug_check("add_log_space", s_out, l_out)
     return s_out, l_out
 
 
@@ -319,8 +255,7 @@ def subtract_log_space(
 ):
     """Subtraction in log-space by negating the second operand."""
     s_out, l_out = add_log_space(sx, lx, -sy, ly, ignore_clip)
-    if ENABLE_DEBUG_NAN_CHECKS:
-        _debug_check("subtract_log_space", s_out, l_out)
+    _debug_check("subtract_log_space", s_out, l_out)
     return s_out, l_out
 
 
@@ -773,16 +708,14 @@ class DifferentiableDAG(nn.Module):
         # Generate unified plan (initial values + operations)
         initial_sgn, initial_log, operation_probs = self.plan_predictor(original_hidden)
 
-        if ENABLE_DEBUG_NAN_CHECKS:
-            _debug_check("initial_values", initial_sgn, initial_log)
+        _debug_check("initial_values", initial_sgn, initial_log)
 
         # Execute stack-based computation
         final_sgn, final_log = stack_based_execution(
             initial_sgn, initial_log, operation_probs
         )
 
-        if ENABLE_DEBUG_NAN_CHECKS:
-            _debug_check("final_values", final_sgn, final_log)
+        _debug_check("final_values", final_sgn, final_log)
 
         # Convert result to embedding
         final_feat = torch.stack((final_sgn, final_log), dim=-1)
@@ -950,8 +883,7 @@ class GPT(nn.Module):
         # Store for logging
         self.last_original_hidden = original_hidden
 
-        if ENABLE_DEBUG_NAN_CHECKS:
-            _debug_check("original_hidden", original_hidden)
+        _debug_check("original_hidden", original_hidden)
 
         # Run DAG processing
         dag_hidden = self.dag(original_hidden)

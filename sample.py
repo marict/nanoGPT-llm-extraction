@@ -18,21 +18,14 @@ from python_version_check import check_python_version
 check_python_version()
 
 # -----------------------------------------------------------------------------
-# Default sample prompt - can be overridden via config
 DEFAULT_SAMPLE_PROMPT = "Two plus 5 = "
 
-init_from = (
-    "resume"  # either 'resume' (from a checkpoint) or a gpt2 variant (e.g. 'gpt2-xl')
-)
-start = DEFAULT_SAMPLE_PROMPT  # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
-num_samples = 10  # number of samples to draw
-max_new_tokens = 500  # number of tokens generated in each sample
-temperature = (
-    0.8  # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
-)
-top_k = (
-    200  # retain only the top_k most likely tokens, clamp others to have 0 probability
-)
+init_from = "resume"
+start = DEFAULT_SAMPLE_PROMPT
+num_samples = 10
+max_new_tokens = 500
+temperature = 0.8
+top_k = 200
 seed = 1337
 if torch.cuda.is_available():
     device = "cuda"
@@ -44,16 +37,16 @@ dtype = (
     "bfloat16"
     if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     else "float16"
-)  # 'float32' or 'bfloat16' or 'float16'
-compile = False  # use PyTorch 2.0 to compile the model to be faster
+)
+compile = False
 exec(open("configurator.py").read())  # overrides from command line or config file
 # -----------------------------------------------------------------------------
 
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
-torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
-torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
-device_type = "cuda" if "cuda" in device else "cpu"  # for later use in torch.autocast
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+device_type = "cuda" if "cuda" in device else "cpu"
 ptdtype = {
     "float32": torch.float32,
     "bfloat16": torch.bfloat16,
@@ -67,19 +60,16 @@ ctx = (
 
 # model
 if init_from == "resume":
-    # init from a model saved in the checkpoint directory
     checkpoint_dir = (
         "/runpod-volume/checkpoints"
         if os.path.exists("/runpod-volume")
         else "checkpoints"
     )
 
-    # Find the latest checkpoint file
     checkpoint_files = glob.glob(str(Path(checkpoint_dir) / "ckpt_*.pt"))
     if not checkpoint_files:
         raise FileNotFoundError(f"No checkpoint files found in {checkpoint_dir}")
 
-    # Sort by iteration number and get the latest
     def get_iter_num(filename):
         return int(Path(filename).stem.split("_")[1])
 
@@ -88,13 +78,11 @@ if init_from == "resume":
 
     checkpoint = torch.load(latest_checkpoint, map_location=device)
 
-    # Determine model type based on checkpoint contents
     model_args = checkpoint["model_args"]
     if "dag_depth" in model_args:
         gptconf = GPTConfig(**model_args)
         model = GPT(gptconf)
     else:
-        # Regular GPT model (dag_depth=0 by default)
         model_args.setdefault("dag_depth", 0)
         gptconf = GPTConfig(**model_args)
         model = GPT(gptconf)
@@ -106,13 +94,12 @@ if init_from == "resume":
             state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
     model.load_state_dict(state_dict)
 elif init_from.startswith("gpt2"):
-    # init from a given GPT-2 model
     model = GPT.from_pretrained(init_from, dict(dropout=0.0))
 
 model.eval()
 model.to(device)
 if compile:
-    model = torch.compile(model)  # requires PyTorch 2.0 (optional)
+    model = torch.compile(model)
 
 # look for the meta pickle in case it is available in the dataset folder
 load_meta = False
@@ -120,19 +107,17 @@ if (
     init_from == "resume"
     and "config" in checkpoint
     and "dataset" in checkpoint["config"]
-):  # older checkpoints might not have these...
+):
     meta_path = Path("data") / checkpoint["config"]["dataset"] / "meta.pkl"
     load_meta = meta_path.exists()
 if load_meta:
     print(f"Loading meta from {meta_path}...")
     with open(meta_path, "rb") as f:
         meta = pickle.load(f)
-    # TODO want to make this more general to arbitrary encoder/decoder schemes
     stoi, itos = meta["stoi"], meta["itos"]
     encode = lambda s: [stoi[c] for c in s]
     decode = lambda l: "".join([itos[i] for i in l])
 else:
-    # ok let's assume gpt-2 encodings by default
     print("No meta.pkl found, assuming GPT-2 encodings...")
     enc = tiktoken.get_encoding("gpt2")
     encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
@@ -153,7 +138,6 @@ with torch.no_grad():
             y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
             print(decode(y[0].tolist()))
 
-            # Show DAG information after generation (if available)
             if hasattr(model, "config") and model.config.dag_depth > 0:
                 print("\nDAG Information:")
                 dag_logger.compute_log_statistics(model)
