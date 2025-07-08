@@ -758,6 +758,18 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     raw_model = model.module if ddp else model
     train_start = time.time()
 
+    # Initialize loss accumulator for logging
+    loss_accum = {
+        "total_loss": 0.0,
+        "sign_loss": 0.0,
+        "log_loss": 0.0,
+        "op_loss": 0.0,
+        "op_accuracy": 0.0,
+        "full_dag_op_match": 0.0,
+        "sign_accuracy": 0.0,
+        "log_magnitude_mape": 0.0,
+    }
+
     try:
         while iter_num <= cfg.max_iters:
             # Learning rate scheduling
