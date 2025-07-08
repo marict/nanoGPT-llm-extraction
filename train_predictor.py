@@ -825,6 +825,9 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         "log_magnitude_mape": 0.0,
     }
 
+    # Store validation metrics for combined logging
+    pending_val_metrics = None
+
     try:
         while iter_num <= cfg.max_iters:
             # Learning rate scheduling
@@ -856,7 +859,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "val/sign_accuracy": eval_losses["sign_accuracy"],
                         "val/log_magnitude_mape": eval_losses["log_magnitude_mape"],
                     }
-                    wandb.log(val_log_dict, step=iter_num, commit=True)
+                    # Store validation metrics for combined logging with training metrics
+                    pending_val_metrics = val_log_dict
 
                 if (
                     cfg.always_save_checkpoint
@@ -1078,9 +1082,21 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         ):
                             log_dict[f"train/{key}"] = value
 
+                    # Combine pending validation metrics if they exist
+                    if pending_val_metrics is not None:
+                        log_dict.update(pending_val_metrics)
+                        pending_val_metrics = None  # Clear after using
+
                     wandb.log(log_dict, step=iter_num, commit=True)
 
             iter_num += 1
+
+            # Log any pending validation metrics that weren't combined with training metrics
+            if pending_val_metrics is not None and run is not None:
+                wandb.log(
+                    pending_val_metrics, step=pending_val_metrics["iter"], commit=True
+                )
+                pending_val_metrics = None
 
     except Exception as e:
         print(f"Fatal error in training loop: {e}")
