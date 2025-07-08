@@ -564,6 +564,13 @@ def evaluate_dag_model(
                     gt_op_names = [OP_NAMES[idx] for idx in gt_op_indices]
                     print("Operations (ground truth):")
                     print(gt_op_names)
+
+                    # Decode predicted operations for this sample
+                    pred_ops_sample = pred_ops.squeeze(1)[sample_idx]  # (depth, n_ops)
+                    pred_op_indices = pred_ops_sample.argmax(dim=-1).cpu().tolist()
+                    pred_op_names = [OP_NAMES[idx] for idx in pred_op_indices]
+                    print("Operations (predicted):")
+                    print(pred_op_names)
                     print("==========================\n")
 
                 # ------------------------------------------------------------------ #
