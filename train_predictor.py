@@ -175,11 +175,6 @@ class DAGTrainConfig:
         0.3  # Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
     )
 
-    # Expression permutation settings
-    permutation_probability: float = (
-        0.3  # Probability of applying permutation (0.0 = disabled)
-    )
-
     gradient_accumulation_steps: int = 4
     batch_size: int = 32
     sequence_length: int = 512  # For tokenized text inputs
@@ -728,7 +723,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         train_seed=cfg.train_seed,
         val_seed=cfg.val_seed,
         english_conversion_rate=cfg.english_conversion_rate,
-        permutation_probability=cfg.permutation_probability,
         max_digits=cfg.max_digits,
         max_decimal_places=cfg.max_decimal_places,
     )

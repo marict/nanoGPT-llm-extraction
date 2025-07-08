@@ -40,8 +40,7 @@ val_examples_per_batch = 20
 # English conversion settings
 english_conversion_rate = 0.3  # Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
 
-# Expression permutation settings
-permutation_probability = 0.3  # Probability of applying permutation (0.0 = disabled)
+# Data generation settings
 
 # Training hyperparameters
 gradient_accumulation_steps = 1

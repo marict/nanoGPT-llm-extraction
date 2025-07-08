@@ -277,7 +277,6 @@ def convert_dag_to_expression_string(
     rng: random.Random = None,
     convert_to_english: bool = True,
     conversion_probability: float = 0.3,
-    permutation_probability: float = 0.5,
 ) -> str:
     """Convert DAG structure to a simple mathematical expression string following stack-based execution.
 
@@ -287,7 +286,6 @@ def convert_dag_to_expression_string(
         rng: Random number generator
         convert_to_english: Whether to convert to English words
         conversion_probability: Probability of English conversion
-        permutation_probability: Probability of applying permutation (0.0 = disabled)
 
     Returns:
         Simple mathematical expression string like "1 * (2 - 3/4)"
@@ -314,10 +312,13 @@ def convert_dag_to_expression_string(
         "identity": "identity",
     }
     op_symbol_to_expression = {
-        "+": lambda a, b: a + b,
-        "-": lambda a, b: a - b,
-        "*": lambda a, b: a * b,
-        "/": lambda a, b: a / b,
+        # Use unevaluated SymPy objects so signs are not collapsed (e.g. `a - (-b)` stays `a - -b`).
+        "+": lambda a, b: sympy.Add(a, b, evaluate=False),
+        "-": lambda a, b: sympy.Add(a, -b, evaluate=False),
+        "*": lambda a, b: sympy.Mul(a, b, evaluate=False),
+        "/": lambda a, b: sympy.Mul(
+            a, sympy.Pow(b, -1, evaluate=False), evaluate=False
+        ),
         "identity": lambda a, b: a,  # Discard b
     }
 
@@ -330,151 +331,23 @@ def convert_dag_to_expression_string(
 
     final_expr = stack[0]
 
-    # Apply expression permutation for diversity if probability > 0
-    if permutation_probability > 0.0 and rng.random() < permutation_probability:
-        final_expr = permute_expression_randomly(final_expr, rng)
+    # NOTE: We no longer permute expressions; keeping them as-is ensures sign
+    # information and token alignment are preserved. The previous permutation
+    # logic with SymPy transformations is disabled.
 
     result = str(final_expr)
 
     # Post-process to clean up any remaining double negatives
-    # This is a safety net in case sympy still creates them
-    result = result.replace("--", "+")
-    result = result.replace("+-", "-")
+    # NOTE: We intentionally keep '+ -x' patterns so that the operator 'add' and a
+    # negative operand remain explicit. This avoids silently flipping the
+    # operation/type relationship and lets `add_english_to_expression` handle the
+    # sign correctly when converting to words.
 
     # Apply English conversion if requested
     if convert_to_english:
         result = add_english_to_expression(result, conversion_probability, rng)
 
     return result
-
-
-def permute_expression_randomly(expr: sympy.Expr, rng: random.Random) -> sympy.Expr:
-    """Create a mathematically equivalent but syntactically different expression.
-
-    Args:
-        expr: The sympy expression to permute
-        rng: Random number generator
-
-    Returns:
-        Permuted but equivalent expression
-    """
-    # List of permutation strategies to try
-    strategies = [
-        "commute",  # Reorder commutative operations
-        "associate",  # Change associative grouping
-        "expand",  # Expand products/powers
-        "factor",  # Factor expressions
-        "simplify",  # Simplify expression
-        "reorder_args",  # Reorder function arguments
-    ]
-
-    # Randomly select a strategy
-    strategy = rng.choice(strategies)
-
-    try:
-        if strategy == "commute":
-            return commute_operations(expr, rng)
-        elif strategy == "associate":
-            return change_associative_grouping(expr, rng)
-        elif strategy == "expand":
-            expanded = sympy.expand(expr)
-            # Only use if it's different and not too complex
-            if str(expanded) != str(expr) and len(str(expanded)) < len(str(expr)) * 2:
-                return expanded
-        elif strategy == "factor":
-            factored = sympy.factor(expr)
-            # Only use if it's different and not too complex
-            if str(factored) != str(expr) and len(str(factored)) < len(str(expr)) * 2:
-                return factored
-        elif strategy == "simplify":
-            simplified = sympy.simplify(expr)
-            # Only use if it's different
-            if str(simplified) != str(expr):
-                return simplified
-        elif strategy == "reorder_args":
-            return reorder_args_recursively(expr, rng)
-    except (sympy.SympifyError, AttributeError, TypeError):
-        # If any strategy fails, just return the original
-        pass
-
-    # Fallback: return original expression
-    return expr
-
-
-def commute_operations(expr: sympy.Expr, rng: random.Random) -> sympy.Expr:
-    """Randomly reorder commutative operations (+ and *)."""
-    if expr.is_Add:
-        # For addition, randomly shuffle the arguments
-        args = list(expr.args)
-        if len(args) > 1:
-            rng.shuffle(args)
-            return sympy.Add(*args)
-    elif expr.is_Mul:
-        # For multiplication, randomly shuffle the arguments
-        args = list(expr.args)
-        if len(args) > 1:
-            rng.shuffle(args)
-            return sympy.Mul(*args)
-    elif hasattr(expr, "args") and len(expr.args) > 0:
-        # Recursively apply to sub-expressions
-        new_args = [commute_operations(arg, rng) for arg in expr.args]
-        return expr.func(*new_args)
-
-    return expr
-
-
-def change_associative_grouping(expr: sympy.Expr, rng: random.Random) -> sympy.Expr:
-    """Change the associative grouping of operations."""
-    if expr.is_Add and len(expr.args) >= 3:
-        # For a + b + c, randomly group as (a + b) + c or a + (b + c)
-        args = list(expr.args)
-        if rng.random() < 0.5:
-            # Group first two: (a + b) + rest
-            first_group = args[0] + args[1]
-            if len(args) > 2:
-                return first_group + sympy.Add(*args[2:])
-            else:
-                return first_group
-        else:
-            # Group last two: first + (b + c)
-            if len(args) > 2:
-                last_group = sympy.Add(*args[1:])
-                return args[0] + last_group
-    elif expr.is_Mul and len(expr.args) >= 3:
-        # Similar for multiplication
-        args = list(expr.args)
-        if rng.random() < 0.5:
-            first_group = args[0] * args[1]
-            if len(args) > 2:
-                return first_group * sympy.Mul(*args[2:])
-            else:
-                return first_group
-        else:
-            if len(args) > 2:
-                last_group = sympy.Mul(*args[1:])
-                return args[0] * last_group
-    elif hasattr(expr, "args") and len(expr.args) > 0:
-        # Recursively apply to sub-expressions
-        new_args = [change_associative_grouping(arg, rng) for arg in expr.args]
-        return expr.func(*new_args)
-
-    return expr
-
-
-def reorder_args_recursively(expr: sympy.Expr, rng: random.Random) -> sympy.Expr:
-    """Recursively reorder arguments in commutative operations."""
-    if hasattr(expr, "args") and len(expr.args) > 1:
-        # Recursively process arguments first
-        new_args = [reorder_args_recursively(arg, rng) for arg in expr.args]
-
-        # If this is a commutative operation, randomly reorder
-        if expr.is_Add or expr.is_Mul:
-            if rng.random() < 0.5:  # 50% chance to reorder
-                rng.shuffle(new_args)
-
-        return expr.func(*new_args)
-
-    return expr
 
 
 def convert_plan_to_tensors(
@@ -517,7 +390,6 @@ def generate_single_dag_example(
     rng: random.Random = None,
     convert_to_english: bool = False,
     conversion_probability: float = 0.3,
-    permutation_probability: float = 0.5,
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
 ) -> DAGExample:
@@ -529,7 +401,6 @@ def generate_single_dag_example(
         rng: Random number generator to use
         convert_to_english: Whether to convert to English words
         conversion_probability: Probability of English conversion
-        permutation_probability: Probability of applying permutation (0.0 = disabled)
         max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
         max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
 
@@ -556,7 +427,6 @@ def generate_single_dag_example(
         rng=rng,
         convert_to_english=convert_to_english,
         conversion_probability=conversion_probability,
-        permutation_probability=permutation_probability,
     )
 
     # Step 3: Convert dag plan to a tensor for labels
@@ -582,7 +452,6 @@ def generate_dag_dataset(
     rng: random.Random = None,
     convert_to_english: bool = False,
     conversion_probability: float = 0.3,
-    permutation_probability: float = 0.5,
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
 ) -> list[DAGExample]:
@@ -595,7 +464,6 @@ def generate_dag_dataset(
         rng: Random number generator to use
         convert_to_english: Whether to convert to English words
         conversion_probability: Probability of English conversion
-        permutation_probability: Probability of applying permutation (0.0 = disabled)
         max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
         max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
 
@@ -619,297 +487,12 @@ def generate_dag_dataset(
             rng,
             convert_to_english,
             conversion_probability,
-            permutation_probability,
             max_digits,
             max_decimal_places,
         )
         examples.append(example)
 
     return examples
-
-
-class StreamingDAGDataset:
-    """On-the-fly DAG dataset generator that produces infinite streams of examples."""
-
-    def __init__(
-        self,
-        max_depth: int = 8,
-        num_initial_values: int = None,
-        seed: int = 42,
-        tokenizer: str = "gpt2",
-        convert_to_english: bool = True,
-        english_conversion_probability: float = 0.3,
-        permutation_probability: float = 0.5,
-        max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
-        max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
-    ):
-        """Initialize the streaming DAG dataset.
-
-        Args:
-            max_depth: DAG depth (all examples will have this depth)
-            num_initial_values: Number of initial values per example
-            seed: Random seed for reproducibility
-            tokenizer: Tokenizer to use (default: gpt2)
-            convert_to_english: Whether to potentially convert numbers/operators to English
-            english_conversion_probability: Probability of converting to English (0.0 to 1.0)
-            permutation_probability: Probability of applying permutation (0.0 = disabled)
-            max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
-            max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
-        """
-        self.max_depth = max_depth
-        # Set num_initial_values to match DAG predictor expectations
-        self.num_initial_values = (
-            num_initial_values if num_initial_values is not None else max_depth + 1
-        )
-        self.seed = seed
-        self.tokenizer = tokenizer
-        self.convert_to_english = convert_to_english
-        self.english_conversion_probability = english_conversion_probability
-        self.permutation_probability = permutation_probability
-        self.max_digits = max_digits
-        self.max_decimal_places = max_decimal_places
-
-        # Initialize tokenizer
-        self.enc = get_encoding(tokenizer)
-
-        # Create a dedicated random state for this dataset
-        self.random_state = random.Random(seed)
-        self.np_random_state = np.random.RandomState(seed)
-
-    def generate_batch(self, batch_size: int) -> tuple[List[int], str]:
-        """Generate a batch of examples and return tokens.
-
-        Args:
-            batch_size: Number of examples to generate
-
-        Returns:
-            Tuple of (tokens, raw_text)
-        """
-        # Generate examples using dedicated random state
-        examples = generate_dag_dataset(
-            num_examples=batch_size,
-            max_depth=self.max_depth,
-            num_initial_values=self.num_initial_values,
-            rng=self.random_state,
-            convert_to_english=self.convert_to_english,
-            conversion_probability=self.english_conversion_probability,
-            permutation_probability=self.permutation_probability,
-            max_digits=self.max_digits,
-            max_decimal_places=self.max_decimal_places,
-        )
-
-        # Convert to text
-        all_text = []
-        for example in examples:
-            all_text.append(example.text)
-
-        # Join with separators
-        full_text = "\n---\n".join(all_text)
-
-        # Tokenize
-        tokens = self.enc.encode_ordinary(full_text)
-
-        return tokens, full_text
-
-    def generate_tokens(self, num_tokens: int) -> List[int]:
-        """Generate approximately num_tokens tokens.
-
-        Args:
-            num_tokens: Target number of tokens
-
-        Returns:
-            List of tokens
-        """
-        all_tokens = []
-
-        while len(all_tokens) < num_tokens:
-            # Estimate examples needed (rough estimate: ~200 tokens per example)
-            remaining = num_tokens - len(all_tokens)
-            estimated_examples = max(10, remaining // 200)
-
-            tokens, _ = self.generate_batch(estimated_examples)
-            all_tokens.extend(tokens)
-
-        # Truncate to requested length
-        return all_tokens[:num_tokens]
-
-    def stream_tokens(self, batch_size: int = 1000) -> Iterator[List[int]]:
-        """Stream tokens in batches indefinitely.
-
-        Args:
-            batch_size: Number of examples per batch
-
-        Yields:
-            Batches of tokens
-        """
-        while True:
-            tokens, _ = self.generate_batch(batch_size)
-            yield tokens
-
-    def get_train_val_split(
-        self, train_examples: int, val_examples: int, split_seed: int = None
-    ) -> tuple[List[int], List[int]]:
-        """Generate train/val splits with different seeds.
-
-        Args:
-            train_examples: Number of training examples
-            val_examples: Number of validation examples
-            split_seed: Optional different seed for val split
-
-        Returns:
-            Tuple of (train_tokens, val_tokens)
-        """
-        # Generate train split
-        original_seed = self.seed
-        random.seed(self.seed)
-        np.random.seed(self.seed)
-        torch.manual_seed(self.seed)
-
-        train_tokens, _ = self.generate_batch(train_examples)
-
-        # Generate val split with different seed if specified
-        if split_seed is not None:
-            random.seed(split_seed)
-            np.random.seed(split_seed)
-            torch.manual_seed(split_seed)
-
-        val_tokens, _ = self.generate_batch(val_examples)
-
-        # Restore original seed
-        random.seed(original_seed)
-        np.random.seed(original_seed)
-        torch.manual_seed(original_seed)
-
-        return train_tokens, val_tokens
-
-
-class DAGDataLoader:
-    """DataLoader-like interface for streaming DAG data."""
-
-    def __init__(
-        self,
-        dataset: StreamingDAGDataset,
-        batch_size: int = 32,
-        block_size: int = 1024,
-        examples_per_batch: int = 100,
-    ):
-        """Initialize the data loader.
-
-        Args:
-            dataset: StreamingDAGDataset instance
-            batch_size: Batch size for training
-            block_size: Maximum sequence length
-            examples_per_batch: Number of DAG examples to generate per batch
-        """
-        self.dataset = dataset
-        self.batch_size = batch_size
-        self.block_size = block_size
-        self.examples_per_batch = examples_per_batch
-
-        # Buffer for tokens (deque for fast left pops)
-        self.token_buffer: deque[int] = deque()
-        self.token_stream = dataset.stream_tokens(examples_per_batch)
-
-    def __iter__(self):
-        return self
-
-    def __next__(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """Get the next batch of training data.
-
-        Returns:
-            Tuple of (inputs, targets) tensors
-        """
-        # Ensure the buffer has enough tokens for an entire batch
-        required_tokens = self.batch_size * (self.block_size + 1)
-        while len(self.token_buffer) < required_tokens:
-            self.token_buffer.extend(next(self.token_stream))
-
-        # Build batch using fast popleft operations (O(1) each)
-        batch_data: List[List[int]] = []
-        for _ in range(self.batch_size):
-            seq = [self.token_buffer.popleft() for _ in range(self.block_size + 1)]
-            batch_data.append(seq)
-
-        # Convert to tensors
-        batch_tensor = torch.tensor(batch_data, dtype=torch.long)
-
-        # Split into inputs and targets
-        inputs = batch_tensor[:, :-1]  # All but last token
-        targets = batch_tensor[:, 1:]  # All but first token
-
-        return inputs, targets
-
-
-def create_dag_dataloaders(
-    train_examples_per_batch: int = 1000,
-    val_examples_per_batch: int = 100,
-    batch_size: int = 32,
-    block_size: int = 1024,
-    max_depth: int = 8,
-    train_seed: int = 42,
-    val_seed: int = 43,
-    convert_to_english: bool = False,
-    english_conversion_probability: float = 0.3,
-    permutation_probability: float = 0.5,
-    max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
-    max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
-) -> tuple[DAGDataLoader, DAGDataLoader]:
-    """Create train and validation data loaders.
-
-    Args:
-        train_examples_per_batch: DAG examples per training batch
-        val_examples_per_batch: DAG examples per validation batch
-        batch_size: Training batch size
-        block_size: Maximum sequence length
-        max_depth: DAG depth (all examples will have this depth)
-        train_seed: Seed for training data
-        val_seed: Seed for validation data
-        convert_to_english: Whether to potentially convert numbers/operators to English
-        english_conversion_probability: Probability of converting to English (0.0 to 1.0)
-        permutation_probability: Probability of applying permutation (0.0 = disabled)
-        max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
-        max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
-
-    Returns:
-        Tuple of (train_loader, val_loader)
-    """
-    # Create datasets
-    train_dataset = StreamingDAGDataset(
-        max_depth=max_depth,
-        seed=train_seed,
-        convert_to_english=convert_to_english,
-        english_conversion_probability=english_conversion_probability,
-        permutation_probability=permutation_probability,
-        max_digits=max_digits,
-        max_decimal_places=max_decimal_places,
-    )
-
-    val_dataset = StreamingDAGDataset(
-        max_depth=max_depth,
-        seed=val_seed,
-        convert_to_english=convert_to_english,
-        english_conversion_probability=english_conversion_probability,
-        permutation_probability=permutation_probability,
-        max_digits=max_digits,
-        max_decimal_places=max_decimal_places,
-    )
-
-    # Create data loaders
-    train_loader = DAGDataLoader(
-        dataset=train_dataset,
-        batch_size=batch_size,
-        block_size=block_size,
-        examples_per_batch=train_examples_per_batch,
-    )
-
-    val_loader = DAGDataLoader(
-        dataset=val_dataset,
-        batch_size=batch_size,
-        block_size=block_size,
-        examples_per_batch=val_examples_per_batch,
-    )
-
-    return train_loader, val_loader
 
 
 class DAGStructureDataset:
@@ -927,7 +510,6 @@ class DAGStructureDataset:
         max_seq_length: int = 512,
         convert_to_english: bool = False,
         english_conversion_probability: float = 0.3,
-        permutation_probability: float = 0.5,
         max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
         max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
     ):
@@ -936,12 +518,11 @@ class DAGStructureDataset:
         Args:
             max_depth: DAG depth (all examples will have this depth)
             num_initial_values: Number of initial values per example
-            seed: Random seed
-            tokenizer: Tokenizer to use
-            max_seq_length: Maximum sequence length for text inputs
+            seed: Random seed for reproducibility
+            tokenizer: Tokenizer to use (default: gpt2)
+            max_seq_length: Maximum sequence length for tokenization
             convert_to_english: Whether to potentially convert numbers/operators to English
             english_conversion_probability: Probability of converting to English (0.0 to 1.0)
-            permutation_probability: Probability of applying permutation (0.0 = disabled)
             max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
             max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
         """
@@ -951,10 +532,10 @@ class DAGStructureDataset:
             num_initial_values if num_initial_values is not None else max_depth + 1
         )
         self.seed = seed
+        self.tokenizer = tokenizer
         self.max_seq_length = max_seq_length
         self.convert_to_english = convert_to_english
         self.english_conversion_probability = english_conversion_probability
-        self.permutation_probability = permutation_probability
         self.max_digits = max_digits
         self.max_decimal_places = max_decimal_places
 
@@ -986,7 +567,6 @@ class DAGStructureDataset:
             rng=self.random_state,
             convert_to_english=self.convert_to_english,
             conversion_probability=self.english_conversion_probability,
-            permutation_probability=self.permutation_probability,
             max_digits=self.max_digits,
             max_decimal_places=self.max_decimal_places,
         )
@@ -1130,25 +710,23 @@ def create_dag_structure_dataloaders(
     train_seed: int = 42,
     val_seed: int = 43,
     english_conversion_rate: float = 0.3,
-    permutation_probability: float = 0.5,
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
 ) -> Tuple[Iterator, Iterator]:
-    """Create train and validation structure dataloaders.
+    """Create train/val DAG structure dataloaders for predictor training.
 
     Args:
         train_batch_size: Training batch size
         val_batch_size: Validation batch size
-        max_depth: DAG depth (all examples will have this exact depth)
+        max_depth: DAG depth (all examples will have this depth)
         train_seed: Seed for training data
         val_seed: Seed for validation data
-        english_conversion_rate: Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
-        permutation_probability: Probability of applying permutation (0.0 = disabled)
+        english_conversion_rate: Probability of converting to English (0.0 to 1.0)
         max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
         max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
 
     Returns:
-        Tuple of (train_loader, val_loader)
+        Tuple of (train_loader, val_loader) iterators
     """
     # Use configurable english conversion rate
     convert_to_english = english_conversion_rate > 0.0
@@ -1159,7 +737,6 @@ def create_dag_structure_dataloaders(
         seed=train_seed,
         convert_to_english=convert_to_english,
         english_conversion_probability=english_conversion_rate,
-        permutation_probability=permutation_probability,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
     )
@@ -1169,7 +746,6 @@ def create_dag_structure_dataloaders(
         seed=val_seed,
         convert_to_english=convert_to_english,
         english_conversion_probability=english_conversion_rate,
-        permutation_probability=permutation_probability,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
     )
@@ -1185,15 +761,6 @@ if __name__ == "__main__":
     # Simple example usage
     print("DAG Streaming Dataset Example")
     print("=" * 40)
-
-    # Test the main streaming dataset (used in train.py)
-    print("\nTesting StreamingDAGDataset:")
-    dataset = StreamingDAGDataset(
-        max_depth=3, seed=42, max_digits=3
-    )  # max_decimal_places auto-derived as 2
-    tokens, text = dataset.generate_batch(3)
-    print(f"Generated {len(tokens)} tokens from 3 examples")
-    print(f"Sample text:\n{text[:200]}...")
 
     # Test the structure dataset (used in train_predictor.py)
     print("\nTesting DAGStructureDataset:")
@@ -1224,7 +791,7 @@ if __name__ == "__main__":
 
     format_counts = Counter()
     for i in range(200):
-        example = dataset.generate_batch(1)[1].split("\n---\n")[0]
+        example = structure_dataset.generate_batch(1)[1].split("\n---\n")[0]
         # Extract numbers from the text (simple approach)
         import re
 

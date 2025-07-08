@@ -6,24 +6,18 @@ Tests for the streaming DAG dataset functionality.
 
 import math
 import random
-import sys
 import unittest
-from pathlib import Path
 
 import numpy as np
 import torch
 
-# Add the data directory to the path so we can import the dagset module
-sys.path.append(str(Path(__file__).parent.parent / "data" / "dagset"))
-
-from streaming import (DAGDataLoader, DAGExample, DAGStructureDataset,
-                       StreamingDAGDataset, convert_dag_to_expression_string,
-                       create_dag_dataloaders,
-                       create_dag_structure_dataloaders, generate_dag_dataset,
-                       generate_random_dag_plan, generate_single_dag_example)
-
+from data.dagset.streaming import (DAGStructureDataset,
+                                   convert_dag_to_expression_string,
+                                   create_dag_structure_dataloaders,
+                                   generate_random_dag_plan,
+                                   generate_single_dag_example,
+                                   generate_uniform_digit_number)
 # Import DAG operations for direct testing
-sys.path.append(str(Path(__file__).parent.parent))
 from models.dag_model import LOG_LIM, OP_NAMES
 
 
@@ -92,8 +86,6 @@ class TestIdentityFunction(unittest.TestCase):
         """Test that identity operations work with exact decimal representation."""
         import random
 
-        from streaming import generate_uniform_digit_number
-
         rng = random.Random(42)
 
         # Generate values with exact decimal representation
@@ -128,7 +120,6 @@ class TestIdentityFunction(unittest.TestCase):
 
     def test_identity_operation_with_english_conversion(self):
         """Test that identity operations work with English conversion."""
-        from streaming import convert_number_to_words
 
         # Test with integer
         initial_values = [42, 7, 3]
@@ -263,213 +254,6 @@ class TestIdentityFunction(unittest.TestCase):
             print(
                 f"Missing operations (may be due to randomness): {sorted(missing_ops)}"
             )
-
-
-class TestStreamingDAGDataset(unittest.TestCase):
-    """Test the streaming DAG dataset functionality."""
-
-    def setUp(self):
-        """Set up test fixtures."""
-        # Use a fixed seed for reproducible tests
-        np.random.seed(42)
-        torch.manual_seed(42)
-
-    def test_generate_random_dag_plan(self):
-        """Test DAG plan generation."""
-        # Test depth 1
-        initial_values, operations = generate_random_dag_plan(
-            depth=1, num_initial_values=1
-        )
-        self.assertEqual(len(initial_values), 1)
-        self.assertEqual(len(operations), 1)
-        self.assertIn(
-            operations[0], ["add", "subtract", "multiply", "divide", "identity"]
-        )
-
-        # Test depth 3
-        initial_values, operations = generate_random_dag_plan(
-            depth=3, num_initial_values=1
-        )
-        self.assertEqual(len(initial_values), 1)
-        self.assertEqual(len(operations), 3)
-
-        # Check that operations are valid
-        for op_name in operations:
-            self.assertIn(
-                op_name, ["add", "subtract", "multiply", "divide", "identity"]
-            )
-
-    def test_generate_single_dag_example(self):
-        """Test single DAG example generation (simple expression format)."""
-        example = generate_single_dag_example(
-            depth=2, num_initial_values=3
-        )  # depth+1 initial values
-
-        self.assertIsInstance(example, DAGExample, msg="Example is not a DAGExample")
-        self.assertEqual(example.depth, 2, msg="Depth is not 2")
-        self.assertEqual(
-            len(example.initial_values), 3, msg="Initial values length is not 3"
-        )  # depth + 1
-        self.assertEqual(len(example.operations), 2, msg="Operations length is not 2")
-        self.assertIsInstance(example.text, str, msg="Text is not a string")
-        self.assertGreater(len(example.text), 0, msg="Text is empty")
-
-        # Check that text is a simple mathematical expression
-        # Should contain numbers and operators, but not verbose DAG format
-        import re
-
-        # Should contain numbers (with potential decimals)
-        self.assertTrue(
-            re.search(r"\d+\.?\d*", example.text),
-            msg=f"Text does not contain numbers: {example.text}",
-        )
-        # Note: The final expression can legitimately be a single number if the last
-        # operation(s) reduce to an identity. Therefore, we no longer require the
-        # presence of an explicit operator symbol in the text.
-
-        # Should NOT contain verbose DAG format elements
-        self.assertNotIn(
-            "DAG Computation",
-            example.text,
-            msg=f"Text contains 'DAG Computation': {example.text}",
-        )
-        self.assertNotIn(
-            "v0 =", example.text, msg=f"Text contains 'v0 =': {example.text}"
-        )
-        self.assertNotIn(
-            "Step", example.text, msg=f"Text contains 'Step': {example.text}"
-        )
-        self.assertNotIn(
-            "Final result:",
-            example.text,
-            msg=f"Text contains 'Final result:': {example.text}",
-        )
-
-    def test_generate_dag_dataset(self):
-        """Test dataset generation."""
-        # Generate a small dataset
-        examples = generate_dag_dataset(
-            num_examples=10,
-            max_depth=3,  # num_initial_values will default to max_depth+1
-        )
-
-        self.assertEqual(len(examples), 10)
-
-        # Check that all examples are valid
-        for example in examples:
-            self.assertIsInstance(example, DAGExample)
-            self.assertGreaterEqual(example.depth, 1)
-            self.assertLessEqual(example.depth, 3)
-            self.assertEqual(len(example.initial_values), 3 + 1)  # max_depth + 1
-            self.assertEqual(len(example.operations), example.depth)
-            self.assertIsInstance(example.text, str)
-            self.assertGreater(len(example.text), 0)
-
-    def test_streaming_dataset_basic(self):
-        """Test basic streaming dataset functionality."""
-        dataset = StreamingDAGDataset(max_depth=3, seed=42)
-
-        # Test batch generation
-        tokens, text = dataset.generate_batch(batch_size=5)
-        self.assertIsInstance(tokens, list)
-        self.assertIsInstance(text, str)
-        self.assertGreater(len(tokens), 0)
-        self.assertGreater(len(text), 0)
-
-        # Test specific token generation
-        target_tokens = 1000
-        tokens = dataset.generate_tokens(target_tokens)
-        self.assertIsInstance(tokens, list)
-        self.assertEqual(len(tokens), target_tokens)
-
-    def test_streaming_dataset_reproducibility(self):
-        """Test that streaming dataset is reproducible with same seed."""
-        dataset1 = StreamingDAGDataset(max_depth=3, seed=123)
-        dataset2 = StreamingDAGDataset(max_depth=3, seed=123)
-
-        tokens1, text1 = dataset1.generate_batch(10)
-        tokens2, text2 = dataset2.generate_batch(10)
-
-        self.assertEqual(tokens1, tokens2)
-        self.assertEqual(text1, text2)
-
-    def test_streaming_dataset_train_val_split(self):
-        """Test train/val split functionality."""
-        dataset = StreamingDAGDataset(max_depth=3, seed=42)
-
-        train_tokens, val_tokens = dataset.get_train_val_split(
-            train_examples=20, val_examples=10, split_seed=43
-        )
-
-        self.assertIsInstance(train_tokens, list)
-        self.assertIsInstance(val_tokens, list)
-        self.assertGreater(len(train_tokens), 0)
-        self.assertGreater(len(val_tokens), 0)
-        self.assertNotEqual(train_tokens, val_tokens)  # Should be different
-
-    def test_dag_dataloader(self):
-        """Test the DAG data loader."""
-        dataset = StreamingDAGDataset(max_depth=3, seed=42)
-
-        dataloader = DAGDataLoader(
-            dataset=dataset,
-            batch_size=4,
-            block_size=128,
-            examples_per_batch=50,
-        )
-
-        # Test getting a few batches
-        for i, (inputs, targets) in enumerate(dataloader):
-            self.assertEqual(inputs.shape, (4, 128))
-            self.assertEqual(targets.shape, (4, 128))
-            self.assertEqual(inputs.dtype, torch.long)
-            self.assertEqual(targets.dtype, torch.long)
-
-            # Verify targets are shifted inputs
-            self.assertTrue(torch.equal(inputs[:, 1:], targets[:, :-1]))
-
-            if i >= 2:  # Just test a few batches
-                break
-
-    def test_create_dag_dataloaders(self):
-        """Test the convenience function for creating data loaders."""
-        train_loader, val_loader = create_dag_dataloaders(
-            train_examples_per_batch=100,
-            val_examples_per_batch=50,
-            batch_size=4,
-            block_size=64,
-            max_depth=3,
-            train_seed=42,
-            val_seed=43,
-        )
-
-        # Test train loader
-        for i, (inputs, targets) in enumerate(train_loader):
-            self.assertEqual(inputs.shape, (4, 64))
-            self.assertEqual(targets.shape, (4, 64))
-            if i >= 1:
-                break
-
-        # Test val loader
-        for i, (inputs, targets) in enumerate(val_loader):
-            self.assertEqual(inputs.shape, (4, 64))
-            self.assertEqual(targets.shape, (4, 64))
-            if i >= 1:
-                break
-
-    def test_streaming_infinite_generation(self):
-        """Test that streaming can generate data indefinitely."""
-        dataset = StreamingDAGDataset(max_depth=2, seed=42)
-
-        # Test streaming tokens
-        token_stream = dataset.stream_tokens(batch_size=10)
-
-        # Get several batches
-        for i, tokens in enumerate(token_stream):
-            self.assertIsInstance(tokens, list)
-            self.assertGreater(len(tokens), 0)
-            if i >= 3:  # Test first few batches
-                break
 
 
 class TestDAGStructureDataset(unittest.TestCase):
@@ -1099,6 +883,60 @@ class TestExpressionMatching(unittest.TestCase):
                     except (ZeroDivisionError, OverflowError):
                         # These are acceptable mathematical exceptions
                         pass
+
+    def test_negative_values_subtract_operations_consistency(self):
+        """Ensure negative numbers are correctly marked as 'negative' when converted to English words."""
+
+        # Simple scenario with all negative initial values and subtract operations
+        initial_values = [-4.4262, -6.10979, -10.0]
+        operations = ["subtract", "subtract"]  # depth = 2
+
+        text = convert_dag_to_expression_string(
+            initial_values=initial_values,
+            operations=operations,
+            rng=random.Random(42),
+            convert_to_english=True,
+            conversion_probability=1.0,  # Force English conversion for determinism
+        )
+
+        # Sanity checks: text should be non-empty and free of double-negative artefacts
+        self.assertIsInstance(text, str)
+        self.assertGreater(len(text), 0)
+        self.assertNotIn("--", text, "Unexpected double negative in expression")
+
+        # Critical check: every negative value should be prefixed with the word 'negative'
+        self.assertIn(
+            "negative",
+            text.lower(),
+            msg=(
+                "No 'negative' keyword found in converted text despite negative inputs.\n"
+                f"Initial values: {initial_values}\nConverted text: {text}"
+            ),
+        )
+
+    def test_plus_negative_value_english_conversion(self):
+        """Ensure expressions like '5 + -2' are verbalised with 'negative' for the second operand."""
+
+        initial_values = [5.0, -2.0]
+        operations = ["add"]
+
+        # Force English conversion
+        text = convert_dag_to_expression_string(
+            initial_values=initial_values,
+            operations=operations,
+            rng=random.Random(123),
+            convert_to_english=True,
+            conversion_probability=1.0,
+        )
+
+        self.assertIn(
+            "negative", text.lower(), msg=f"English text missing 'negative': {text}"
+        )
+        # Ensure there is some form of 'plus' / 'added to' retained
+        has_plus_word = any(word in text.lower() for word in ["plus", "added to"])
+        self.assertTrue(
+            has_plus_word, msg=f"English text missing plus/added-to wording: {text}"
+        )
 
 
 if __name__ == "__main__":

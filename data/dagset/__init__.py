@@ -9,8 +9,7 @@ import pickle
 from pathlib import Path
 from typing import Tuple
 
-from .streaming import (DAGDataLoader, StreamingDAGDataset,
-                        create_dag_dataloaders)
+from .streaming import DAGStructureDataset, create_dag_structure_dataloaders
 
 
 def prepare(
@@ -72,8 +71,7 @@ def prepare(
 
 
 __all__ = [
-    "StreamingDAGDataset",
-    "DAGDataLoader",
-    "create_dag_dataloaders",
+    "DAGStructureDataset",
+    "create_dag_structure_dataloaders",
     "prepare",
 ]

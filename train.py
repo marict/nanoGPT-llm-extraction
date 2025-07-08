@@ -583,65 +583,12 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     meta_path = data_dir / "meta.pkl"
     meta_dtype = np.uint16
     vocab_size = None
-    is_streaming = False
-
-    # Load tokenizer for text generation
-    encode = decode = None
-    if meta_path.exists():
-        with open(meta_path, "rb") as f:
-            meta = pickle.load(f)
-        vocab_size = meta["vocab_size"]
-        meta_dtype = np.uint8 if meta.get("byte_level", False) else np.uint16
-        is_streaming = meta.get("streaming", False)
-        if master_process:
-            print(
-                f"[{time.time() - setup_start:.2f}s] Found vocab_size {vocab_size} and dtype {meta_dtype}"
-            )
-            if is_streaming:
-                print(f"[{time.time() - setup_start:.2f}s] Using streaming dataset")
-
-    # Initialize streaming data loaders if needed
-    streaming_train_loader = None
-    streaming_val_loader = None
-    if is_streaming and cfg.dataset == "dagset":
-        from data.dagset import create_dag_dataloaders
-
-        # Get streaming parameters from config
-        train_examples_per_batch = getattr(cfg, "train_examples_per_batch", 1000)
-        val_examples_per_batch = getattr(cfg, "val_examples_per_batch", 100)
-        max_dag_depth = getattr(cfg, "max_dag_depth", 8)
-        train_seed = getattr(cfg, "train_seed", 42)
-        val_seed = getattr(cfg, "val_seed", 43)
-
-        if master_process:
-            print(f"[{time.time() - setup_start:.2f}s] Creating DAG data loaders")
-            print(f"  - Train examples per batch: {train_examples_per_batch}")
-            print(f"  - Val examples per batch: {val_examples_per_batch}")
-            print(
-                f"  - DAG depth: {cfg.dag_depth} (all examples will have this exact depth)"
-            )
-
-        # Use sequence_length if specified, otherwise use block_size
-        effective_block_size = getattr(cfg, "sequence_length", cfg.block_size)
-
-        streaming_train_loader, streaming_val_loader = create_dag_dataloaders(
-            train_examples_per_batch=train_examples_per_batch,
-            val_examples_per_batch=val_examples_per_batch,
-            batch_size=cfg.batch_size,
-            block_size=effective_block_size,
-            max_depth=cfg.dag_depth,  # All examples have exactly this depth
-            train_seed=train_seed,
-            val_seed=val_seed,
+    if master_process:
+        print(
+            f"[{time.time() - setup_start:.2f}s] Found vocab_size {vocab_size} and dtype {meta_dtype}"
         )
 
-        # Convert to iterators
-        streaming_train_iter = iter(streaming_train_loader)
-        streaming_val_iter = iter(streaming_val_loader)
-        # Set up encoder/decoder for text generation
-        if "stoi" in meta and "itos" in meta:
-            stoi, itos = meta["stoi"], meta["itos"]
-            encode = lambda s: [stoi[c] for c in s]
-            decode = lambda l: "".join([itos[i] for i in l])
+    # (Streaming dataset pathway removed.)
 
     # Fallback to GPT-2 tokenizer if no meta available
     if encode is None or decode is None:
@@ -657,49 +604,30 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
 
     def get_batch(split: str) -> Tuple[torch.Tensor, torch.Tensor]:
         """Return one batch of tokens for <split>."""
-        if is_streaming and cfg.dataset == "dagset":
-            # Use streaming data loaders
-            if split == "train":
-                x, y = next(streaming_train_iter)
-            else:
-                x, y = next(streaming_val_iter)
-
-            # Move to correct device
-            if device == "cuda":
-                x, y = (
-                    x.pin_memory().to(device, non_blocking=True),
-                    y.pin_memory().to(device, non_blocking=True),
-                )
-            else:
-                x, y = x.to(device), y.to(device)
-            return x, y
+        # Use on-disk token dataset
+        file = "train.bin" if split == "train" else "val.bin"
+        data = np.memmap(data_dir / file, dtype=meta_dtype, mode="r")
+        ix = torch.randint(len(data) - cfg.block_size, (cfg.batch_size,))
+        x = torch.stack(
+            [
+                torch.from_numpy(data[i : i + cfg.block_size].astype(np.int64))
+                for i in ix
+            ]
+        )
+        y = torch.stack(
+            [
+                torch.from_numpy(data[i + 1 : i + 1 + cfg.block_size].astype(np.int64))
+                for i in ix
+            ]
+        )
+        if device == "cuda":
+            x, y = (
+                x.pin_memory().to(device, non_blocking=True),
+                y.pin_memory().to(device, non_blocking=True),
+            )
         else:
-            # Use traditional file-based loading
-            file = "train.bin" if split == "train" else "val.bin"
-            data = np.memmap(data_dir / file, dtype=meta_dtype, mode="r")
-            ix = torch.randint(len(data) - cfg.block_size, (cfg.batch_size,))
-            x = torch.stack(
-                [
-                    torch.from_numpy(data[i : i + cfg.block_size].astype(np.int64))
-                    for i in ix
-                ]
-            )
-            y = torch.stack(
-                [
-                    torch.from_numpy(
-                        data[i + 1 : i + 1 + cfg.block_size].astype(np.int64)
-                    )
-                    for i in ix
-                ]
-            )
-            if device == "cuda":
-                x, y = (
-                    x.pin_memory().to(device, non_blocking=True),
-                    y.pin_memory().to(device, non_blocking=True),
-                )
-            else:
-                x, y = x.to(device), y.to(device)
-            return x, y
+            x, y = x.to(device), y.to(device)
+        return x, y
 
     # --------------------------------------------------------------------- #
     # Model creation

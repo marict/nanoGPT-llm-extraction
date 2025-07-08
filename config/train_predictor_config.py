@@ -11,7 +11,7 @@ log_interval = 1  # Log every iteration for better monitoring
 eval_iters = 2  # Reduced from 5 - each eval iter is much more informative
 eval_only = False
 always_save_checkpoint = False
-clear_previous_checkpoints = True  # Save space on RunPod
+clear_previous_checkpoints = False  # Save space on RunPod
 
 # Model initialization
 init_from = "scratch"  # or "resume"
@@ -31,12 +31,7 @@ val_examples_per_batch = 1600  # Increased from 800 - match larger batch sizes
 # English conversion settings
 english_conversion_rate = 0.3  # Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
 
-# Expression permutation settings
-permutation_probability = (
-    0.0  # Probability of applying permutation (0.0 = disabled, 1.0 = always permute)
-)
-
-# OPTIMIZED: Training hyperparameters for maximum GPU utilization
+# Model configuration
 gradient_accumulation_steps = (
     16  # Increased from 8 - effective batch size = 1024 * 16 = 16,384
 )
