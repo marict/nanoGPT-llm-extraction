@@ -553,8 +553,13 @@ def evaluate_dag_model(
                         (tgt_sign_vec * _torch.exp(tgt_log_vec)).cpu().tolist()
                     )
 
+                    # Count tokens in the sample text
+                    enc = get_encoding("gpt2")
+                    sample_tokens = enc.encode_ordinary(sample_text)
+
                     print("\n=== Validation Sample ===")
                     print(f"Text: {sample_text}")
+                    print(f"Tokens: {len(sample_tokens)}")
                     print("Target initial values:")
                     print([round(v, 4) for v in tgt_real_vals])
                     print("Predicted initial values:")
