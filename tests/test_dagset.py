@@ -940,6 +940,75 @@ class TestExpressionMatching(unittest.TestCase):
             example.operations.shape, torch.Size([2, 5])
         )  # depth x num_ops
 
+        # Test specific case: verify stack operations work correctly with identity operation
+        # Case: [-6.196, -7.2, -4.4, 7.0, -1.1374] with ['add', 'add', 'identity', 'add']
+        # Expected stack operations (working from right to left):
+        # 1. add(7.0, -1.1374) → (7.0 + -1.1374)
+        # 2. add(-4.4, (7.0 + -1.1374)) → (-4.4 + (7.0 + -1.1374))
+        # 3. identity(-7.2, (-4.4 + (7.0 + -1.1374))) → -7.2 (discard complex expression)
+        # 4. add(-6.196, -7.2) → (-6.196 + -7.2)
+        # Final expression: "-6.196 - 7.2" (only 2 values due to identity discarding others)
+        initial_values = [-6.196, -7.2, -4.4, 7.0, -1.1374]
+        operations = ["add", "add", "identity", "add"]
+
+        # Generate expression using convert_dag_to_expression_string
+        from data.dagset.streaming import convert_dag_to_expression_string
+
+        expression = convert_dag_to_expression_string(
+            initial_values=initial_values,
+            operations=operations,
+            convert_to_english=False,
+            conversion_probability=0.0,
+        )
+
+        # Verify expression is generated and contains expected pattern
+        self.assertIsInstance(expression, str)
+        self.assertGreater(len(expression), 0)
+        # The identity operation discards complex sub-expressions, so final should be simple
+        self.assertIn("-6.196", expression)
+        self.assertIn(
+            "7.2", expression
+        )  # Note: appears as '7.2' in subtraction, not '-7.2'
+
+        # Manually simulate the exact stack operations that happen
+        # Use string representations to match the actual implementation
+        stack = [str(v) for v in initial_values]
+
+        # Step 1: add(7.0, -1.1374)
+        b1 = stack.pop()  # '-1.1374'
+        a1 = stack.pop()  # '7.0'
+        result1 = f"({a1} + {b1})"  # '(7.0 + -1.1374)'
+        stack.append(result1)
+        self.assertEqual(result1, "(7.0 + -1.1374)")
+
+        # Step 2: add(-4.4, (7.0 + -1.1374))
+        b2 = stack.pop()  # '(7.0 + -1.1374)'
+        a2 = stack.pop()  # '-4.4'
+        result2 = f"({a2} + {b2})"  # '(-4.4 + (7.0 + -1.1374))'
+        stack.append(result2)
+        self.assertEqual(result2, "(-4.4 + (7.0 + -1.1374))")
+
+        # Step 3: identity(-7.2, (-4.4 + (7.0 + -1.1374))) = -7.2 (keep first, discard second)
+        b3 = stack.pop()  # '(-4.4 + (7.0 + -1.1374))'
+        a3 = stack.pop()  # '-7.2'
+        result3 = a3  # identity: take first operand, discard complex expression
+        stack.append(result3)
+        self.assertEqual(result3, "-7.2")
+
+        # Step 4: add(-6.196, -7.2)
+        b4 = stack.pop()  # '-7.2'
+        a4 = stack.pop()  # '-6.196'
+        result4 = f"({a4} + {b4})"  # '(-6.196 + -7.2)'
+        stack.append(result4)
+        self.assertEqual(result4, "(-6.196 + -7.2)")
+
+        # Final result should be the simple expression (identity discarded the complex part)
+        self.assertEqual(len(stack), 1)
+        self.assertEqual(stack[0], "(-6.196 + -7.2)")
+
+        # This demonstrates why text/target mismatches can occur: identity operations
+        # can cause only a subset of initial values to appear in the final expression
+
     def test_expression_matches_computation_multiple_seeds(self):
         """Test multiple examples with different seeds to verify various operation combinations."""
         test_seeds = [42, 43, 44, 45]

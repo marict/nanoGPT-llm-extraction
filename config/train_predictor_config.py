@@ -20,7 +20,7 @@ init_from = "scratch"  # or "resume"
 dataset = "dagset"  # Use DAG dataset for predictor training
 
 # DAG dataset parameters
-max_dag_depth = 4  # Deeper for more complex training
+max_dag_depth = 6  # Match the model dag_depth for consistency
 value_range = (-100.0, 100.0)  # Allow negative values for meaningful sign prediction
 
 train_examples_per_batch = 1000  # Larger batches for efficiency
@@ -37,11 +37,11 @@ n_head = 12  # Full attention heads
 n_embd = 768  # Full embedding size
 dropout = 0.1  # Slight dropout for regularization
 bias = False
-dag_depth = 6  # Deeper DAG for complex structures
+dag_depth = max_dag_depth  # MUST match max_dag_depth above
 
 # Optimization (tuned for longer training)
 learning_rate = 3e-4  # Standard learning rate
-max_iters = 20_000  # Longer training for RunPod
+max_iters = 10_000  # Longer training for RunPod
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
@@ -61,8 +61,8 @@ keep_alive = False  # Auto-stop by default
 check_nans = False  # Check for NaNs in cloud training
 
 # Loss weights (balanced for full training)
-sign_loss_weight = 0.5
-log_loss_weight = 1.0
+sign_loss_weight = 0.3
+log_loss_weight = 1.5
 op_loss_weight = 1.0
 
 # Random seeds
