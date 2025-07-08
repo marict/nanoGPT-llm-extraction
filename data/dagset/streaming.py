@@ -238,8 +238,17 @@ def convert_dag_to_expression_string(
     rng: random.Random = None,
     convert_to_english: bool = True,
     conversion_probability: float = 0.3,
+    permutation_probability: float = 0.5,
 ) -> str:
     """Convert DAG structure to a simple mathematical expression string following stack-based execution.
+
+    Args:
+        initial_values: List of initial values
+        operations: List of operations
+        rng: Random number generator
+        convert_to_english: Whether to convert to English words
+        conversion_probability: Probability of English conversion
+        permutation_probability: Probability of applying permutation (0.0 = disabled)
 
     Returns:
         Simple mathematical expression string like "1 * (2 - 3/4)"
@@ -247,7 +256,17 @@ def convert_dag_to_expression_string(
     if rng is None:
         rng = random
 
-    stack = [sympy.Symbol(str(v)) for v in initial_values]
+    # Create symbols using absolute values to avoid double negatives
+    # Then handle the sign by wrapping in negation if needed
+    stack = []
+    for v in initial_values:
+        if v < 0:
+            # Create symbol with positive value, then negate
+            pos_symbol = sympy.Symbol(str(abs(v)))
+            stack.append(-pos_symbol)
+        else:
+            stack.append(sympy.Symbol(str(v)))
+
     op_name_to_symbol = {
         "add": "+",
         "subtract": "-",
@@ -270,13 +289,153 @@ def convert_dag_to_expression_string(
         expr = op_symbol_to_expression[op_symbol](a, b)
         stack.append(expr)
 
-    result = str(stack[0])
+    final_expr = stack[0]
+
+    # Apply expression permutation for diversity if probability > 0
+    if permutation_probability > 0.0 and rng.random() < permutation_probability:
+        final_expr = permute_expression_randomly(final_expr, rng)
+
+    result = str(final_expr)
+
+    # Post-process to clean up any remaining double negatives
+    # This is a safety net in case sympy still creates them
+    result = result.replace("--", "+")
+    result = result.replace("+-", "-")
 
     # Apply English conversion if requested
     if convert_to_english:
         result = add_english_to_expression(result, conversion_probability, rng)
 
     return result
+
+
+def permute_expression_randomly(expr: sympy.Expr, rng: random.Random) -> sympy.Expr:
+    """Create a mathematically equivalent but syntactically different expression.
+
+    Args:
+        expr: The sympy expression to permute
+        rng: Random number generator
+
+    Returns:
+        Permuted but equivalent expression
+    """
+    # List of permutation strategies to try
+    strategies = [
+        "commute",  # Reorder commutative operations
+        "associate",  # Change associative grouping
+        "expand",  # Expand products/powers
+        "factor",  # Factor expressions
+        "simplify",  # Simplify expression
+        "reorder_args",  # Reorder function arguments
+    ]
+
+    # Randomly select a strategy
+    strategy = rng.choice(strategies)
+
+    try:
+        if strategy == "commute":
+            return commute_operations(expr, rng)
+        elif strategy == "associate":
+            return change_associative_grouping(expr, rng)
+        elif strategy == "expand":
+            expanded = sympy.expand(expr)
+            # Only use if it's different and not too complex
+            if str(expanded) != str(expr) and len(str(expanded)) < len(str(expr)) * 2:
+                return expanded
+        elif strategy == "factor":
+            factored = sympy.factor(expr)
+            # Only use if it's different and not too complex
+            if str(factored) != str(expr) and len(str(factored)) < len(str(expr)) * 2:
+                return factored
+        elif strategy == "simplify":
+            simplified = sympy.simplify(expr)
+            # Only use if it's different
+            if str(simplified) != str(expr):
+                return simplified
+        elif strategy == "reorder_args":
+            return reorder_args_recursively(expr, rng)
+    except (sympy.SympifyError, AttributeError, TypeError):
+        # If any strategy fails, just return the original
+        pass
+
+    # Fallback: return original expression
+    return expr
+
+
+def commute_operations(expr: sympy.Expr, rng: random.Random) -> sympy.Expr:
+    """Randomly reorder commutative operations (+ and *)."""
+    if expr.is_Add:
+        # For addition, randomly shuffle the arguments
+        args = list(expr.args)
+        if len(args) > 1:
+            rng.shuffle(args)
+            return sympy.Add(*args)
+    elif expr.is_Mul:
+        # For multiplication, randomly shuffle the arguments
+        args = list(expr.args)
+        if len(args) > 1:
+            rng.shuffle(args)
+            return sympy.Mul(*args)
+    elif hasattr(expr, "args") and len(expr.args) > 0:
+        # Recursively apply to sub-expressions
+        new_args = [commute_operations(arg, rng) for arg in expr.args]
+        return expr.func(*new_args)
+
+    return expr
+
+
+def change_associative_grouping(expr: sympy.Expr, rng: random.Random) -> sympy.Expr:
+    """Change the associative grouping of operations."""
+    if expr.is_Add and len(expr.args) >= 3:
+        # For a + b + c, randomly group as (a + b) + c or a + (b + c)
+        args = list(expr.args)
+        if rng.random() < 0.5:
+            # Group first two: (a + b) + rest
+            first_group = args[0] + args[1]
+            if len(args) > 2:
+                return first_group + sympy.Add(*args[2:])
+            else:
+                return first_group
+        else:
+            # Group last two: first + (b + c)
+            if len(args) > 2:
+                last_group = sympy.Add(*args[1:])
+                return args[0] + last_group
+    elif expr.is_Mul and len(expr.args) >= 3:
+        # Similar for multiplication
+        args = list(expr.args)
+        if rng.random() < 0.5:
+            first_group = args[0] * args[1]
+            if len(args) > 2:
+                return first_group * sympy.Mul(*args[2:])
+            else:
+                return first_group
+        else:
+            if len(args) > 2:
+                last_group = sympy.Mul(*args[1:])
+                return args[0] * last_group
+    elif hasattr(expr, "args") and len(expr.args) > 0:
+        # Recursively apply to sub-expressions
+        new_args = [change_associative_grouping(arg, rng) for arg in expr.args]
+        return expr.func(*new_args)
+
+    return expr
+
+
+def reorder_args_recursively(expr: sympy.Expr, rng: random.Random) -> sympy.Expr:
+    """Recursively reorder arguments in commutative operations."""
+    if hasattr(expr, "args") and len(expr.args) > 1:
+        # Recursively process arguments first
+        new_args = [reorder_args_recursively(arg, rng) for arg in expr.args]
+
+        # If this is a commutative operation, randomly reorder
+        if expr.is_Add or expr.is_Mul:
+            if rng.random() < 0.5:  # 50% chance to reorder
+                rng.shuffle(new_args)
+
+        return expr.func(*new_args)
+
+    return expr
 
 
 def convert_plan_to_tensors(
@@ -320,6 +479,7 @@ def generate_single_dag_example(
     rng: random.Random = None,
     convert_to_english: bool = False,
     conversion_probability: float = 0.3,
+    permutation_probability: float = 0.5,
 ) -> DAGExample:
     """Generate a single DAG computation example as a simple math expression.
 
@@ -328,6 +488,9 @@ def generate_single_dag_example(
         num_initial_values: Number of initial values
         value_range: Range for values in the expression
         rng: Random number generator to use
+        convert_to_english: Whether to convert to English words
+        conversion_probability: Probability of English conversion
+        permutation_probability: Probability of applying permutation (0.0 = disabled)
 
     Returns:
         DAG computation example with simple expression format
@@ -352,6 +515,7 @@ def generate_single_dag_example(
         rng=rng,
         convert_to_english=convert_to_english,
         conversion_probability=conversion_probability,
+        permutation_probability=permutation_probability,
     )
 
     # Step 3: Convert dag plan to a tensor for labels
@@ -378,6 +542,7 @@ def generate_dag_dataset(
     rng: random.Random = None,
     convert_to_english: bool = False,
     conversion_probability: float = 0.3,
+    permutation_probability: float = 0.5,
 ) -> list[DAGExample]:
     """Generate a dataset of DAG computation examples (structure-only).
 
@@ -387,6 +552,9 @@ def generate_dag_dataset(
         num_initial_values: Number of initial values per example
         value_range: Range for initial values
         rng: Random number generator to use
+        convert_to_english: Whether to convert to English words
+        conversion_probability: Probability of English conversion
+        permutation_probability: Probability of applying permutation (0.0 = disabled)
 
     Returns:
         List of DAG examples with structure only (no computed results)
@@ -409,6 +577,7 @@ def generate_dag_dataset(
             rng,
             convert_to_english,
             conversion_probability,
+            permutation_probability,
         )
         examples.append(example)
 
@@ -427,6 +596,7 @@ class StreamingDAGDataset:
         tokenizer: str = "gpt2",
         convert_to_english: bool = True,
         english_conversion_probability: float = 0.3,
+        permutation_probability: float = 0.5,
     ):
         """Initialize the streaming DAG dataset.
 
@@ -438,6 +608,7 @@ class StreamingDAGDataset:
             tokenizer: Tokenizer to use (default: gpt2)
             convert_to_english: Whether to potentially convert numbers/operators to English
             english_conversion_probability: Probability of converting to English (0.0 to 1.0)
+            permutation_probability: Probability of applying permutation (0.0 = disabled)
         """
         self.max_depth = max_depth
         # Set num_initial_values to match DAG predictor expectations
@@ -449,6 +620,7 @@ class StreamingDAGDataset:
         self.tokenizer = tokenizer
         self.convert_to_english = convert_to_english
         self.english_conversion_probability = english_conversion_probability
+        self.permutation_probability = permutation_probability
 
         # Initialize tokenizer
         self.enc = get_encoding(tokenizer)
@@ -475,6 +647,7 @@ class StreamingDAGDataset:
             rng=self.random_state,
             convert_to_english=self.convert_to_english,
             conversion_probability=self.english_conversion_probability,
+            permutation_probability=self.permutation_probability,
         )
 
         # Convert to text
@@ -629,6 +802,7 @@ def create_dag_dataloaders(
     val_seed: int = 43,
     convert_to_english: bool = False,
     english_conversion_probability: float = 0.3,
+    permutation_probability: float = 0.5,
 ) -> tuple[DAGDataLoader, DAGDataLoader]:
     """Create train and validation data loaders.
 
@@ -642,6 +816,7 @@ def create_dag_dataloaders(
         val_seed: Seed for validation data
         convert_to_english: Whether to potentially convert numbers/operators to English
         english_conversion_probability: Probability of converting to English (0.0 to 1.0)
+        permutation_probability: Probability of applying permutation (0.0 = disabled)
 
     Returns:
         Tuple of (train_loader, val_loader)
@@ -652,6 +827,7 @@ def create_dag_dataloaders(
         seed=train_seed,
         convert_to_english=convert_to_english,
         english_conversion_probability=english_conversion_probability,
+        permutation_probability=permutation_probability,
     )
 
     val_dataset = StreamingDAGDataset(
@@ -659,6 +835,7 @@ def create_dag_dataloaders(
         seed=val_seed,
         convert_to_english=convert_to_english,
         english_conversion_probability=english_conversion_probability,
+        permutation_probability=permutation_probability,
     )
 
     # Create data loaders
@@ -695,6 +872,7 @@ class DAGStructureDataset:
         max_seq_length: int = 512,
         convert_to_english: bool = False,
         english_conversion_probability: float = 0.3,
+        permutation_probability: float = 0.5,
     ):
         """Initialize the DAG structure dataset.
 
@@ -707,6 +885,7 @@ class DAGStructureDataset:
             max_seq_length: Maximum sequence length for text inputs
             convert_to_english: Whether to potentially convert numbers/operators to English
             english_conversion_probability: Probability of converting to English (0.0 to 1.0)
+            permutation_probability: Probability of applying permutation (0.0 = disabled)
         """
         self.max_depth = max_depth
         # Set num_initial_values to match DAG predictor expectations
@@ -718,6 +897,7 @@ class DAGStructureDataset:
         self.max_seq_length = max_seq_length
         self.convert_to_english = convert_to_english
         self.english_conversion_probability = english_conversion_probability
+        self.permutation_probability = permutation_probability
 
         # Initialize tokenizer
         self.enc = get_encoding(tokenizer)
@@ -748,6 +928,7 @@ class DAGStructureDataset:
             rng=self.random_state,
             convert_to_english=self.convert_to_english,
             conversion_probability=self.english_conversion_probability,
+            permutation_probability=self.permutation_probability,
         )
 
         # Extract text
@@ -890,6 +1071,7 @@ def create_dag_structure_dataloaders(
     val_seed: int = 43,
     value_range: tuple[float, float] = (-100.0, 100.0),
     english_conversion_rate: float = 0.3,
+    permutation_probability: float = 0.5,
 ) -> Tuple[Iterator, Iterator]:
     """Create train and validation structure dataloaders.
 
@@ -901,6 +1083,7 @@ def create_dag_structure_dataloaders(
         val_seed: Seed for validation data
         value_range: Range for initial values (allows negative values for meaningful sign prediction)
         english_conversion_rate: Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
+        permutation_probability: Probability of applying permutation (0.0 = disabled)
 
     Returns:
         Tuple of (train_loader, val_loader)
@@ -915,6 +1098,7 @@ def create_dag_structure_dataloaders(
         value_range=value_range,
         convert_to_english=convert_to_english,
         english_conversion_probability=english_conversion_rate,
+        permutation_probability=permutation_probability,
     )
 
     val_dataset = DAGStructureDataset(
@@ -923,6 +1107,7 @@ def create_dag_structure_dataloaders(
         value_range=value_range,
         convert_to_english=convert_to_english,
         english_conversion_probability=english_conversion_rate,
+        permutation_probability=permutation_probability,
     )
 
     # Create dataloaders

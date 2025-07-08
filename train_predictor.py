@@ -173,6 +173,11 @@ class DAGTrainConfig:
         0.3  # Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
     )
 
+    # Expression permutation settings
+    permutation_probability: float = (
+        0.3  # Probability of applying permutation (0.0 = disabled)
+    )
+
     gradient_accumulation_steps: int = 4
     batch_size: int = 32
     sequence_length: int = 512  # For tokenized text inputs
@@ -662,6 +667,9 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 f"[{time.time() - setup_start:.2f}s] Error: Failed to initialize wandb: {e}"
             )
             raise
+    else:
+        # Non-master processes don't initialize wandb
+        run = None
 
     # Device and dtype setup
     torch.manual_seed(1337 + seed_offset)
@@ -707,6 +715,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         val_seed=cfg.val_seed,
         value_range=cfg.value_range,
         english_conversion_rate=cfg.english_conversion_rate,
+        permutation_probability=cfg.permutation_probability,
     )
 
     # --------------------------------------------------------------------- #
@@ -833,6 +842,21 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     f"step {iter_num}: train loss {loss_accum.get('total_loss', 'N/A'):.4f}, "
                     f"val loss {eval_losses['total_loss']:.4f}"
                 )
+
+                # Log validation metrics to wandb
+                if run is not None:
+                    val_log_dict = {
+                        "iter": iter_num,
+                        "val/total_loss": eval_losses["total_loss"],
+                        "val/sign_loss": eval_losses["sign_loss"],
+                        "val/log_loss": eval_losses["log_loss"],
+                        "val/op_loss": eval_losses["op_loss"],
+                        "val/op_accuracy": eval_losses["op_accuracy"],
+                        "val/full_dag_op_match": eval_losses["full_dag_op_match"],
+                        "val/sign_accuracy": eval_losses["sign_accuracy"],
+                        "val/log_magnitude_mape": eval_losses["log_magnitude_mape"],
+                    }
+                    wandb.log(val_log_dict, step=iter_num, commit=True)
 
                 if (
                     cfg.always_save_checkpoint
@@ -1070,7 +1094,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         # Cleanup
         if ddp:
             destroy_process_group()
-        run.finish()
+        if run is not None:
+            run.finish()
 
         # Stop RunPod instance if we're running on RunPod and keep-alive is not enabled
         if os.getenv("RUNPOD_POD_ID") and not getattr(cfg, "keep_alive", False):

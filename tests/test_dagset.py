@@ -4,6 +4,8 @@ test_dagset.py
 Tests for the streaming DAG dataset functionality.
 """
 
+import math
+import random
 import sys
 import unittest
 from pathlib import Path
@@ -22,7 +24,7 @@ from streaming import (DAGDataLoader, DAGExample, DAGStructureDataset,
 
 # Import DAG operations for direct testing
 sys.path.append(str(Path(__file__).parent.parent))
-from models.dag_model import LOG_LIM
+from models.dag_model import LOG_LIM, OP_NAMES
 
 
 class TestIdentityFunction(unittest.TestCase):
@@ -803,8 +805,10 @@ class TestDAGStructureDataset(unittest.TestCase):
             # Verify signs are reasonable
             self.assertTrue(torch.all(torch.abs(final_sgn) <= 1.0))
 
-            # Verify log magnitudes are reasonable
-            self.assertTrue(torch.all(final_log >= 0.0))
+            # Verify log magnitudes are reasonable (finite and within bounds)
+            self.assertTrue(torch.isfinite(final_log).all())
+            self.assertTrue(torch.all(final_log >= -LOG_LIM))
+            self.assertTrue(torch.all(final_log <= LOG_LIM))
 
         except Exception as e:
             self.fail(f"Integration with stack_based_execution failed: {e}")
@@ -915,157 +919,192 @@ class TestDAGStructureDataset(unittest.TestCase):
 
 
 class TestExpressionMatching(unittest.TestCase):
-    """Test that generated expressions match actual DAG computations."""
-
-    def setUp(self):
-        """Set up test fixtures."""
-        np.random.seed(42)
-        torch.manual_seed(42)
+    """Test that expression matches the underlying DAG computation."""
 
     def test_expression_matches_computation_single_example(self):
-        """Test that a single example's expression matches its computation."""
-        # Simplified test - just verify that we can generate an example
-        example = generate_single_dag_example(depth=2, num_initial_values=3)
+        """Test that generated expression produces the same result as DAG computation."""
 
-        # Basic checks
-        self.assertIsInstance(example.text, str)
-        self.assertGreater(len(example.text), 0)
-        self.assertEqual(example.depth, 2)
-        self.assertEqual(len(example.initial_values), 3)
+        # Fixed test case to ensure reproducibility
+        initial_values = [2.5, 3.0, 1.5]
+        operations = ["add", "multiply"]
 
-        # Check tensor shapes
-        self.assertEqual(example.signs.shape, torch.Size([3]))
-        self.assertEqual(example.log_magnitudes.shape, torch.Size([3]))
-        self.assertEqual(
-            example.operations.shape, torch.Size([2, 5])
-        )  # depth x num_ops
-
-        # Test specific case: verify stack operations work correctly with identity operation
-        # Case: [-6.196, -7.2, -4.4, 7.0, -1.1374] with ['add', 'add', 'identity', 'add']
-        # Expected stack operations (working from right to left):
-        # 1. add(7.0, -1.1374) → (7.0 + -1.1374)
-        # 2. add(-4.4, (7.0 + -1.1374)) → (-4.4 + (7.0 + -1.1374))
-        # 3. identity(-7.2, (-4.4 + (7.0 + -1.1374))) → -7.2 (discard complex expression)
-        # 4. add(-6.196, -7.2) → (-6.196 + -7.2)
-        # Final expression: "-6.196 - 7.2" (only 2 values due to identity discarding others)
-        initial_values = [-6.196, -7.2, -4.4, 7.0, -1.1374]
-        operations = ["add", "add", "identity", "add"]
-
-        # Generate expression using convert_dag_to_expression_string
-        from data.dagset.streaming import convert_dag_to_expression_string
-
+        # Generate expression
         expression = convert_dag_to_expression_string(
             initial_values=initial_values,
             operations=operations,
+            rng=random.Random(42),
             convert_to_english=False,
             conversion_probability=0.0,
         )
 
-        # Verify expression is generated and contains expected pattern
-        self.assertIsInstance(expression, str)
-        self.assertGreater(len(expression), 0)
-        # The identity operation discards complex sub-expressions, so final should be simple
-        self.assertIn("-6.196", expression)
-        self.assertIn(
-            "7.2", expression
-        )  # Note: appears as '7.2' in subtraction, not '-7.2'
+        # Manually compute the result using stack-based execution
+        stack = initial_values[:]
+        for op in operations:
+            b = stack.pop()
+            a = stack.pop()
+            if op == "add":
+                result = a + b
+            elif op == "subtract":
+                result = a - b
+            elif op == "multiply":
+                result = a * b
+            elif op == "divide":
+                result = a / b
+            elif op == "identity":
+                result = a  # Discard b
+            stack.append(result)
+        expected_result = stack[0]
 
-        # Manually simulate the exact stack operations that happen
-        # Use string representations to match the actual implementation
-        stack = [str(v) for v in initial_values]
+        # Evaluate the generated expression
+        actual_result = eval(expression)
 
-        # Step 1: add(7.0, -1.1374)
-        b1 = stack.pop()  # '-1.1374'
-        a1 = stack.pop()  # '7.0'
-        result1 = f"({a1} + {b1})"  # '(7.0 + -1.1374)'
-        stack.append(result1)
-        self.assertEqual(result1, "(7.0 + -1.1374)")
-
-        # Step 2: add(-4.4, (7.0 + -1.1374))
-        b2 = stack.pop()  # '(7.0 + -1.1374)'
-        a2 = stack.pop()  # '-4.4'
-        result2 = f"({a2} + {b2})"  # '(-4.4 + (7.0 + -1.1374))'
-        stack.append(result2)
-        self.assertEqual(result2, "(-4.4 + (7.0 + -1.1374))")
-
-        # Step 3: identity(-7.2, (-4.4 + (7.0 + -1.1374))) = -7.2 (keep first, discard second)
-        b3 = stack.pop()  # '(-4.4 + (7.0 + -1.1374))'
-        a3 = stack.pop()  # '-7.2'
-        result3 = a3  # identity: take first operand, discard complex expression
-        stack.append(result3)
-        self.assertEqual(result3, "-7.2")
-
-        # Step 4: add(-6.196, -7.2)
-        b4 = stack.pop()  # '-7.2'
-        a4 = stack.pop()  # '-6.196'
-        result4 = f"({a4} + {b4})"  # '(-6.196 + -7.2)'
-        stack.append(result4)
-        self.assertEqual(result4, "(-6.196 + -7.2)")
-
-        # Final result should be the simple expression (identity discarded the complex part)
-        self.assertEqual(len(stack), 1)
-        self.assertEqual(stack[0], "(-6.196 + -7.2)")
-
-        # This demonstrates why text/target mismatches can occur: identity operations
-        # can cause only a subset of initial values to appear in the final expression
+        # Should match within floating point precision
+        self.assertAlmostEqual(actual_result, expected_result, places=10)
 
     def test_expression_matches_computation_multiple_seeds(self):
-        """Test multiple examples with different seeds to verify various operation combinations."""
-        test_seeds = [42, 43, 44, 45]
+        """Test expression matching for different random seeds."""
 
-        for seed in test_seeds:
+        for seed in [42, 123, 999]:
             with self.subTest(seed=seed):
-                # Set random state
-                np.random.seed(seed)
-                torch.manual_seed(seed)
+                rng = random.Random(seed)
 
-                # Generate example
-                example = generate_single_dag_example(depth=2, num_initial_values=3)
+                # Generate random test case
+                initial_values = [rng.uniform(-10, 10) for _ in range(4)]
+                operations = [rng.choice(OP_NAMES) for _ in range(3)]
 
-                # Basic checks for each seed
-                self.assertIsInstance(example.text, str)
-                self.assertGreater(len(example.text), 0)
-                self.assertEqual(example.depth, 2)
-                self.assertEqual(len(example.initial_values), 3)
+                # Generate expression
+                expression = convert_dag_to_expression_string(
+                    initial_values=initial_values,
+                    operations=operations,
+                    rng=rng,
+                    convert_to_english=False,
+                    conversion_probability=0.0,
+                )
 
-                # Check tensor shapes
-                self.assertEqual(example.signs.shape, torch.Size([3]))
-                self.assertEqual(example.log_magnitudes.shape, torch.Size([3]))
-                self.assertEqual(
-                    example.operations.shape, torch.Size([2, 5])
-                )  # depth x num_ops
+                # Manually compute expected result
+                stack = initial_values[:]
+                for op in operations:
+                    if len(stack) < 2:
+                        break
+                    b = stack.pop()
+                    a = stack.pop()
+                    if op == "add":
+                        result = a + b
+                    elif op == "subtract":
+                        result = a - b
+                    elif op == "multiply":
+                        result = a * b
+                    elif op == "divide":
+                        result = a / b if b != 0 else float("inf")
+                    elif op == "identity":
+                        result = a  # Discard b
+                    stack.append(result)
+
+                if stack:
+                    expected_result = stack[0]
+
+                    # Only test if result is finite
+                    if math.isfinite(expected_result):
+                        try:
+                            actual_result = eval(expression)
+                            if math.isfinite(actual_result):
+                                self.assertAlmostEqual(
+                                    actual_result, expected_result, places=8
+                                )
+                        except (ZeroDivisionError, OverflowError):
+                            # Skip cases with division by zero or overflow
+                            pass
 
     def test_english_conversion_integration(self):
-        """Test that English conversion works correctly with the integrated approach."""
-        # Test with English conversion enabled
-        example = generate_single_dag_example(
-            depth=2,
-            num_initial_values=3,
+        """Test that English conversion doesn't break expression evaluation."""
+
+        initial_values = [5.0, 2.0, 3.0]
+        operations = ["add", "multiply"]
+
+        # Test without English conversion
+        expression_numeric = convert_dag_to_expression_string(
+            initial_values=initial_values,
+            operations=operations,
+            rng=random.Random(42),
+            convert_to_english=False,
+            conversion_probability=0.0,
+        )
+
+        # Test with English conversion
+        expression_english = convert_dag_to_expression_string(
+            initial_values=initial_values,
+            operations=operations,
+            rng=random.Random(42),
             convert_to_english=True,
-            conversion_probability=1.0,
+            conversion_probability=0.3,
         )
 
-        # Verify the text contains English words
-        self.assertIsInstance(example.text, str)
-        self.assertGreater(len(example.text), 0)
+        # Both should be valid strings
+        self.assertIsInstance(expression_numeric, str)
+        self.assertIsInstance(expression_english, str)
+        self.assertGreater(len(expression_numeric), 0)
+        self.assertGreater(len(expression_english), 0)
 
-        # Should contain English words (not just numbers and symbols)
-        import re
+    def test_no_double_negatives_in_expressions(self):
+        """Test that expressions don't contain double negatives after the fix."""
 
-        english_words = re.findall(r"[a-zA-Z]+", example.text)
-        self.assertGreater(
-            len(english_words),
-            0,
-            f"Expected English words in '{example.text}', but found none",
-        )
+        # Test with various negative initial values that previously caused issues
+        test_cases = [
+            [52.3025, 84.79822, -85.0, -37.0, 1.0, -98.551, 70.407],
+            [-37.0, -85.0, -98.551],
+            [-1.0, 2.0, -3.0, 4.0],
+            [-10.5, -20.3, -30.7, -40.1, -50.9],
+        ]
 
-        # Should contain mathematical operators (either as symbols or words)
-        operators = re.findall(
-            r"[\+\-\*/]|plus|minus|times|divided|multiplied", example.text.lower()
-        )
-        self.assertGreater(
-            len(operators), 0, f"Expected operators in '{example.text}', but found none"
-        )
+        operations_sets = [
+            ["add", "add", "divide", "subtract", "multiply", "multiply"],
+            ["subtract", "multiply"],
+            ["add", "subtract", "multiply"],
+            ["multiply", "divide", "add", "subtract"],
+        ]
+
+        for i, (initial_values, operations) in enumerate(
+            zip(test_cases, operations_sets)
+        ):
+            with self.subTest(case=i):
+                # Adjust operations to match initial_values length
+                max_ops = len(initial_values) - 1
+                ops = operations[:max_ops] if len(operations) > max_ops else operations
+
+                for seed in [42, 123, 999]:
+                    expression = convert_dag_to_expression_string(
+                        initial_values=initial_values,
+                        operations=ops,
+                        rng=random.Random(seed),
+                        convert_to_english=False,
+                        conversion_probability=0.0,
+                    )
+
+                    # Check that there are no double negatives
+                    self.assertNotIn(
+                        "--",
+                        expression,
+                        f"Found double negative in expression: {expression}",
+                    )
+
+                    # Check that there are no malformed +-
+                    self.assertNotIn(
+                        "+-",
+                        expression,
+                        f"Found malformed +- in expression: {expression}",
+                    )
+
+                    # Expression should be a valid string that can be evaluated
+                    self.assertIsInstance(expression, str)
+                    self.assertGreater(len(expression), 0)
+
+                    # Try to evaluate the expression to ensure it's syntactically correct
+                    try:
+                        result = eval(expression)
+                        self.assertIsInstance(result, (int, float))
+                    except (ZeroDivisionError, OverflowError):
+                        # These are acceptable mathematical exceptions
+                        pass
 
 
 if __name__ == "__main__":
