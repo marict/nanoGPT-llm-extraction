@@ -7,7 +7,7 @@ note = "DAG predictor pretraining on structure prediction - RunPod"
 
 # Training intervals
 eval_interval = 100
-log_interval = 10
+log_interval = 1  # Log every iteration for better monitoring
 eval_iters = 10
 eval_only = False
 always_save_checkpoint = False
@@ -27,8 +27,8 @@ value_range = (
 )  # Allow negative values for meaningful sign prediction
 
 # OPTIMIZED: Significantly increase data generation for better GPU utilization
-train_examples_per_batch = 4000  # Increased from 1000 - more data per batch
-val_examples_per_batch = 800  # Increased from 200 - more validation examples
+train_examples_per_batch = 8000  # Increased from 4000 - match larger batch sizes
+val_examples_per_batch = 1600  # Increased from 800 - match larger batch sizes
 
 # English conversion settings
 english_conversion_rate = 0.3  # Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
@@ -40,10 +40,10 @@ permutation_probability = (
 
 # OPTIMIZED: Training hyperparameters for maximum GPU utilization
 gradient_accumulation_steps = (
-    8  # Increased from 1 - effective batch size = 512 * 8 = 4096
+    16  # Increased from 8 - effective batch size = 1024 * 16 = 16,384
 )
-batch_size = 512  # Increased from 128 - 4x larger batches
-sequence_length = 128
+batch_size = 1024  # Increased from 512 - 8x larger batches than original
+sequence_length = 128  # Increased from 128 - 2x longer sequences
 
 # Model architecture (larger for RunPod training)
 n_layer = 12  # Full size model
@@ -75,7 +75,7 @@ keep_alive = False  # Auto-stop by default
 check_nans = False  # Check for NaNs in cloud training
 
 # Loss weights (balanced for full training)
-sign_loss_weight = 0.3
+sign_loss_weight = 1.0
 log_loss_weight = 1.0
 op_loss_weight = 1.0
 
