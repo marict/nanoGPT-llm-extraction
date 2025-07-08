@@ -889,6 +889,7 @@ def create_dag_structure_dataloaders(
     train_seed: int = 42,
     val_seed: int = 43,
     value_range: tuple[float, float] = (-100.0, 100.0),
+    english_conversion_rate: float = 0.3,
 ) -> Tuple[Iterator, Iterator]:
     """Create train and validation structure dataloaders.
 
@@ -899,28 +900,29 @@ def create_dag_structure_dataloaders(
         train_seed: Seed for training data
         val_seed: Seed for validation data
         value_range: Range for initial values (allows negative values for meaningful sign prediction)
+        english_conversion_rate: Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
 
     Returns:
         Tuple of (train_loader, val_loader)
     """
-    # English conversion is hard-set to 30% for train_predictor jobs
-    ENGLISH_CONVERSION_RATE = 0.3
+    # Use configurable english conversion rate
+    convert_to_english = english_conversion_rate > 0.0
 
     # Create datasets with fixed depth
     train_dataset = DAGStructureDataset(
         max_depth=max_depth,
         seed=train_seed,
         value_range=value_range,
-        convert_to_english=True,
-        english_conversion_probability=ENGLISH_CONVERSION_RATE,
+        convert_to_english=convert_to_english,
+        english_conversion_probability=english_conversion_rate,
     )
 
     val_dataset = DAGStructureDataset(
         max_depth=max_depth,
         seed=val_seed,
         value_range=value_range,
-        convert_to_english=True,
-        english_conversion_probability=ENGLISH_CONVERSION_RATE,
+        convert_to_english=convert_to_english,
+        english_conversion_probability=english_conversion_rate,
     )
 
     # Create dataloaders

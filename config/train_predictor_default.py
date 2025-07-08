@@ -34,6 +34,9 @@ value_range = (-10.0, 10.0)  # Allow negative values for meaningful sign predict
 train_examples_per_batch = 100
 val_examples_per_batch = 20
 
+# English conversion settings
+english_conversion_rate = 0.3  # Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
+
 # Training hyperparameters
 gradient_accumulation_steps = 1
 batch_size = 4

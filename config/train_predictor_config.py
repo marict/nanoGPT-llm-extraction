@@ -26,6 +26,9 @@ value_range = (-100.0, 100.0)  # Allow negative values for meaningful sign predi
 train_examples_per_batch = 1000  # Larger batches for efficiency
 val_examples_per_batch = 200  # More validation examples
 
+# English conversion settings
+english_conversion_rate = 0.0  # Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
+
 # Training hyperparameters (optimized for RunPod)
 gradient_accumulation_steps = 1
 batch_size = 48

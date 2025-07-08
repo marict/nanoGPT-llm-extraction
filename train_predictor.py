@@ -126,6 +126,11 @@ class DAGTrainConfig:
     train_examples_per_batch: int = 1000
     val_examples_per_batch: int = 100
 
+    # English conversion settings
+    english_conversion_rate: float = (
+        0.3  # Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
+    )
+
     gradient_accumulation_steps: int = 4
     batch_size: int = 32
     sequence_length: int = 512  # For tokenized text inputs
@@ -666,6 +671,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         train_seed=cfg.train_seed,
         val_seed=cfg.val_seed,
         value_range=cfg.value_range,
+        english_conversion_rate=cfg.english_conversion_rate,
     )
 
     # --------------------------------------------------------------------- #
