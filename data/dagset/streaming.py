@@ -34,7 +34,7 @@ def standardize_float_rounding(value: float, rng: random.Random = None) -> float
         rng: Random number generator for choosing decimal places
 
     Returns:
-        Float rounded to 0-5 decimal places
+        Float rounded to 0-5 decimal places (never zero)
     """
     if rng is None:
         rng = random
@@ -44,6 +44,11 @@ def standardize_float_rounding(value: float, rng: random.Random = None) -> float
 
     # Round to the chosen number of decimal places
     rounded_value = round(value, decimal_places)
+
+    # Ensure we never return exactly zero to avoid log(0) domain errors
+    if rounded_value == 0.0:
+        # Use a small positive value instead
+        rounded_value = 0.01 if decimal_places >= 2 else 1
 
     # Convert to int if no decimal places to avoid .0 at the end
     if decimal_places == 0:
@@ -254,7 +259,12 @@ def convert_plan_to_tensors(
     """
     # Convert initial values to signs and log magnitudes
     signs = torch.tensor([1.0 if v >= 0.0 else -1.0 for v in initial_values])
-    log_magnitudes = torch.tensor([math.log(abs(v)) for v in initial_values])
+
+    # Handle potential zero values by using a small epsilon to avoid log(0) domain error
+    epsilon = 1e-8
+    log_magnitudes = torch.tensor(
+        [math.log(max(abs(v), epsilon)) for v in initial_values]
+    )
 
     # Convert operations to one-hot encoded tensors
     operation_to_index = {op: i for i, op in enumerate(OP_NAMES)}

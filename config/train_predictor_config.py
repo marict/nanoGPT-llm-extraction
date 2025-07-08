@@ -54,7 +54,8 @@ min_lr = 3e-5
 
 # System settings (optimized for RunPod)
 backend = "nccl"
-dtype = "bfloat16"  # Use bfloat16 for efficiency if available
+# dtype = "bfloat16"  # Use bfloat16 for efficiency if available
+dtype = "float32"
 compile = True  # Enable compilation for speed
 keep_alive = False  # Auto-stop by default
 check_nans = False  # Check for NaNs in cloud training

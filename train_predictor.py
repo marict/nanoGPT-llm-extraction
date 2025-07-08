@@ -759,292 +759,276 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
     t0 = time.time()
     raw_model = model.module if ddp else model
+    train_start = time.time()
 
-    while iter_num <= cfg.max_iters:
-        # Learning rate scheduling
-        lr = get_lr(iter_num, cfg=cfg) if cfg.decay_lr else cfg.learning_rate
-        for param_group in optimizer.param_groups:
-            param_group["lr"] = lr
+    try:
+        while iter_num <= cfg.max_iters:
+            # Learning rate scheduling
+            lr = get_lr(iter_num, cfg=cfg) if cfg.decay_lr else cfg.learning_rate
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = lr
 
-        # Evaluation: run every <eval_interval> iterations, but **skip** iter 0
-        # (unless we are in eval-only mode, in which case we still evaluate once).
-        if master_process and (
-            (iter_num > 0 and iter_num % cfg.eval_interval == 0) or cfg.eval_only
-        ):
-            print(
-                f"[{time.time() - setup_start:.2f}s] Running evaluation at iter {iter_num}"
-            )
+            # Evaluation
+            if iter_num % cfg.eval_interval == 0 and master_process:
+                model.eval()
+                eval_losses = evaluate_dag_model(
+                    raw_model, val_loader, device, ctx, cfg, cfg.eval_iters
+                )
+                print(
+                    f"step {iter_num}: train loss {loss_accum.get('total_loss', 'N/A'):.4f}, "
+                    f"val loss {eval_losses['total_loss']:.4f}"
+                )
 
-            val_losses = evaluate_dag_model(
-                raw_model, val_loader, device, ctx, cfg, cfg.eval_iters
-            )
+                if (
+                    cfg.always_save_checkpoint
+                    or eval_losses["total_loss"] < best_val_loss
+                ):
+                    best_val_loss = eval_losses["total_loss"]
+                    if iter_num > 0:
+                        checkpoint_path = get_checkpoint_filename(cfg, iter_num)
+                        print(f"saving checkpoint to {checkpoint_path}")
+                        checkpoint = {
+                            "model": raw_model.state_dict(),
+                            "optimizer": optimizer.state_dict(),
+                            "model_config": model_config.__dict__,
+                            "iter_num": iter_num,
+                            "best_val_loss": best_val_loss,
+                        }
+                        _safe_torch_save(checkpoint, Path(checkpoint_path))
 
-            # Build validation log message
-            val_log_msg = (
-                f"step {iter_num}: val_total {val_losses['total_loss']:.4f}, "
-                f"val_sign {val_losses['sign_loss']:.4f}, "
-                f"val_log {val_losses['log_loss']:.4f}, "
-                f"val_op {val_losses['op_loss']:.4f}"
-                f", val_op_acc {val_losses['op_accuracy']:.4f}, "
-                f"val_full_match {val_losses['full_dag_op_match']:.4f}, "
-                f"val_sign_acc {val_losses['sign_accuracy']:.4f}, "
-                f"val_log_mape {val_losses['log_magnitude_mape']:.4f}"
-            )
-            print(val_log_msg)
+                model.train()
 
-            # Log to wandb
-            if run is not None:
-                log_dict = {
-                    "iter": iter_num,
-                    "lr": lr,
-                    "val/total_loss": val_losses["total_loss"],
-                    "val/sign_loss": val_losses["sign_loss"],
-                    "val/log_loss": val_losses["log_loss"],
-                    "val/op_loss": val_losses["op_loss"],
-                    "val/op_accuracy": val_losses["op_accuracy"],
-                    "val/full_dag_op_match": val_losses["full_dag_op_match"],
-                    "val/sign_accuracy": val_losses["sign_accuracy"],
-                    "val/log_magnitude_mape": val_losses["log_magnitude_mape"],
-                }
+            # Early stopping
+            if iter_num == 0 and cfg.eval_only:
+                break
 
-                wandb.log(log_dict, step=iter_num, commit=False)
+            # Forward and backward pass
+            optimizer.zero_grad(set_to_none=True)
 
-            # Save checkpoint
-            if val_losses["total_loss"] < best_val_loss or cfg.always_save_checkpoint:
-                best_val_loss = val_losses["total_loss"]
-                if iter_num > 0:
-                    ckpt = {
-                        "model": raw_model.state_dict(),
-                        "optimizer": optimizer.state_dict(),
-                        "model_config": model_config.__dict__,
-                        "iter_num": iter_num,
-                        "best_val_loss": best_val_loss,
-                        "config": cfg.__dict__,
+            # Get a batch
+            texts, structures = next(train_loader)
+
+            # Move targets to device
+            target_sgn = structures["initial_sgn"].to(device)
+            target_log = structures["initial_log"].to(device)
+            target_ops = structures["operation_probs"].to(device)
+
+            loss_accum = {
+                "total_loss": 0.0,
+                "sign_loss": 0.0,
+                "log_loss": 0.0,
+                "op_loss": 0.0,
+                "op_accuracy": 0.0,
+                "full_dag_op_match": 0.0,
+                "sign_accuracy": 0.0,
+                "log_magnitude_mape": 0.0,
+            }
+
+            for micro_step in range(cfg.gradient_accumulation_steps):
+                if ddp:
+                    model.require_backward_grad_sync = (
+                        micro_step == cfg.gradient_accumulation_steps - 1
+                    )
+
+                with ctx:
+                    # Tokenize texts properly (instead of dummy tokens)
+                    batch_size = len(texts)
+
+                    # For now, create random input tokens (in real implementation, would tokenize texts)
+                    # TODO: Implement proper text tokenization from DAG structure descriptions
+                    input_tokens = torch.randint(
+                        0,
+                        min(1000, raw_model.config.vocab_size),
+                        (batch_size, cfg.sequence_length),
+                        device=device,
+                    )
+
+                    # Forward pass through shallow attention DAG predictor model
+                    pred_sgn, pred_log, pred_ops = raw_model(input_tokens)
+
+                    # Average over sequence dimension
+                    pred_sgn_avg = pred_sgn.mean(dim=1)  # (B, num_nodes_pred)
+                    pred_log_avg = pred_log.mean(dim=1)  # (B, num_nodes_pred)
+                    pred_ops_avg = pred_ops.mean(dim=1)  # (B, depth_pred, n_ops)
+
+                    # Ensure target and prediction tensors have compatible shapes
+                    target_nodes = target_sgn.size(1)
+                    pred_nodes = pred_sgn_avg.size(1)
+                    target_depth = target_ops.size(1)
+                    pred_depth = pred_ops_avg.size(1)
+
+                    # Handle mismatched node dimensions
+                    if pred_nodes != target_nodes:
+                        if pred_nodes > target_nodes:
+                            # Truncate predictions
+                            pred_sgn_avg = pred_sgn_avg[:, :target_nodes]
+                            pred_log_avg = pred_log_avg[:, :target_nodes]
+                        else:
+                            # Pad predictions with zeros
+                            pad_nodes = target_nodes - pred_nodes
+                            pred_sgn_avg = F.pad(pred_sgn_avg, (0, pad_nodes))
+                            pred_log_avg = F.pad(pred_log_avg, (0, pad_nodes))
+
+                    if pred_depth != target_depth:
+                        if pred_depth > target_depth:
+                            # Truncate predictions
+                            pred_ops_avg = pred_ops_avg[:, :target_depth]
+                        else:
+                            # Pad predictions with zeros
+                            pad_depth = target_depth - pred_depth
+                            pred_ops_avg = F.pad(pred_ops_avg, (0, 0, 0, pad_depth))
+
+                    # Add sequence dimension
+                    pred_sgn_seq = pred_sgn_avg.unsqueeze(1)
+                    pred_log_seq = pred_log_avg.unsqueeze(1)
+                    pred_ops_seq = pred_ops_avg.unsqueeze(1)
+
+                    # Add sequence dimension to targets
+                    target_sgn_seq = target_sgn.unsqueeze(1)
+                    target_log_seq = target_log.unsqueeze(1)
+                    target_ops_seq = target_ops.unsqueeze(1)
+
+                    # Compute loss
+                    losses = compute_dag_structure_loss(
+                        pred_sgn_seq,
+                        pred_log_seq,
+                        pred_ops_seq,
+                        target_sgn_seq,
+                        target_log_seq,
+                        target_ops_seq,
+                        cfg,
+                    )
+
+                    loss = losses["total_loss"] / cfg.gradient_accumulation_steps
+
+                    # Accumulate losses for logging
+                    for key, value in losses.items():
+                        loss_accum[key] += (
+                            value.item() / cfg.gradient_accumulation_steps
+                        )
+
+                    # ------------------------------------------------------------------ #
+                    # Compute and accumulate training metrics (same as evaluation)
+                    # ------------------------------------------------------------------ #
+                    pred_ops_idx = pred_ops_avg.argmax(dim=-1)  # (B, depth)
+                    target_ops_idx = target_ops.argmax(dim=-1)
+                    op_correct = pred_ops_idx.eq(target_ops_idx)
+                    loss_accum["op_accuracy"] += (
+                        op_correct.float().mean().item()
+                        / cfg.gradient_accumulation_steps
+                    )
+                    loss_accum["full_dag_op_match"] += (
+                        op_correct.all(dim=-1).float().mean().item()
+                        / cfg.gradient_accumulation_steps
+                    )
+
+                    sign_correct = torch.sign(pred_sgn_avg).eq(torch.sign(target_sgn))
+                    loss_accum["sign_accuracy"] += (
+                        sign_correct.float().mean().item()
+                        / cfg.gradient_accumulation_steps
+                    )
+
+                    pred_mag = pred_log_avg.exp()
+                    target_mag = target_log.exp()
+                    log_mape = (
+                        (pred_mag - target_mag).abs() / target_mag.clamp_min(1e-8)
+                    ).mean()
+                    loss_accum["log_magnitude_mape"] += (
+                        log_mape.item() / cfg.gradient_accumulation_steps
+                    )
+
+                # Backward pass
+                scaler.scale(loss).backward()
+
+            # Optimization step
+            if cfg.grad_clip > 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+
+            scaler.step(optimizer)
+            scaler.update()
+
+            # Timing and logging
+            dt = time.time() - t0
+            t0 = time.time()
+
+            if iter_num % cfg.log_interval == 0 and master_process:
+                # Build dynamic log message for main losses
+                log_msg = (
+                    f"iter {iter_num}: loss {loss_accum['total_loss']:.4f}, "
+                    f"sign {loss_accum['sign_loss']:.4f}, "
+                    f"log {loss_accum['log_loss']:.4f}, "
+                    f"op {loss_accum['op_loss']:.4f}"
+                    f", op_acc {loss_accum['op_accuracy']:.4f}, "
+                    f"full_match {loss_accum['full_dag_op_match']:.4f}, "
+                    f"sign_acc {loss_accum['sign_accuracy']:.4f}, "
+                    f"log_mape {loss_accum['log_magnitude_mape']:.4f}"
+                )
+
+                # Add internal losses if present
+                internal_loss_keys = [
+                    k
+                    for k in loss_accum.keys()
+                    if k.endswith("_loss")
+                    and k not in ["total_loss", "sign_loss", "log_loss", "op_loss"]
+                ]
+                if internal_loss_keys:
+                    internal_msg = ", ".join(
+                        [
+                            f"{k.replace('_loss', '')} {loss_accum[k]:.6f}"
+                            for k in internal_loss_keys
+                        ]
+                    )
+                    log_msg += f", {internal_msg}"
+
+                log_msg += f", time {dt*1000:.2f}ms"
+                print(log_msg)
+
+                # Log to wandb
+                if run is not None:
+                    log_dict = {
+                        "iter": iter_num,
+                        "train/total_loss": loss_accum["total_loss"],
+                        "train/sign_loss": loss_accum["sign_loss"],
+                        "train/log_loss": loss_accum["log_loss"],
+                        "train/op_loss": loss_accum["op_loss"],
+                        "lr": lr,
+                        "train/op_accuracy": loss_accum["op_accuracy"],
+                        "train/full_dag_op_match": loss_accum["full_dag_op_match"],
+                        "train/sign_accuracy": loss_accum["sign_accuracy"],
+                        "train/log_magnitude_mape": loss_accum["log_magnitude_mape"],
                     }
-                    checkpoint_filename = get_checkpoint_filename(cfg, iter_num)
-                    checkpoint_path = Path(CHECKPOINT_DIR) / checkpoint_filename
-                    if master_process:
-                        print(f"Saving checkpoint: {checkpoint_path}")
-                    _safe_torch_save(ckpt, checkpoint_path)
 
-        if iter_num == 0 and cfg.eval_only:
-            break
+                    # Add internal losses to wandb logging
+                    for key, value in loss_accum.items():
+                        if (
+                            key.endswith("_loss")
+                            and key not in log_dict
+                            and key != "total_loss"
+                        ):
+                            log_dict[f"train/{key}"] = value
 
-        # Training step
-        model.train()
-        optimizer.zero_grad(set_to_none=True)
+                    wandb.log(log_dict, step=iter_num, commit=True)
 
-        # Get training batch
-        texts, structures = next(train_loader)
+            iter_num += 1
 
-        # Move to device
-        target_sgn = structures["initial_sgn"].to(device)
-        target_log = structures["initial_log"].to(device)
-        target_ops = structures["operation_probs"].to(device)
+    except Exception as e:
+        print(f"Fatal error in training loop: {e}")
+        import traceback
 
-        loss_accum = {
-            "total_loss": 0.0,
-            "sign_loss": 0.0,
-            "log_loss": 0.0,
-            "op_loss": 0.0,
-            "op_accuracy": 0.0,
-            "full_dag_op_match": 0.0,
-            "sign_accuracy": 0.0,
-            "log_magnitude_mape": 0.0,
-        }
+        traceback.print_exc()
+    finally:
+        print(
+            f"[{time.time() - train_start:.2f}s] Training loop completed in {time.time() - train_start:.2f}s"
+        )
+        # Cleanup
+        if ddp:
+            destroy_process_group()
+        run.finish()
 
-        for micro_step in range(cfg.gradient_accumulation_steps):
-            if ddp:
-                model.require_backward_grad_sync = (
-                    micro_step == cfg.gradient_accumulation_steps - 1
-                )
-
-            with ctx:
-                # Tokenize texts properly (instead of dummy tokens)
-                batch_size = len(texts)
-
-                # For now, create random input tokens (in real implementation, would tokenize texts)
-                # TODO: Implement proper text tokenization from DAG structure descriptions
-                input_tokens = torch.randint(
-                    0,
-                    min(1000, raw_model.config.vocab_size),
-                    (batch_size, cfg.sequence_length),
-                    device=device,
-                )
-
-                # Forward pass through shallow attention DAG predictor model
-                pred_sgn, pred_log, pred_ops = raw_model(input_tokens)
-
-                # Average over sequence dimension
-                pred_sgn_avg = pred_sgn.mean(dim=1)  # (B, num_nodes_pred)
-                pred_log_avg = pred_log.mean(dim=1)  # (B, num_nodes_pred)
-                pred_ops_avg = pred_ops.mean(dim=1)  # (B, depth_pred, n_ops)
-
-                # Ensure target and prediction tensors have compatible shapes
-                target_nodes = target_sgn.size(1)
-                pred_nodes = pred_sgn_avg.size(1)
-                target_depth = target_ops.size(1)
-                pred_depth = pred_ops_avg.size(1)
-
-                # Resize predictions to match targets if needed
-                if pred_nodes != target_nodes:
-                    if pred_nodes > target_nodes:
-                        # Truncate predictions
-                        pred_sgn_avg = pred_sgn_avg[:, :target_nodes]
-                        pred_log_avg = pred_log_avg[:, :target_nodes]
-                    else:
-                        # Pad predictions with zeros
-                        pad_nodes = target_nodes - pred_nodes
-                        pred_sgn_avg = F.pad(pred_sgn_avg, (0, pad_nodes))
-                        pred_log_avg = F.pad(pred_log_avg, (0, pad_nodes))
-
-                if pred_depth != target_depth:
-                    if pred_depth > target_depth:
-                        # Truncate predictions
-                        pred_ops_avg = pred_ops_avg[:, :target_depth]
-                    else:
-                        # Pad predictions with zeros
-                        pad_depth = target_depth - pred_depth
-                        pred_ops_avg = F.pad(pred_ops_avg, (0, 0, 0, pad_depth))
-
-                # Add sequence dimension
-                pred_sgn_seq = pred_sgn_avg.unsqueeze(1)
-                pred_log_seq = pred_log_avg.unsqueeze(1)
-                pred_ops_seq = pred_ops_avg.unsqueeze(1)
-
-                # Add sequence dimension to targets
-                target_sgn_seq = target_sgn.unsqueeze(1)
-                target_log_seq = target_log.unsqueeze(1)
-                target_ops_seq = target_ops.unsqueeze(1)
-
-                # Compute loss
-                losses = compute_dag_structure_loss(
-                    pred_sgn_seq,
-                    pred_log_seq,
-                    pred_ops_seq,
-                    target_sgn_seq,
-                    target_log_seq,
-                    target_ops_seq,
-                    cfg,
-                )
-
-                loss = losses["total_loss"] / cfg.gradient_accumulation_steps
-
-                # Accumulate losses for logging
-                for key, value in losses.items():
-                    loss_accum[key] += value.item() / cfg.gradient_accumulation_steps
-
-                # ------------------------------------------------------------------ #
-                # Compute and accumulate training metrics (same as evaluation)
-                # ------------------------------------------------------------------ #
-                pred_ops_idx = pred_ops_avg.argmax(dim=-1)  # (B, depth)
-                target_ops_idx = target_ops.argmax(dim=-1)
-                op_correct = pred_ops_idx.eq(target_ops_idx)
-                loss_accum["op_accuracy"] += (
-                    op_correct.float().mean().item() / cfg.gradient_accumulation_steps
-                )
-                loss_accum["full_dag_op_match"] += (
-                    op_correct.all(dim=-1).float().mean().item()
-                    / cfg.gradient_accumulation_steps
-                )
-
-                sign_correct = torch.sign(pred_sgn_avg).eq(torch.sign(target_sgn))
-                loss_accum["sign_accuracy"] += (
-                    sign_correct.float().mean().item() / cfg.gradient_accumulation_steps
-                )
-
-                pred_mag = pred_log_avg.exp()
-                target_mag = target_log.exp()
-                log_mape = (
-                    (pred_mag - target_mag).abs() / target_mag.clamp_min(1e-8)
-                ).mean()
-                loss_accum["log_magnitude_mape"] += (
-                    log_mape.item() / cfg.gradient_accumulation_steps
-                )
-
-            # Backward pass
-            scaler.scale(loss).backward()
-
-        # Optimization step
-        if cfg.grad_clip > 0:
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
-
-        scaler.step(optimizer)
-        scaler.update()
-
-        # Timing and logging
-        dt = time.time() - t0
-        t0 = time.time()
-
-        if iter_num % cfg.log_interval == 0 and master_process:
-            # Build dynamic log message for main losses
-            log_msg = (
-                f"iter {iter_num}: loss {loss_accum['total_loss']:.4f}, "
-                f"sign {loss_accum['sign_loss']:.4f}, "
-                f"log {loss_accum['log_loss']:.4f}, "
-                f"op {loss_accum['op_loss']:.4f}"
-                f", op_acc {loss_accum['op_accuracy']:.4f}, "
-                f"full_match {loss_accum['full_dag_op_match']:.4f}, "
-                f"sign_acc {loss_accum['sign_accuracy']:.4f}, "
-                f"log_mape {loss_accum['log_magnitude_mape']:.4f}"
-            )
-
-            # Add internal losses if present
-            internal_loss_keys = [
-                k
-                for k in loss_accum.keys()
-                if k.endswith("_loss")
-                and k not in ["total_loss", "sign_loss", "log_loss", "op_loss"]
-            ]
-            if internal_loss_keys:
-                internal_msg = ", ".join(
-                    [
-                        f"{k.replace('_loss', '')} {loss_accum[k]:.6f}"
-                        for k in internal_loss_keys
-                    ]
-                )
-                log_msg += f", {internal_msg}"
-
-            log_msg += f", time {dt*1000:.2f}ms"
-            print(log_msg)
-
-            # Log to wandb
-            if run is not None:
-                log_dict = {
-                    "iter": iter_num,
-                    "train/total_loss": loss_accum["total_loss"],
-                    "train/sign_loss": loss_accum["sign_loss"],
-                    "train/log_loss": loss_accum["log_loss"],
-                    "train/op_loss": loss_accum["op_loss"],
-                    "lr": lr,
-                    "train/op_accuracy": loss_accum["op_accuracy"],
-                    "train/full_dag_op_match": loss_accum["full_dag_op_match"],
-                    "train/sign_accuracy": loss_accum["sign_accuracy"],
-                    "train/log_magnitude_mape": loss_accum["log_magnitude_mape"],
-                }
-
-                # Add internal losses to wandb logging
-                for key, value in loss_accum.items():
-                    if (
-                        key.endswith("_loss")
-                        and key not in log_dict
-                        and key != "total_loss"
-                    ):
-                        log_dict[f"train/{key}"] = value
-
-                wandb.log(log_dict, step=iter_num, commit=True)
-
-        iter_num += 1
-
-    # Cleanup
-    if ddp:
-        destroy_process_group()
-    run.finish()
-
-    # Stop RunPod if needed
-    if os.getenv("RUNPOD_POD_ID") and not getattr(cfg, "keep_alive", False):
-        runpod_service.stop_runpod()
+        # Stop RunPod instance if we're running on RunPod and keep-alive is not enabled
+        if os.getenv("RUNPOD_POD_ID") and not getattr(cfg, "keep_alive", False):
+            runpod_service.stop_runpod()
 
 
 def main() -> None:
