@@ -243,7 +243,7 @@ def test_checkpoint_functionality_comprehensive(tmp_path):
         (checkpoints_dir / filename).touch()
 
     # Test cleanup using actual function signature
-    with patch("train.CHECKPOINT_DIR", str(checkpoints_dir)):
+    with patch("training_utils.CHECKPOINT_DIR", str(checkpoints_dir)):
         test_cfg = TrainConfig(name="test_cleanup", clear_previous_checkpoints=True)
 
         # Create test files with pattern that matches the config name
@@ -288,15 +288,15 @@ def test_checkpoint_functionality_comprehensive(tmp_path):
     for filename in test_checkpoints:
         (checkpoints_dir / filename).touch()
 
-    with patch("train.CHECKPOINT_DIR", str(checkpoints_dir)):
+    with patch("training_utils.CHECKPOINT_DIR", str(checkpoints_dir)):
         latest = find_latest_checkpoint(test_cfg)
         assert latest == checkpoints_dir / f"ckpt_{safe_name}_3000.pt"
 
-    # Test with no checkpoints
-    empty_dir = tmp_path / "empty"
-    empty_dir.mkdir()
-    with patch("train.CHECKPOINT_DIR", str(empty_dir)):
-        assert find_latest_checkpoint(test_cfg) is None
+    # Test finding with no checkpoints
+    (checkpoints_dir / "non_matching_file.txt").touch()
+    with patch("training_utils.CHECKPOINT_DIR", str(checkpoints_dir)):
+        latest = find_latest_checkpoint(TrainConfig(name="no_such_run"))
+        assert latest is None
 
     # Test config file checkpoint cleanup integration
     config_checkpoints_dir = tmp_path / "config_checkpoints"
@@ -314,7 +314,7 @@ def test_checkpoint_functionality_comprehensive(tmp_path):
         (config_checkpoints_dir / filename).touch()
 
     # Test cleanup works with config-based filenames
-    with patch("train.CHECKPOINT_DIR", str(config_checkpoints_dir)):
+    with patch("training_utils.CHECKPOINT_DIR", str(config_checkpoints_dir)):
         config_test_cfg = TrainConfig(
             name="config_test", clear_previous_checkpoints=True
         )

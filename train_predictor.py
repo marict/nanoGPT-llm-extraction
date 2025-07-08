@@ -35,6 +35,11 @@ from data.dagset.streaming import create_dag_structure_dataloaders
 from models.dag_model import OP_NAMES
 from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
 from python_version_check import check_python_version
+from training_utils import (CHECKPOINT_DIR, BaseConfig, _check_for_nonfinite,
+                            _safe_torch_save, apply_overrides,
+                            clean_previous_checkpoints, find_latest_checkpoint,
+                            generate_run_name, get_checkpoint_filename, get_lr,
+                            load_config_file, parse_args, update_config)
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
 CUDA_AVAILABLE = torch.cuda.is_available()
@@ -157,19 +162,15 @@ def _all_tensors(state):
 
 
 @dataclass
-class DAGTrainConfig:
+class DAGTrainConfig(BaseConfig):
     """Container for DAG predictor training hyperparameters."""
 
-    eval_interval: int = 100
-    log_interval: int = 10
-    eval_iters: int = 50
-    eval_only: bool = False
-    always_save_checkpoint: bool = True
-    save_best: bool = False  # If True, save a single best checkpoint
-    clear_previous_checkpoints: bool = False
-    init_from: str = "scratch"  # "scratch", "resume", or "latest"
-
     name: str = "dag_pretrain"  # Project/run name
+
+    # Learning rate schedule
+    use_cyclical_lr: bool = False
+    cyclical_lr_period: int = 1000
+    cyclical_lr_amplitude: float = 0.1
 
     # DAG dataset parameters
     max_dag_depth: int = 8
@@ -211,19 +212,6 @@ class DAGTrainConfig:
     warmup_iters: int = 500
     lr_decay_iters: int = 10000
     min_lr: float = 3e-5
-
-    backend: str = "nccl"
-    dtype: str = (
-        "bfloat16"
-        if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-        else "float16"
-    )
-    compile: bool = True
-    keep_alive: bool = False
-    check_nans: bool = False
-
-    # Optional run note
-    note: str | None = None
 
     # Loss weights
     sign_loss_weight: float = 1.0
@@ -668,12 +656,15 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         master_process = True
         seed_offset = 0
         ddp_world_size = 1
-
+    ddp_start = time.time()
+    print(
+        f"[{time.time() - setup_start:.2f}s] DDP setup completed in {time.time() - ddp_start:.2f}s"
+    )
     model_name = PredictorOnlyModel.__name__
 
     # Clean previous checkpoints
     if master_process:
-        clean_previous_checkpoints(cfg, model_name)
+        clean_previous_checkpoints(cfg, model_name=model_name)
 
     # W&B initialization
     if master_process:
@@ -778,7 +769,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
             f"[{time.time() - setup_start:.2f}s] Resuming from checkpoint (mode: {cfg.init_from})"
         )
         any_run = cfg.init_from == "latest"
-        ckpt_path = find_latest_checkpoint(cfg, model_name, any_run=any_run)
+        ckpt_path = find_latest_checkpoint(cfg, model_name=model_name, any_run=any_run)
 
         if ckpt_path is None:
             if any_run:
@@ -873,8 +864,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
     try:
         while iter_num <= cfg.max_iters:
-            # Learning rate scheduling
-            lr = get_lr(iter_num, cfg=cfg) if cfg.decay_lr else cfg.learning_rate
+            lr = get_lr(iter_num, cfg=cfg)
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr
 

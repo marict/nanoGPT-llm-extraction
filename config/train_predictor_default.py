@@ -64,10 +64,13 @@ beta2 = 0.95
 grad_clip = 1.0
 
 # Learning rate schedule
-decay_lr = False
-warmup_iters = 2000
-lr_decay_iters = 600000
-min_lr = 6e-5
+warmup_iters = 2
+lr_decay_iters = 6
+min_lr = 1e-5
+
+use_cyclical_lr = True
+cyclical_lr_period = 2
+cyclical_lr_amplitude = 0.1
 
 # System settings
 backend = "gloo"

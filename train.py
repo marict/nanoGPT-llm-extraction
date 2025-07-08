@@ -36,6 +36,11 @@ from data import prepare_dataset
 from evaluation import estimate_loss, evaluate_math
 from models.dag_model import GPT, OP_NAMES, GPTConfig
 from python_version_check import check_python_version
+from training_utils import (CHECKPOINT_DIR, BaseConfig, _check_for_nonfinite,
+                            _safe_torch_save, apply_overrides,
+                            clean_previous_checkpoints, find_latest_checkpoint,
+                            generate_run_name, get_checkpoint_filename, get_lr,
+                            load_config_file, parse_args, update_config)
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
 CUDA_AVAILABLE = torch.cuda.is_available()
@@ -56,116 +61,31 @@ except ModuleNotFoundError:
 # Default sample prompt for evaluation - consistent across sample.py and train.py
 DEFAULT_SAMPLE_PROMPT = "Two plus 5 = "
 
-# Checkpoint directory
-CHECKPOINT_DIR = (
-    "/runpod-volume/checkpoints" if os.path.exists("/runpod-volume") else "checkpoints"
-)
-
-# --------------------------------------------------------------------------- #
-# Safe checkpoint saving with retry
-# --------------------------------------------------------------------------- #
-
-
-class CheckpointSaveError(Exception):
-    """Raised when saving a checkpoint fails after retries."""
-
-
-def _safe_torch_save(obj, path: Path, retries: int = 1) -> None:
-    """Save <obj> to <path> with retry; raise CheckpointSaveError on failure."""
-    tmp_path = path.with_suffix(".tmp")
-
-    for attempt in range(retries + 1):
-        try:
-            if _HAVE_ST and _all_tensors(obj):
-                _st.save_file(obj, str(tmp_path.with_suffix(".safetensors")))
-                tmp_path = tmp_path.with_suffix(".safetensors")
-            else:
-                fallback_path = tmp_path.with_suffix(".pt")
-                torch.save(obj, fallback_path, _use_new_zipfile_serialization=False)
-                tmp_path = fallback_path
-
-            tmp_path.replace(path)
-            return
-        except Exception as exc:  # noqa: BLE001
-            if attempt >= retries:
-                raise CheckpointSaveError(
-                    f"Failed to save checkpoint {path}: {exc}"
-                ) from exc
-            print(
-                f"Retrying checkpoint save ({attempt+1}/{retries}) due to error: {exc}"
-            )
-
-
-def _all_tensors(state):
-    """Return True if every leaf value in state dict is a torch.Tensor."""
-    import torch
-
-    for v in state.values():
-        if isinstance(v, dict):
-            if not _all_tensors(v):
-                return False
-        elif not isinstance(v, torch.Tensor):
-            return False
-    return True
-
 
 # --------------------------------------------------------------------------- #
 # Configuration utilities
 # --------------------------------------------------------------------------- #
-# Use RunPod volume if available, otherwise use local directory
-# CHECKPOINT_DIR = (
-#     "/runpod-volume/checkpoints" if os.path.exists("/runpod-volume") else "checkpoints"
-# )
-
-
-def generate_run_name(cfg) -> str:
-    """Generate a run name using RunPod identifier or local random string."""
-    # Check if we're running on RunPod
-    runpod_id = os.environ.get("RUNPOD_POD_ID")
-
-    if runpod_id and runpod_id.strip():
-        # Use RunPod identifier
-        base = runpod_id
-    else:
-        # Generate local identifier with random string
-        random_str = "".join(
-            random.choices(string.ascii_lowercase + string.digits, k=12)
-        )
-        base = f"local_{random_str}"
-
-    # Append note if provided
-    note_val = getattr(cfg, "note", None)
-    if note_val:
-        return f"{base} - {note_val}"
-    return base
-
-
 @dataclass
-class TrainConfig:
+class TrainConfig(BaseConfig):
     """Container for all training-related hyperparameters."""
 
-    eval_interval: int = 250
-    log_interval: int = 1
-    eval_iters: int = 200
-    eval_only: bool = False
-    always_save_checkpoint: bool = True
-    clear_previous_checkpoints: bool = False  # Remove previous checkpoints on startup
-    init_from: str = "scratch"
+    name: str = "owt"
+
+    # Learning rate schedule
+    use_cyclical_lr: bool = False
+    cyclical_lr_period: int = 1000
+    cyclical_lr_amplitude: float = 0.1
 
     # Math evaluation settings
     eval_math: bool = True  # Whether to run math evaluation during training
     math_eval_tasks: List[str] = field(default_factory=lambda: ["gsm8k", "svamp"])
     math_eval_examples: int = 50  # Max examples per math task during training
 
-    name: str = (
-        "owt"  # Project/run name (used for both wandb project and runpod naming)
-    )
-
     dataset: str = "openwebtext"
     subset: float = 1.0  # Fraction of dataset to use (0.0 < subset <= 1.0)
     gradient_accumulation_steps: int = 5 * 8
     batch_size: int = 12
-    block_size: int = 1024
+    sequence_length: int = 1024
 
     n_layer: int = 12
     n_head: int = 12
@@ -181,7 +101,6 @@ class TrainConfig:
     val_examples_per_batch: int = 100
     train_seed: int = 42
     val_seed: int = 43
-    sequence_length: int = 512  # For DAG predictor training
 
     # Loss weights for DAG predictor training
     sign_loss_weight: float = 1.0
@@ -200,199 +119,13 @@ class TrainConfig:
     lr_decay_iters: int = 600_000
     min_lr: float = 6e-5
 
-    backend: str = "nccl"
-    dtype: str = (
-        "bfloat16"
-        if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-        else "float16"
-    )
-    compile: bool = True
-    keep_alive: bool = False  # Keep pod alive after training (disables auto-stop)
-
-    # Debugging flag: if True, run expensive NaN/Inf checks on gradients & params
-    check_nans: bool = False
-
-    # Optional run note (appended to run name)
-    note: str | None = None
-
     # Fine-tuning options
     freeze_gpt: bool = False  # If True, freeze GPT backbone and train DAG layers only
-
-
-def load_config_file(path: str) -> Dict[str, object]:
-    """Executes a python config file and returns its public symbols."""
-    cfg_dict = runpy.run_path(path)
-    return {k: v for k, v in cfg_dict.items() if not k.startswith("_")}
-
-
-def update_config(cfg: TrainConfig, data: Dict[str, object]) -> None:
-    """Overwrite fields in <cfg> with matching keys from <data>."""
-    for f in fields(cfg):
-        if f.name in data:
-            setattr(cfg, f.name, data[f.name])
-
-
-def apply_overrides(cfg: TrainConfig, overrides: List[str]) -> None:
-    """Apply --key=value CLI overrides and boolean flags."""
-    for arg in overrides:
-        if not arg.startswith("--"):
-            raise ValueError(f"Invalid override: {arg}")
-
-        # Handle boolean flags like --keep-alive
-        if "=" not in arg:
-            key = arg[2:].replace("-", "_")  # Convert --keep-alive to keep_alive
-            if not hasattr(cfg, key):
-                raise ValueError(f"Unknown config key: {key}")
-            cur = getattr(cfg, key)
-            if not isinstance(cur, bool):
-                raise ValueError(
-                    f"Flag {arg} can only be used with boolean config keys"
-                )
-            setattr(cfg, key, True)
-        else:
-            # Handle --key=value format
-            key, val = arg[2:].split("=", 1)
-            if not hasattr(cfg, key):
-                raise ValueError(f"Unknown config key: {key}")
-            cur = getattr(cfg, key)
-            try:
-                lit = literal_eval(val)
-            except Exception:
-                lit = val
-            if not isinstance(lit, type(cur)):
-                raise ValueError(f"Invalid type for {key}")
-            setattr(cfg, key, lit)
-
-
-# --------------------------------------------------------------------------- #
-# Argument parsing
-# --------------------------------------------------------------------------- #
-def parse_args() -> argparse.ArgumentParser:
-    """Return an argparse parser pre-populated with CLI flags."""
-    parser = argparse.ArgumentParser(description="nanoGPT Trainer")
-    parser.add_argument("config", nargs="?", default="config/train_default.py")
-    parser.add_argument("--use-runpod", action="store_true")
-    parser.add_argument("--dag-depth", type=int)
-    parser.add_argument("--gpu-type")
-    parser.add_argument("--wandb-api-key")
-    parser.add_argument("--wandb-run-id", help="Resume existing wandb run with this ID")
-    parser.add_argument("--note", help="Optional note to append to config name")
-    parser.add_argument("--subset", type=float)
-    parser.add_argument(
-        "--keep-alive",
-        action="store_true",
-        help="Keep pod alive after training (disables auto-stop)",
-    )
-    return parser
 
 
 # --------------------------------------------------------------------------- #
 # Training helpers
 # --------------------------------------------------------------------------- #
-def get_lr(it: int, *, cfg: TrainConfig) -> float:
-    """Cosine LR schedule with linear warmup."""
-    if it < cfg.warmup_iters:
-        return cfg.learning_rate * (it + 1) / (cfg.warmup_iters + 1)
-    if it > cfg.lr_decay_iters:
-        return cfg.min_lr
-    decay_ratio = (it - cfg.warmup_iters) / (cfg.lr_decay_iters - cfg.warmup_iters)
-    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-    return cfg.min_lr + coeff * (cfg.learning_rate - cfg.min_lr)
-
-
-def get_checkpoint_filename(cfg: TrainConfig, iter_num: int) -> str:
-    """Generate checkpoint filename with config name and iteration number."""
-    # Sanitize the name for filesystem compatibility
-    safe_name = "".join(c for c in cfg.name if c.isalnum() or c in ("-", "_"))
-    return f"ckpt_{safe_name}_{iter_num}.pt"
-
-
-def clean_previous_checkpoints(cfg: TrainConfig) -> None:
-    """Remove all previous checkpoint files for this config name."""
-    if not cfg.clear_previous_checkpoints:
-        print("Skipping checkpoint cleanup")
-        return
-
-    checkpoint_dir = Path(CHECKPOINT_DIR)
-    if not checkpoint_dir.exists():
-        print(f"Checkpoint directory {checkpoint_dir} does not exist")
-        return
-
-    # Sanitize the name for filesystem compatibility
-    safe_name = "".join(c for c in cfg.name if c.isalnum() or c in ("-", "_"))
-    pattern = f"ckpt_{safe_name}_*.pt"
-
-    removed_count = 0
-    for ckpt_file in checkpoint_dir.glob(pattern):
-        try:
-            ckpt_file.unlink()
-            removed_count += 1
-        except Exception as e:
-            print(f"Warning: Failed to remove checkpoint {ckpt_file}: {e}")
-
-    if removed_count > 0:
-        print(f"Cleaned {removed_count} previous checkpoint(s) for '{cfg.name}'")
-
-
-def find_latest_checkpoint(cfg: TrainConfig) -> Path | None:
-    """Find the latest checkpoint file for this config name."""
-    checkpoint_dir = Path(CHECKPOINT_DIR)
-    if not checkpoint_dir.exists():
-        return None
-
-    # Sanitize the name for filesystem compatibility
-    safe_name = "".join(c for c in cfg.name if c.isalnum() or c in ("-", "_"))
-    pattern = f"ckpt_{safe_name}_*.pt"
-
-    checkpoint_files = list(checkpoint_dir.glob(pattern))
-    if not checkpoint_files:
-        return None
-
-    # Extract iteration numbers and find the latest
-    latest_file = None
-    latest_iter = -1
-
-    for ckpt_file in checkpoint_files:
-        try:
-            # Extract iteration number from filename: ckpt_{name}_{iter}.pt
-            parts = ckpt_file.stem.split("_")
-            if len(parts) >= 3:
-                iter_num = int(parts[-1])
-                if iter_num > latest_iter:
-                    latest_iter = iter_num
-                    latest_file = ckpt_file
-        except (ValueError, IndexError):
-            continue
-
-    return latest_file
-
-
-def _check_for_nonfinite(named_tensors_iter, label: str) -> None:
-    """Scan an iterator of (name, tensor) pairs and raise if any tensor
-    contains NaN or Inf. Prints summary and a few offending indices first.
-
-    Args:
-        named_tensors_iter: iterable yielding (str, Tensor)
-        label: descriptive prefix (e.g. "GRAD", "PARAM")
-    """
-    for name, t in named_tensors_iter:
-        if t is None:
-            continue
-        if torch.isfinite(t).all():
-            continue
-        nan_cnt = int(torch.isnan(t).sum())
-        inf_cnt = int(torch.isinf(t).sum())
-        print(
-            f"[{label} NAN] {name} → NaN:{nan_cnt} Inf:{inf_cnt} shape={tuple(t.shape)}"
-        )
-
-        # Show up to five offending coordinates/values for quick diagnosis
-        bad_idx = (~torch.isfinite(t)).nonzero(as_tuple=False)[:5]
-        for j, coord in enumerate(bad_idx):
-            coord_tuple = tuple(coord.tolist())
-            bad_val = t[coord_tuple].item()
-            print(f"   [{j}] idx={coord_tuple}  val={bad_val}")
-        raise RuntimeError(f"{label} contains non-finite values (see log above)")
 
 
 # --------------------------------------------------------------------------- #
@@ -472,7 +205,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
         cfg.gradient_accumulation_steps
         * ddp_world_size
         * cfg.batch_size
-        * cfg.block_size
+        * cfg.sequence_length
     )
     if master_process:
         print(f"[{time.time() - setup_start:.2f}s] Tokens / iter: {tokens_per_iter:,}")
@@ -607,16 +340,18 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
         # Use on-disk token dataset
         file = "train.bin" if split == "train" else "val.bin"
         data = np.memmap(data_dir / file, dtype=meta_dtype, mode="r")
-        ix = torch.randint(len(data) - cfg.block_size, (cfg.batch_size,))
+        ix = torch.randint(len(data) - cfg.sequence_length, (cfg.batch_size,))
         x = torch.stack(
             [
-                torch.from_numpy(data[i : i + cfg.block_size].astype(np.int64))
+                torch.from_numpy(data[i : i + cfg.sequence_length].astype(np.int64))
                 for i in ix
             ]
         )
         y = torch.stack(
             [
-                torch.from_numpy(data[i + 1 : i + 1 + cfg.block_size].astype(np.int64))
+                torch.from_numpy(
+                    data[i + 1 : i + 1 + cfg.sequence_length].astype(np.int64)
+                )
                 for i in ix
             ]
         )
@@ -638,7 +373,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
         n_layer=cfg.n_layer,
         n_head=cfg.n_head,
         n_embd=cfg.n_embd,
-        block_size=cfg.block_size,
+        block_size=cfg.sequence_length,
         bias=cfg.bias,
         vocab_size=vocab_size or 50_304,
         dropout=cfg.dropout,
@@ -692,9 +427,9 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     else:
         raise ValueError(f"Unsupported init_from {cfg.init_from}")
 
-    if cfg.block_size < model.config.block_size:
-        model.crop_block_size(cfg.block_size)
-        model_args["block_size"] = cfg.block_size
+    if cfg.sequence_length < model.config.block_size:
+        model.crop_block_size(cfg.sequence_length)
+        model_args["block_size"] = cfg.sequence_length
 
     print(f"[{time.time() - setup_start:.2f}s] Model type: {type(model).__name__}")
     model.to(device)
@@ -791,7 +526,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
         max_consecutive_errors = 5
 
         while True:
-            lr = get_lr(iter_num, cfg=cfg) if cfg.decay_lr else cfg.learning_rate
+            lr = get_lr(iter_num, cfg=cfg)
             for pg in optimizer.param_groups:
                 pg["lr"] = lr
 

@@ -14,7 +14,7 @@ always_save_checkpoint = False
 clear_previous_checkpoints = False  # Save space on RunPod
 
 # Model initialization
-init_from = "scratch"  # or "resume"
+init_from = "scratch"
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
@@ -35,14 +35,14 @@ english_conversion_rate = 0.3  # Probability of converting tokens to English (0.
 gradient_accumulation_steps = (
     16  # Increased from 8 - effective batch size = 1024 * 16 = 16,384
 )
-batch_size = 1024  # Increased from 512 - 8x larger batches than original
-sequence_length = 128  # Increased from 128 - 2x longer sequences
+batch_size = 512
+sequence_length = 128
 
 # Model architecture (larger for RunPod training)
-n_layer = 12  # Full size model
-n_head = 12  # Full attention heads
-n_embd = 768  # Full embedding size
-dropout = 0.1  # Slight dropout for regularization
+n_layer = 32
+n_head = n_layer
+n_embd = n_head * 64
+dropout = 0.3  # Slight dropout for regularization
 bias = False
 dag_depth = max_dag_depth  # MUST match max_dag_depth above
 
@@ -57,10 +57,13 @@ beta2 = 0.95
 grad_clip = 1.0
 
 # Learning rate schedule
-decay_lr = True
 warmup_iters = max_iters * 0.1  # Longer warmup for stability
 lr_decay_iters = max_iters  # Match max_iters
 min_lr = 1e-5
+
+use_cyclical_lr = True
+cyclical_lr_period = max_iters * 0.2
+cyclical_lr_amplitude = 0.1
 
 # System settings (optimized for RunPod)
 backend = "nccl"
