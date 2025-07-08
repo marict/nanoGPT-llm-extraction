@@ -54,7 +54,9 @@ bias = False
 dag_depth = max_dag_depth  # MUST match max_dag_depth above
 
 # Optimization (tuned for longer training)
-learning_rate = 3e-4  # Standard learning rate
+learning_rate = (
+    1e-3  # Scaled up from 3e-4 for large batch size (conservative 3x scaling)
+)
 max_iters = 50_000  # Longer training for RunPod
 weight_decay = 1e-1
 beta1 = 0.9
@@ -63,9 +65,9 @@ grad_clip = 1.0
 
 # Learning rate schedule
 decay_lr = True
-warmup_iters = max_iters * 0.05  # Longer warmup for stability
+warmup_iters = max_iters * 0.1  # Longer warmup for stability
 lr_decay_iters = max_iters  # Match max_iters
-min_lr = 3e-5
+min_lr = 1e-5
 
 # System settings (optimized for RunPod)
 backend = "nccl"
