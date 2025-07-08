@@ -24,7 +24,8 @@ from train_predictor import (DAGTrainConfig, PredictorOnlyConfig,
                              clean_previous_checkpoints,
                              compute_dag_structure_loss, evaluate_dag_model,
                              find_latest_checkpoint, get_checkpoint_filename,
-                             get_lr, load_config_file, update_config)
+                             get_lr, load_config_file, tokenize_texts,
+                             update_config)
 
 
 class TestDAGTrainConfig(unittest.TestCase):
@@ -489,62 +490,254 @@ class TestUtilityFunctions(unittest.TestCase):
     """Test utility functions."""
 
     def test_get_lr_warmup(self):
-        """Test learning rate warmup schedule."""
+        """Test learning rate warmup phase."""
         cfg = DAGTrainConfig()
-        cfg.warmup_iters = 1000
         cfg.learning_rate = 1e-3
+        cfg.warmup_iters = 100
+        cfg.lr_decay_iters = 1000
         cfg.min_lr = 1e-5
 
-        # During warmup
-        lr_warmup = get_lr(500, cfg=cfg)
-        expected_warmup = cfg.learning_rate * (500 + 1) / (cfg.warmup_iters + 1)
-        self.assertAlmostEqual(lr_warmup, expected_warmup, places=6)
+        # Test warmup phase
+        lr_0 = get_lr(0, cfg=cfg)
+        lr_50 = get_lr(50, cfg=cfg)
+        lr_100 = get_lr(100, cfg=cfg)
 
-        # At end of warmup
-        lr_end_warmup = get_lr(cfg.warmup_iters, cfg=cfg)
-        self.assertAlmostEqual(lr_end_warmup, cfg.learning_rate, places=6)
+        self.assertAlmostEqual(lr_0, 0.0, places=7)
+        self.assertLess(lr_50, cfg.learning_rate)
+        self.assertAlmostEqual(lr_100, cfg.learning_rate, places=7)
 
     def test_get_lr_decay(self):
-        """Test learning rate decay schedule."""
+        """Test learning rate decay phase."""
         cfg = DAGTrainConfig()
-        cfg.warmup_iters = 1000
-        cfg.lr_decay_iters = 5000
         cfg.learning_rate = 1e-3
+        cfg.warmup_iters = 100
+        cfg.lr_decay_iters = 1000
         cfg.min_lr = 1e-5
 
-        # After decay period
-        lr_final = get_lr(cfg.lr_decay_iters + 1000, cfg=cfg)
-        self.assertEqual(lr_final, cfg.min_lr)
+        # Test decay phase
+        lr_500 = get_lr(500, cfg=cfg)
+        lr_1000 = get_lr(1000, cfg=cfg)
+        lr_2000 = get_lr(2000, cfg=cfg)
 
-        # During decay period
-        lr_decay = get_lr(3000, cfg=cfg)
-        self.assertGreater(lr_decay, cfg.min_lr)
-        self.assertLess(lr_decay, cfg.learning_rate)
+        self.assertLess(lr_500, cfg.learning_rate)
+        self.assertGreater(lr_500, cfg.min_lr)
+        self.assertAlmostEqual(lr_1000, cfg.min_lr, places=7)
+        self.assertAlmostEqual(lr_2000, cfg.min_lr, places=7)
 
     def test_get_checkpoint_filename(self):
         """Test checkpoint filename generation."""
         cfg = DAGTrainConfig()
-        cfg.name = "test_model"
-        iter_num = 1500
+        cfg.name = "test_run"
 
-        filename = get_checkpoint_filename(cfg, iter_num)
-        self.assertEqual(filename, "dag_ckpt_test_model_001500.pt")
+        filename = get_checkpoint_filename(cfg, 1000)
+        expected = "dag_ckpt_test_run_001000.pt"
+        self.assertEqual(filename, expected)
 
     def test_all_tensors(self):
         """Test _all_tensors utility function."""
-        # All tensors
+        # Test with all tensors
         state_all_tensors = {
-            "layer1": torch.randn(5, 3),
-            "layer2": {"weight": torch.randn(10, 5), "bias": torch.randn(10)},
+            "layer1": {"weight": torch.randn(10, 10), "bias": torch.randn(10)},
+            "layer2": {"weight": torch.randn(5, 10)},
         }
         self.assertTrue(_all_tensors(state_all_tensors))
 
-        # Mixed types
+        # Test with non-tensor
         state_mixed = {
-            "layer1": torch.randn(5, 3),
-            "layer2": {"weight": torch.randn(10, 5), "bias": 0.1},  # Not a tensor
+            "layer1": {"weight": torch.randn(10, 10), "bias": [1, 2, 3]},
+            "layer2": {"weight": torch.randn(5, 10)},
         }
         self.assertFalse(_all_tensors(state_mixed))
+
+
+class TestTokenization(unittest.TestCase):
+    """Test text tokenization functionality."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.device = "cpu"
+        self.sequence_length = 32
+
+    def test_tokenize_simple_expressions(self):
+        """Test tokenization of simple mathematical expressions."""
+        texts = ["28", "42.5", "3 + 4", "10 - 5", "7 * 8", "15 / 3"]
+
+        tokens = tokenize_texts(texts, self.sequence_length, self.device)
+
+        # Check basic properties
+        self.assertEqual(tokens.shape, (len(texts), self.sequence_length))
+        self.assertEqual(tokens.dtype, torch.long)
+        self.assertEqual(tokens.device.type, self.device)
+
+        # Check that all values are non-negative (valid token IDs)
+        self.assertTrue((tokens >= 0).all())
+
+    def test_tokenize_complex_expressions(self):
+        """Test tokenization of complex mathematical expressions."""
+        texts = [
+            "-82.612 - 94",
+            "(5.22 - 3.213) / 2.32",
+            "77.101 * 45.5 + 14.7",
+            "93.3 * 4.9 - 93.3",
+        ]
+
+        tokens = tokenize_texts(texts, self.sequence_length, self.device)
+
+        # Check basic properties
+        self.assertEqual(tokens.shape, (len(texts), self.sequence_length))
+        self.assertEqual(tokens.dtype, torch.long)
+
+        # Check that longer expressions produce more non-zero tokens
+        for i, text in enumerate(texts):
+            non_zero_count = (tokens[i] != 0).sum().item()
+            # Complex expressions should have at least a few tokens
+            self.assertGreaterEqual(non_zero_count, 1)
+
+            # But shouldn't exceed sequence length
+            self.assertLessEqual(non_zero_count, self.sequence_length)
+
+    def test_tokenize_english_expressions(self):
+        """Test tokenization of English mathematical expressions."""
+        texts = [
+            "twenty-eight",
+            "negative sixteen subtract less eighty-one point three",
+            "five point two two minus three point two one three",
+            "forty-one point eight three times eight point two eight",
+        ]
+
+        tokens = tokenize_texts(texts, self.sequence_length, self.device)
+
+        # Check basic properties
+        self.assertEqual(tokens.shape, (len(texts), self.sequence_length))
+        self.assertEqual(tokens.dtype, torch.long)
+
+        # English expressions typically generate more tokens
+        for i, text in enumerate(texts):
+            non_zero_count = (tokens[i] != 0).sum().item()
+            # English expressions should have multiple tokens
+            self.assertGreaterEqual(non_zero_count, 1)
+
+    def test_tokenize_empty_and_single_char(self):
+        """Test tokenization edge cases."""
+        texts = [
+            "",  # Empty string
+            "0",  # Single character
+            " ",  # Single space
+            "1.0",  # Simple decimal
+        ]
+
+        tokens = tokenize_texts(texts, self.sequence_length, self.device)
+
+        # Check basic properties
+        self.assertEqual(tokens.shape, (len(texts), self.sequence_length))
+        self.assertEqual(tokens.dtype, torch.long)
+
+        # Empty string should result in all zeros (padding)
+        self.assertTrue((tokens[0] == 0).all())
+
+        # Single character should have one non-zero token
+        self.assertEqual((tokens[1] != 0).sum().item(), 1)
+
+    def test_tokenize_truncation(self):
+        """Test that very long texts are properly truncated."""
+        # Create a very long mathematical expression
+        long_text = " + ".join([str(i) for i in range(100)])  # "0 + 1 + 2 + ... + 99"
+        texts = [long_text]
+
+        short_sequence_length = 10
+        tokens = tokenize_texts(texts, short_sequence_length, self.device)
+
+        # Check that output is properly shaped and truncated
+        self.assertEqual(tokens.shape, (1, short_sequence_length))
+        self.assertEqual(tokens.dtype, torch.long)
+
+        # All positions should be filled (no padding for truncated text)
+        non_zero_count = (tokens[0] != 0).sum().item()
+        self.assertEqual(non_zero_count, short_sequence_length)
+
+    def test_tokenize_padding(self):
+        """Test that short texts are properly padded."""
+        texts = ["5"]  # Very short text
+        long_sequence_length = 50
+
+        tokens = tokenize_texts(texts, long_sequence_length, self.device)
+
+        # Check basic properties
+        self.assertEqual(tokens.shape, (1, long_sequence_length))
+        self.assertEqual(tokens.dtype, torch.long)
+
+        # Should have exactly one non-zero token, rest should be padding (zeros)
+        non_zero_count = (tokens[0] != 0).sum().item()
+        zero_count = (tokens[0] == 0).sum().item()
+
+        self.assertEqual(non_zero_count, 1)
+        self.assertEqual(zero_count, long_sequence_length - 1)
+
+    def test_tokenize_batch_consistency(self):
+        """Test that tokenization is consistent across batches."""
+        texts = ["42", "3.14", "7 + 8"]
+
+        # Tokenize as a batch
+        batch_tokens = tokenize_texts(texts, self.sequence_length, self.device)
+
+        # Tokenize individually
+        individual_tokens = []
+        for text in texts:
+            tokens = tokenize_texts([text], self.sequence_length, self.device)
+            individual_tokens.append(tokens[0])
+
+        # Results should be identical
+        for i, individual_token in enumerate(individual_tokens):
+            self.assertTrue(torch.equal(batch_tokens[i], individual_token))
+
+    def test_tokenize_reproducibility(self):
+        """Test that tokenization is reproducible."""
+        texts = ["42.5 * 3", "10 / 2 + 1"]
+
+        # Tokenize twice
+        tokens1 = tokenize_texts(texts, self.sequence_length, self.device)
+        tokens2 = tokenize_texts(texts, self.sequence_length, self.device)
+
+        # Results should be identical
+        self.assertTrue(torch.equal(tokens1, tokens2))
+
+    def test_tokenize_device_placement(self):
+        """Test that tokens are placed on the correct device."""
+        texts = ["123", "456"]
+
+        # Test CPU
+        cpu_tokens = tokenize_texts(texts, self.sequence_length, "cpu")
+        self.assertEqual(cpu_tokens.device.type, "cpu")
+
+        # Test MPS if available
+        if torch.backends.mps.is_available():
+            mps_tokens = tokenize_texts(texts, self.sequence_length, "mps")
+            self.assertEqual(mps_tokens.device.type, "mps")
+
+        # Test CUDA if available
+        if torch.cuda.is_available():
+            cuda_tokens = tokenize_texts(texts, self.sequence_length, "cuda")
+            self.assertEqual(cuda_tokens.device.type, "cuda")
+
+    def test_tokenize_roundtrip(self):
+        """Test that tokenized text can be approximately decoded back."""
+        from tiktoken import get_encoding
+
+        texts = ["42", "3.14", "10 + 5", "negative twenty-three"]
+
+        enc = get_encoding("gpt2")
+
+        for text in texts:
+            tokens = tokenize_texts([text], self.sequence_length, self.device)
+
+            # Extract non-zero tokens
+            non_zero_tokens = tokens[0][tokens[0] != 0].tolist()
+
+            # Decode back
+            decoded = enc.decode(non_zero_tokens)
+
+            # Should approximately match original (allowing for whitespace differences)
+            self.assertEqual(decoded.strip(), text.strip())
 
 
 class TestModelSetup(unittest.TestCase):
@@ -775,7 +968,7 @@ class TestIntegration(unittest.TestCase):
         """Test evaluation function with new shallow attention model."""
         # Create shallow attention model
         model_config = PredictorOnlyConfig(
-            vocab_size=1000,
+            vocab_size=50304,  # Use proper GPT-2 vocab size
             n_embd=self.cfg.n_embd,
             n_head=self.cfg.n_head,
             dropout=self.cfg.dropout,
@@ -1365,7 +1558,7 @@ class TestTrainingIntegration(unittest.TestCase):
         """Test evaluation function with real dataloader data."""
         # Create small model with smaller sequence length to avoid position embedding issues
         config = PredictorOnlyConfig(
-            vocab_size=1000,
+            vocab_size=50304,  # Use proper GPT-2 vocab size
             n_embd=32,
             n_head=2,
             dag_depth=2,

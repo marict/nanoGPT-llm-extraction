@@ -25,6 +25,7 @@ import torch
 import torch as _torch
 import torch.nn as nn
 import torch.nn.functional as F
+from tiktoken import get_encoding
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -55,6 +56,47 @@ except ModuleNotFoundError:
 CHECKPOINT_DIR = (
     "/runpod-volume/checkpoints" if os.path.exists("/runpod-volume") else "checkpoints"
 )
+
+
+# --------------------------------------------------------------------------- #
+# Tokenization utility
+# --------------------------------------------------------------------------- #
+
+
+def tokenize_texts(texts: List[str], sequence_length: int, device: str) -> torch.Tensor:
+    """Tokenize a list of mathematical expressions.
+
+    Args:
+        texts: List of mathematical expressions to tokenize
+        sequence_length: Target sequence length
+        device: Device to place tensor on
+
+    Returns:
+        Tensor of token IDs with shape (batch_size, sequence_length)
+    """
+    # Initialize GPT-2 tokenizer
+    enc = get_encoding("gpt2")
+
+    batch_size = len(texts)
+    input_tokens = torch.zeros(
+        (batch_size, sequence_length), dtype=torch.long, device=device
+    )
+
+    for i, text in enumerate(texts):
+        # Tokenize the text
+        tokens = enc.encode_ordinary(text)
+
+        # Truncate or pad to sequence_length
+        if len(tokens) >= sequence_length:
+            # Truncate to sequence_length
+            tokens = tokens[:sequence_length]
+        else:
+            # Pad with zeros (or use a special padding token if preferred)
+            tokens = tokens + [0] * (sequence_length - len(tokens))
+
+        input_tokens[i] = torch.tensor(tokens, dtype=torch.long)
+
+    return input_tokens
 
 
 # --------------------------------------------------------------------------- #
@@ -424,15 +466,8 @@ def evaluate_dag_model(
             target_log = structures["initial_log"].to(device)  # (B, num_nodes)
             target_ops = structures["operation_probs"].to(device)  # (B, depth, n_ops)
 
-            # Tokenize texts (simple approach for now)
-            # In practice, you'd want more sophisticated text encoding
-            batch_size = len(texts)
-
-            # Create dummy input tokens (we're not using them for DAG prediction)
-            # In a real implementation, you'd encode the text descriptions
-            input_tokens = torch.randint(
-                0, 1000, (batch_size, cfg.sequence_length), device=device
-            )
+            # Tokenize texts properly using the mathematical expressions
+            input_tokens = tokenize_texts(texts, cfg.sequence_length, device)
 
             # Forward pass through shallow attention DAG predictor model
             with ctx:
@@ -493,7 +528,7 @@ def evaluate_dag_model(
 
                 # Console debug: show one random sample's text and initial values (first batch only)
                 if i == 0:
-
+                    batch_size = target_sgn.size(0)  # Get batch size from tensor
                     sample_idx = _eval_random.randrange(batch_size)
                     sample_text = texts[sample_idx]
 
@@ -851,17 +886,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     )
 
                 with ctx:
-                    # Tokenize texts properly (instead of dummy tokens)
-                    batch_size = len(texts)
-
-                    # For now, create random input tokens (in real implementation, would tokenize texts)
-                    # TODO: Implement proper text tokenization from DAG structure descriptions
-                    input_tokens = torch.randint(
-                        0,
-                        min(1000, raw_model.config.vocab_size),
-                        (batch_size, cfg.sequence_length),
-                        device=device,
-                    )
+                    # Tokenize texts properly using the mathematical expressions
+                    input_tokens = tokenize_texts(texts, cfg.sequence_length, device)
 
                     # Forward pass through shallow attention DAG predictor model
                     pred_sgn, pred_log, pred_ops = raw_model(input_tokens)
