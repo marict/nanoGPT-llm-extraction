@@ -29,6 +29,7 @@ dataset = "dagset"  # Use DAG dataset for predictor training
 
 # DAG dataset parameters
 max_dag_depth = 4
+value_range = (-10.0, 10.0)  # Allow negative values for meaningful sign prediction
 
 train_examples_per_batch = 100
 val_examples_per_batch = 20

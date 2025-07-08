@@ -74,14 +74,21 @@ def convert_number_to_words(number, use_words: bool = True) -> str:
     if number == 0 or (isinstance(number, float) and abs(number) < 0.00001):
         return "zero"
 
+    # Handle negative numbers
+    is_negative = number < 0
+    abs_number = abs(number)
+
     # Handle integers (including those created by standardize_float_rounding)
-    if isinstance(number, int) or (isinstance(number, float) and number.is_integer()):
-        return num2words(int(number))
+    if isinstance(abs_number, int) or (
+        isinstance(abs_number, float) and abs_number.is_integer()
+    ):
+        result = num2words(int(abs_number))
+        return f"negative {result}" if is_negative else result
 
     # Handle floats with decimals
-    if isinstance(number, float):
+    if isinstance(abs_number, float):
         # Convert to string to get the decimal representation
-        number_str = str(number)
+        number_str = str(abs_number)
 
         if "." in number_str:
             parts = number_str.split(".")
@@ -96,7 +103,7 @@ def convert_number_to_words(number, use_words: bool = True) -> str:
             for digit in decimal_part[:5]:
                 result += " " + num2words(int(digit))
 
-            return result
+            return f"negative {result}" if is_negative else result
 
     return str(number)
 
@@ -126,7 +133,42 @@ def add_english_to_expression(
     }
 
     # Split the expression into tokens (numbers, operators, parentheses)
-    tokens = re.findall(r"\d+\.?\d*|\+|\-|\*|/|\(|\)", expression)
+    # Use a more sophisticated approach to handle negative numbers vs minus operators
+    tokens = []
+    i = 0
+    while i < len(expression):
+        if expression[i] == "-":
+            # Check if this is a negative number or a minus operator
+            # It's a negative number if it's at the start or after (, +, -, *, /
+            if i == 0 or expression[i - 1] in "(+-*/":
+                # Look ahead to see if there's a number after the minus
+                j = i + 1
+                while j < len(expression) and expression[j] in "0123456789.":
+                    j += 1
+                if j > i + 1:  # Found digits after minus
+                    tokens.append(expression[i:j])
+                    i = j
+                    continue
+            # Otherwise, it's a minus operator
+            tokens.append("-")
+            i += 1
+        elif expression[i] in "0123456789":
+            # Regular positive number
+            j = i
+            while j < len(expression) and expression[j] in "0123456789.":
+                j += 1
+            tokens.append(expression[i:j])
+            i = j
+        elif expression[i] in "+*/()":
+            tokens.append(expression[i])
+            i += 1
+        elif expression[i] == " ":
+            i += 1  # Skip spaces
+        else:
+            i += 1  # Skip unknown characters
+
+    # Clean up tokens by removing empty strings
+    tokens = [t for t in tokens if t.strip()]
 
     converted_tokens = []
     for token in tokens:
@@ -137,18 +179,11 @@ def add_english_to_expression(
             else:
                 converted_tokens.append(token)
         elif token in ["(", ")"]:
-            # Randomly convert parentheses to words
-            if (
-                token == "(" and rng.random() < conversion_probability * 0.5
-            ):  # Lower probability for parentheses
-                converted_tokens.append("open parenthesis")
-            elif token == ")" and rng.random() < conversion_probability * 0.5:
-                converted_tokens.append("close parenthesis")
-            else:
-                converted_tokens.append(token)
-        elif re.match(r"\d+\.?\d*", token):
+            # Keep parentheses as symbols - don't convert to English
+            converted_tokens.append(token)
+        elif re.match(r"-?\d+\.?\d*", token):
             # Randomly convert number to words based on probability
-            # Handle both int and float types from standardized rounding
+            # Handle both positive and negative numbers, int and float types
             try:
                 if "." in token:
                     number = float(token)
@@ -853,6 +888,7 @@ def create_dag_structure_dataloaders(
     max_depth: int = 8,
     train_seed: int = 42,
     val_seed: int = 43,
+    value_range: tuple[float, float] = (-100.0, 100.0),
 ) -> Tuple[Iterator, Iterator]:
     """Create train and validation structure dataloaders.
 
@@ -862,6 +898,7 @@ def create_dag_structure_dataloaders(
         max_depth: DAG depth (all examples will have this exact depth)
         train_seed: Seed for training data
         val_seed: Seed for validation data
+        value_range: Range for initial values (allows negative values for meaningful sign prediction)
 
     Returns:
         Tuple of (train_loader, val_loader)
@@ -873,6 +910,7 @@ def create_dag_structure_dataloaders(
     train_dataset = DAGStructureDataset(
         max_depth=max_depth,
         seed=train_seed,
+        value_range=value_range,
         convert_to_english=True,
         english_conversion_probability=ENGLISH_CONVERSION_RATE,
     )
@@ -880,6 +918,7 @@ def create_dag_structure_dataloaders(
     val_dataset = DAGStructureDataset(
         max_depth=max_depth,
         seed=val_seed,
+        value_range=value_range,
         convert_to_english=True,
         english_conversion_probability=ENGLISH_CONVERSION_RATE,
     )

@@ -119,6 +119,10 @@ class DAGTrainConfig:
 
     # DAG dataset parameters
     max_dag_depth: int = 8
+    value_range: tuple[float, float] = (
+        -100.0,
+        100.0,
+    )  # Allow negative values for meaningful sign prediction
     train_examples_per_batch: int = 1000
     val_examples_per_batch: int = 100
 
@@ -661,6 +665,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         max_depth=cfg.dag_depth,  # All examples have exactly this depth to match the model
         train_seed=cfg.train_seed,
         val_seed=cfg.val_seed,
+        value_range=cfg.value_range,
     )
 
     # --------------------------------------------------------------------- #

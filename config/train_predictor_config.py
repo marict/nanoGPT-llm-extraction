@@ -6,11 +6,11 @@ name = "predictor_pretrain"
 note = "DAG predictor pretraining on structure prediction - RunPod"
 
 # Training intervals
-eval_interval = 200  # Less frequent evaluation to save time
-log_interval = 20  # More frequent logging for monitoring
-eval_iters = 100  # More evaluation iterations for better metrics
+eval_interval = 100
+log_interval = 10
+eval_iters = 50
 eval_only = False
-always_save_checkpoint = True
+always_save_checkpoint = False
 clear_previous_checkpoints = True  # Save space on RunPod
 
 # Model initialization
@@ -20,15 +20,16 @@ init_from = "scratch"  # or "resume"
 dataset = "dagset"  # Use DAG dataset for predictor training
 
 # DAG dataset parameters
-max_dag_depth = 8  # Deeper for more complex training
+max_dag_depth = 4  # Deeper for more complex training
+value_range = (-100.0, 100.0)  # Allow negative values for meaningful sign prediction
 
 train_examples_per_batch = 1000  # Larger batches for efficiency
 val_examples_per_batch = 200  # More validation examples
 
 # Training hyperparameters (optimized for RunPod)
-gradient_accumulation_steps = 4  # Larger for better gradient estimates
-batch_size = 32  # Larger batch size for GPU efficiency
-sequence_length = 512  # Full sequence length
+gradient_accumulation_steps = 1
+batch_size = 48
+sequence_length = 128
 
 # Model architecture (larger for RunPod training)
 n_layer = 12  # Full size model
@@ -39,7 +40,7 @@ bias = False
 dag_depth = 6  # Deeper DAG for complex structures
 
 # Optimization (tuned for longer training)
-learning_rate = 3e-5  # Standard learning rate
+learning_rate = 3e-4  # Standard learning rate
 max_iters = 20_000  # Longer training for RunPod
 weight_decay = 1e-1
 beta1 = 0.9
@@ -48,8 +49,8 @@ grad_clip = 1.0
 
 # Learning rate schedule
 decay_lr = True
-warmup_iters = 1000  # Longer warmup for stability
-lr_decay_iters = 20000  # Match max_iters
+warmup_iters = max_iters * 0.05  # Longer warmup for stability
+lr_decay_iters = max_iters  # Match max_iters
 min_lr = 3e-5
 
 # System settings (optimized for RunPod)
@@ -60,7 +61,7 @@ keep_alive = False  # Auto-stop by default
 check_nans = False  # Check for NaNs in cloud training
 
 # Loss weights (balanced for full training)
-sign_loss_weight = 1.0
+sign_loss_weight = 0.5
 log_loss_weight = 1.0
 op_loss_weight = 1.0
 
