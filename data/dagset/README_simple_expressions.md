@@ -58,7 +58,7 @@ print(text)
 english_dataset = StreamingDAGDataset(
     max_depth=2,
     convert_to_english=True,
-    english_conversion_probability=0.4  # 40% conversion rate
+    english_conversion_probability=0.3  # 30% conversion rate
 )
 
 tokens, text = english_dataset.generate_batch(5)
@@ -91,12 +91,30 @@ for inputs, targets in train_loader:
     pass
 ```
 
+### Train Predictor Jobs
+
+For `train_predictor.py` jobs, English conversion is automatically enabled with a hard-set 30% rate:
+
+```python
+from data.dagset.streaming import create_dag_structure_dataloaders
+
+# English conversion is automatically set to 30% for predictor training
+train_loader, val_loader = create_dag_structure_dataloaders(
+    train_batch_size=32,
+    val_batch_size=32,
+    max_depth=4,
+    train_seed=42,
+    val_seed=43
+)
+```
+
 ## Configuration Options
 
 - `max_depth`: Controls expression complexity (depth=2 → 3 terms, 2 operators)
 - `value_range`: Range for numeric values (default: (0.1, 100.0))
 - `convert_to_english`: Enable English word conversion
 - `english_conversion_probability`: Probability of conversion (0.0 to 1.0)
+  - **Note**: For `train_predictor.py` jobs, English conversion is hard-set to 30% and cannot be configured
 
 ## Dependencies
 
