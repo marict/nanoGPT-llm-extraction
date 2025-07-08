@@ -6,9 +6,9 @@ name = "predictor_pretrain"
 note = "DAG predictor pretraining on structure prediction - RunPod"
 
 # Training intervals
-eval_interval = 100
+eval_interval = 10  # Reduced from 50 - each iter has 128x more data
 log_interval = 1  # Log every iteration for better monitoring
-eval_iters = 10
+eval_iters = 2  # Reduced from 5 - each eval iter is much more informative
 eval_only = False
 always_save_checkpoint = False
 clear_previous_checkpoints = True  # Save space on RunPod
