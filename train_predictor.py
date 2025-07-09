@@ -1198,7 +1198,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     f"log {loss_accum['log_loss']:.4f}, "
                     f"op {loss_accum['op_loss']:.4f}"
                     f", op_acc {loss_accum['op_accuracy']:.4f}, "
-                    f"full_match {loss_accum['full_dag_op_match']:.4f}, "
+                    f"full_op_match {loss_accum['full_dag_op_match']:.4f}, "
                     f"sign_acc {loss_accum['sign_accuracy']:.4f}, "
                     f"log_mape {loss_accum['log_magnitude_mape']:.4f}"
                 )
