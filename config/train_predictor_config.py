@@ -6,9 +6,9 @@ name = "predictor_pretrain"
 note = "DAG predictor pretraining on structure prediction - RunPod"
 
 # Training intervals
-eval_interval = 50  # Reduced from 50 - each iter has 128x more data
+eval_interval = 1000  # We don't need to do this very often because train is seeing unseen data as well.
 log_interval = 1  # Log every iteration for better monitoring
-eval_iters = 2  # Reduced from 5 - each eval iter is much more informative
+eval_iters = 10  # Reduced from 5 - each eval iter is much more informative
 eval_only = False
 always_save_checkpoint = False
 clear_previous_checkpoints = False  # Save space on RunPod
@@ -39,7 +39,7 @@ sequence_length = 128
 # Model architecture (larger for RunPod training)
 n_head = 48
 n_embd = n_head * 64
-dropout = 0.3  # Slight dropout for regularization
+dropout = 0.35  # Slight dropout for regularization
 bias = False
 dag_depth = max_dag_depth  # MUST match max_dag_depth above
 
@@ -47,19 +47,19 @@ dag_depth = max_dag_depth  # MUST match max_dag_depth above
 learning_rate = (
     1e-3  # Scaled up from 3e-4 for large batch size (conservative 3x scaling)
 )
-max_iters = 50_000  # Updated from 10_000
+max_iters = 50_000
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
 
 # Learning rate schedule
-warmup_iters = 5000  # Updated from max_iters * 0.05
-lr_decay_iters = 50_000  # Updated to match max_iters
+warmup_iters = max_iters * 0.02  # 1/50 of max_iters
+lr_decay_iters = max_iters  # Updated to match max_iters
 min_lr = 1e-5
 
 use_cyclical_lr = True
-cyclical_lr_period = 10000  # Updated from max_iters * 0.1
+cyclical_lr_period = max_iters * 0.2  # 1/5 of max_iters
 cyclical_lr_amplitude = 0.1  # Updated from 0.3
 
 # System settings (optimized for RunPod)
@@ -71,7 +71,7 @@ check_nans = False  # Check for NaNs in cloud training
 
 # Loss weights (balanced for full training)
 sign_loss_weight = 1.0
-log_loss_weight = 1.0
+log_loss_weight = 1.2
 op_loss_weight = 1.0
 
 # Random seeds
