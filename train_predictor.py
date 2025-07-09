@@ -301,14 +301,35 @@ def parse_args() -> argparse.ArgumentParser:
 
 
 def get_lr(it: int, *, cfg: DAGTrainConfig) -> float:
-    """Learning rate scheduler with warmup and cosine decay."""
+    """Get learning rate for a given iteration."""
+    # 1) linear warmup for warmup_iters steps
     if it < cfg.warmup_iters:
-        return cfg.learning_rate * it / cfg.warmup_iters
+        return cfg.learning_rate * (it + 1) / cfg.warmup_iters
+
+    # 2) if it > lr_decay_iters, return min learning rate
     if it > cfg.lr_decay_iters:
         return cfg.min_lr
+
+    # 3) in between, use cosine decay as the base
     decay_ratio = (it - cfg.warmup_iters) / (cfg.lr_decay_iters - cfg.warmup_iters)
+    assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-    return cfg.min_lr + coeff * (cfg.learning_rate - cfg.min_lr)
+    base_lr = cfg.min_lr + coeff * (cfg.learning_rate - cfg.min_lr)
+
+    # 4) apply cyclical modulation if enabled
+    if getattr(cfg, "use_cyclical_lr", False):
+        progress_in_decay = it - cfg.warmup_iters
+        progress_in_cycle = (
+            progress_in_decay % cfg.cyclical_lr_period
+        ) / cfg.cyclical_lr_period
+        # Sinusoidal modulation
+        modulation = 1.0 + cfg.cyclical_lr_amplitude * math.sin(
+            2 * math.pi * progress_in_cycle
+        )
+        final_lr = base_lr * modulation
+        return max(cfg.min_lr, final_lr)
+
+    return base_lr
 
 
 def get_checkpoint_filename(cfg: DAGTrainConfig, iter_num: int, model_name: str) -> str:

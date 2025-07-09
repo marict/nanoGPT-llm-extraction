@@ -503,7 +503,9 @@ class TestUtilityFunctions(unittest.TestCase):
         lr_50 = get_lr(50, cfg=cfg)
         lr_100 = get_lr(100, cfg=cfg)
 
-        self.assertAlmostEqual(lr_0, 0.0, places=7)
+        # With the new implementation, LR at iter 0 is learning_rate * 1/warmup_iters
+        expected_lr_0 = cfg.learning_rate * 1 / cfg.warmup_iters
+        self.assertAlmostEqual(lr_0, expected_lr_0, places=7)
         self.assertLess(lr_50, cfg.learning_rate)
         self.assertAlmostEqual(lr_100, cfg.learning_rate, places=7)
 

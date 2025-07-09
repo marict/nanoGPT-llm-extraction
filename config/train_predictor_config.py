@@ -35,7 +35,7 @@ english_conversion_rate = 0.3  # Probability of converting tokens to English (0.
 gradient_accumulation_steps = (
     16  # Increased from 8 - effective batch size = 1024 * 16 = 16,384
 )
-batch_size = 512
+batch_size = 128
 sequence_length = 128
 
 # Model architecture (larger for RunPod training)
@@ -50,20 +50,20 @@ dag_depth = max_dag_depth  # MUST match max_dag_depth above
 learning_rate = (
     1e-3  # Scaled up from 3e-4 for large batch size (conservative 3x scaling)
 )
-max_iters = 50_000  # Longer training for RunPod
+max_iters = 10_000  # Longer training for RunPod
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
 
 # Learning rate schedule
-warmup_iters = max_iters * 0.1  # 5k iterations
-lr_decay_iters = max_iters  # 50k iterations
+warmup_iters = max_iters * 0.05  # 500 iterations
+lr_decay_iters = max_iters
 min_lr = 1e-5
 
 use_cyclical_lr = True
-cyclical_lr_period = max_iters * 0.2  # 10k iterations
-cyclical_lr_amplitude = 0.1
+cyclical_lr_period = max_iters * 0.1  # 1k iterations (10% of training)
+cyclical_lr_amplitude = 0.3  # 30% amplitude for better visibility
 
 # System settings (optimized for RunPod)
 backend = "nccl"
