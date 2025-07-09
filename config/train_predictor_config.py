@@ -57,12 +57,12 @@ beta2 = 0.95
 grad_clip = 1.0
 
 # Learning rate schedule
-warmup_iters = max_iters * 0.1  # Longer warmup for stability
-lr_decay_iters = max_iters  # Match max_iters
+warmup_iters = max_iters * 0.1  # 5k iterations
+lr_decay_iters = max_iters  # 50k iterations
 min_lr = 1e-5
 
 use_cyclical_lr = True
-cyclical_lr_period = max_iters * 0.2
+cyclical_lr_period = max_iters * 0.2  # 10k iterations
 cyclical_lr_amplitude = 0.1
 
 # System settings (optimized for RunPod)
