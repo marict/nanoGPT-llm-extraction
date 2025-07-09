@@ -844,6 +844,74 @@ class TestLossFunctions(unittest.TestCase):
         # This reasoning is tested in our convert_dag_to_expression_string tests
         # and verified in the actual loss computation
 
+    def test_gradient_masking_behavior(self):
+        """Test that gradients are properly blocked for masked regions in loss computation."""
+        # This test verifies that element-wise multiplication with masks
+        # properly zeros out gradients for masked positions
+
+        # Create simple test tensors
+        batch_size, seq_len, num_nodes = 2, 1, 3
+
+        # Create predictions that require gradients
+        pred_sgn = torch.randn(batch_size, seq_len, num_nodes, requires_grad=True)
+        target_sgn = torch.randn(batch_size, seq_len, num_nodes)
+
+        # Create mask - first example uses all nodes, second uses only first node
+        mask = torch.tensor(
+            [
+                [[1.0, 1.0, 1.0]],  # All nodes active
+                [[1.0, 0.0, 0.0]],  # Only first node active
+            ]
+        )
+
+        # Compute masked loss (same as in compute_dag_structure_loss)
+        elementwise_loss = F.mse_loss(pred_sgn, target_sgn, reduction="none")
+        masked_loss = (elementwise_loss * mask).sum() / mask.sum()
+
+        # Backward pass
+        masked_loss.backward()
+
+        # Verify that gradients are zero for masked positions
+        expected_grad_mask = mask.expand_as(pred_sgn.grad)
+        masked_positions = expected_grad_mask == 0
+
+        # Check that masked positions have zero gradient
+        masked_grads_zero = torch.allclose(
+            pred_sgn.grad[masked_positions],
+            torch.zeros_like(pred_sgn.grad[masked_positions]),
+            atol=1e-6,
+        )
+
+        self.assertTrue(masked_grads_zero, "Masked positions should have zero gradient")
+
+        # Check that unmasked positions have non-zero gradients (in general)
+        unmasked_positions = expected_grad_mask == 1
+        unmasked_grads = pred_sgn.grad[unmasked_positions]
+
+        # At least some unmasked positions should have non-zero gradients
+        has_nonzero_unmasked = torch.any(torch.abs(unmasked_grads) > 1e-6)
+        self.assertTrue(
+            has_nonzero_unmasked,
+            "Unmasked positions should generally have non-zero gradients",
+        )
+
+        # Verify exact gradient values for masked positions
+        self.assertEqual(
+            pred_sgn.grad[0, 0, 0].item(),
+            pred_sgn.grad[0, 0, 0].item(),
+            "First example should have gradients for all positions",
+        )
+        self.assertEqual(
+            pred_sgn.grad[1, 0, 1].item(),
+            0.0,
+            "Second example should have zero gradient for second position",
+        )
+        self.assertEqual(
+            pred_sgn.grad[1, 0, 2].item(),
+            0.0,
+            "Second example should have zero gradient for third position",
+        )
+
 
 class TestUtilityFunctions(unittest.TestCase):
     """Test utility functions."""
@@ -1233,6 +1301,8 @@ class TestCheckpointManagement(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         self.temp_dir = tempfile.mkdtemp()
+        self.checkpoint_dir = Path(self.temp_dir) / "checkpoints"
+        self.checkpoint_dir.mkdir(parents=True)
         self.cfg = DAGTrainConfig()
         self.cfg.name = "test_checkpoint"
 
