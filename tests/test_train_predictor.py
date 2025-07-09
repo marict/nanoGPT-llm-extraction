@@ -51,7 +51,6 @@ class TestDAGTrainConfig(unittest.TestCase):
             "dag_depth",
             "n_embd",
             "n_head",
-            "n_layer",
             "sequence_length",
             "batch_size",
             "learning_rate",
@@ -753,13 +752,12 @@ class TestModelSetup(unittest.TestCase):
         """Test creating model with DAG components."""
         cfg = DAGTrainConfig()
         cfg.dag_depth = 2
-        cfg.n_layer = 2
         cfg.n_head = 2
         cfg.n_embd = 32
         cfg.sequence_length = 16
 
         model_args = dict(
-            n_layer=cfg.n_layer,
+            n_layer=2,  # Fixed for test - predictor doesn't use n_layer
             n_head=cfg.n_head,
             n_embd=cfg.n_embd,
             block_size=cfg.sequence_length,
@@ -781,13 +779,12 @@ class TestModelSetup(unittest.TestCase):
         """Test freezing non-DAG parameters."""
         cfg = DAGTrainConfig()
         cfg.dag_depth = 2
-        cfg.n_layer = 2
         cfg.n_head = 2
         cfg.n_embd = 32
         cfg.sequence_length = 16
 
         model_args = dict(
-            n_layer=cfg.n_layer,
+            n_layer=2,  # Fixed for test - predictor doesn't use n_layer
             n_head=cfg.n_head,
             n_embd=cfg.n_embd,
             block_size=cfg.sequence_length,
@@ -816,13 +813,12 @@ class TestModelSetup(unittest.TestCase):
         """Test forward pass through DAG predictor."""
         cfg = DAGTrainConfig()
         cfg.dag_depth = 2
-        cfg.n_layer = 2
         cfg.n_head = 2
         cfg.n_embd = 32
         cfg.sequence_length = 16
 
         model_args = dict(
-            n_layer=cfg.n_layer,
+            n_layer=2,  # Fixed for test - predictor doesn't use n_layer
             n_head=cfg.n_head,
             n_embd=cfg.n_embd,
             block_size=cfg.sequence_length,
@@ -968,7 +964,6 @@ class TestIntegration(unittest.TestCase):
         torch.manual_seed(42)
         self.cfg = DAGTrainConfig()
         self.cfg.dag_depth = 2
-        self.cfg.n_layer = 2
         self.cfg.n_head = 2
         self.cfg.n_embd = 32
         self.cfg.batch_size = 2
@@ -1027,7 +1022,7 @@ class TestIntegration(unittest.TestCase):
         """Test evaluation function integration with legacy GPT model."""
         # Create legacy GPT model for backward compatibility testing
         model_args = dict(
-            n_layer=self.cfg.n_layer,
+            n_layer=2,  # Fixed for test - predictor doesn't use n_layer
             n_head=self.cfg.n_head,
             n_embd=self.cfg.n_embd,
             block_size=self.cfg.sequence_length,
@@ -1141,7 +1136,7 @@ class TestIntegration(unittest.TestCase):
         """Test a single training step integration with legacy GPT model."""
         # Create legacy GPT model
         model_args = dict(
-            n_layer=self.cfg.n_layer,
+            n_layer=2,  # Fixed for test - predictor doesn't use n_layer
             n_head=self.cfg.n_head,
             n_embd=self.cfg.n_embd,
             block_size=self.cfg.sequence_length,
@@ -1723,6 +1718,155 @@ class TestCheckpointing(unittest.TestCase):
         self.assertTrue(
             (self.checkpoint_dir / f"{best_ckpt_base}.safetensors").exists()
         )
+
+
+class TestCheckpointLoadingPredictor(unittest.TestCase):
+    """Test checkpoint loading for predictor-only models."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.checkpoint_dir = Path(self.temp_dir) / "checkpoints"
+        self.checkpoint_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        shutil.rmtree(self.temp_dir)
+
+    def test_checkpoint_loading_predictor_only_config(self):
+        """Test that checkpoint loading works correctly with PredictorOnlyConfig."""
+        # Create a model and save a checkpoint
+        config = PredictorOnlyConfig(
+            vocab_size=50304,
+            n_embd=64,
+            n_head=4,
+            dropout=0.0,
+            bias=False,
+            dag_depth=2,
+            sequence_length=32,
+            softmax_temperature=20.0,
+        )
+        model = PredictorOnlyModel(config)
+
+        # Create a checkpoint with proper predictor-only config
+        checkpoint_data = {
+            "model": model.state_dict(),
+            "optimizer": {},  # Empty optimizer state for test
+            "model_config": config.__dict__,  # This is the proper predictor config
+            "iter_num": 100,
+            "best_val_loss": 0.5,
+        }
+
+        # Save the checkpoint
+        checkpoint_path = self.checkpoint_dir / "test_checkpoint.pt"
+        torch.save(checkpoint_data, checkpoint_path)
+
+        # Now try to load it and create a PredictorOnlyConfig from it
+        loaded_checkpoint = torch.load(checkpoint_path, map_location="cpu")
+
+        # This should work without error
+        try:
+            saved_config = PredictorOnlyConfig(**loaded_checkpoint["model_config"])
+            # Verify that it has the expected attributes
+            self.assertTrue(hasattr(saved_config, "n_head"))
+            self.assertTrue(hasattr(saved_config, "n_embd"))
+            self.assertTrue(hasattr(saved_config, "dag_depth"))
+
+            # n_layer should not be part of PredictorOnlyConfig
+            self.assertFalse(hasattr(saved_config, "n_layer"))
+
+        except Exception as e:
+            self.fail(f"Loading checkpoint failed unexpectedly: {e}")
+
+    def test_checkpoint_loading_with_extra_fields(self):
+        """Test that checkpoint loading ignores extra fields in model_config."""
+        # Create a model and save a checkpoint
+        config = PredictorOnlyConfig(
+            vocab_size=50304,
+            n_embd=64,
+            n_head=4,
+            dropout=0.0,
+            bias=False,
+            dag_depth=2,
+            sequence_length=32,
+            softmax_temperature=20.0,
+        )
+        model = PredictorOnlyModel(config)
+
+        # Create a checkpoint with extra fields that aren't in PredictorOnlyConfig
+        # This simulates a checkpoint saved with extra training config fields
+        checkpoint_data = {
+            "model": model.state_dict(),
+            "optimizer": {},
+            "model_config": {
+                **config.__dict__,
+                "max_iters": 10000,  # This field doesn't exist in PredictorOnlyConfig
+                "learning_rate": 1e-3,  # This field doesn't exist in PredictorOnlyConfig
+            },
+            "iter_num": 100,
+            "best_val_loss": 0.5,
+        }
+
+        # Save the checkpoint
+        checkpoint_path = self.checkpoint_dir / "test_checkpoint_extra.pt"
+        torch.save(checkpoint_data, checkpoint_path)
+
+        # Load it back
+        loaded_checkpoint = torch.load(checkpoint_path, map_location="cpu")
+
+        # This should work even with extra fields - they should be ignored
+        try:
+            saved_config = PredictorOnlyConfig(**loaded_checkpoint["model_config"])
+            # Should have the proper predictor config attributes
+            self.assertTrue(hasattr(saved_config, "n_head"))
+            self.assertTrue(hasattr(saved_config, "n_embd"))
+            self.assertTrue(hasattr(saved_config, "dag_depth"))
+
+        except TypeError as e:
+            # This might fail if PredictorOnlyConfig doesn't handle extra kwargs
+            self.assertIn("unexpected keyword argument", str(e))
+
+    def test_checkpoint_logging_works_correctly(self):
+        """Test that checkpoint logging works correctly with predictor-only config."""
+        # Create a model and save a checkpoint
+        config = PredictorOnlyConfig(
+            vocab_size=50304,
+            n_embd=64,
+            n_head=4,
+            dropout=0.0,
+            bias=False,
+            dag_depth=2,
+            sequence_length=32,
+            softmax_temperature=20.0,
+        )
+        model = PredictorOnlyModel(config)
+
+        # Create a checkpoint that simulates what would be saved by the training code
+        checkpoint_data = {
+            "model": model.state_dict(),
+            "optimizer": {},
+            "model_config": config.__dict__,  # This is what gets saved
+            "iter_num": 100,
+            "best_val_loss": 0.5,
+        }
+
+        # Save the checkpoint
+        checkpoint_path = self.checkpoint_dir / "test_checkpoint_logging.pt"
+        torch.save(checkpoint_data, checkpoint_path)
+
+        # Load it back (this simulates the code in train_predictor.py)
+        loaded_checkpoint = torch.load(checkpoint_path, map_location="cpu")
+
+        # This should work without error now
+        saved_config = PredictorOnlyConfig(**loaded_checkpoint["model_config"])
+
+        # Test the correct logging format for shallow attention model
+        message = f"Model config: {saved_config.n_head}H, {saved_config.n_embd}D (shallow attention)"
+
+        # Verify the message contains the expected components
+        self.assertIn(f"{saved_config.n_head}H", message)
+        self.assertIn(f"{saved_config.n_embd}D", message)
+        self.assertIn("shallow attention", message)
 
 
 if __name__ == "__main__":

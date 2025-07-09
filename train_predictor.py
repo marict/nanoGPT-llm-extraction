@@ -193,7 +193,6 @@ class DAGTrainConfig(BaseConfig):
     sequence_length: int = 512  # For tokenized text inputs
 
     # Model architecture (should match target model)
-    n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
     dropout: float = 0.0
@@ -829,7 +828,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 f"[{time.time() - setup_start:.2f}s]   - Best validation loss: {saved_loss:.4f}"
             )
             print(
-                f"[{time.time() - setup_start:.2f}s]   - Model config: {saved_config.n_layer}L, {saved_config.n_head}H, {saved_config.n_embd}D"
+                f"[{time.time() - setup_start:.2f}s]   - Model config: {saved_config.n_head}H, {saved_config.n_embd}D (shallow attention)"
             )
             print(
                 f"[{time.time() - setup_start:.2f}s]   - DAG depth: {saved_config.dag_depth}"
@@ -1261,23 +1260,25 @@ def main() -> None:
     parser = parse_args()
     args, overrides = parser.parse_known_args()
 
-    cfg = DAGTrainConfig()
-    update_config(cfg, load_config_file(args.config))
-    apply_overrides(cfg, overrides)
-
-    if args.dag_depth is not None:
-        cfg.dag_depth = args.dag_depth
-    if args.keep_alive:
-        cfg.keep_alive = args.keep_alive
-    if args.note:
-        cfg.note = args.note
-
-    if args.wandb_api_key:
-        os.environ["WANDB_API_KEY"] = args.wandb_api_key
-    if not os.getenv("WANDB_API_KEY"):
-        parser.error("WANDB_API_KEY is required")
-
+    # Handle --use-runpod before any other processing
     if args.use_runpod:
+        # Basic config setup for runpod args
+        cfg = DAGTrainConfig()
+        try:
+            update_config(cfg, load_config_file(args.config))
+        except Exception:
+            # If config loading fails, continue with defaults for runpod launch
+            pass
+
+        apply_overrides(cfg, overrides)
+
+        if args.dag_depth is not None:
+            cfg.dag_depth = args.dag_depth
+        if args.keep_alive:
+            cfg.keep_alive = args.keep_alive
+        if args.note:
+            cfg.note = args.note
+
         remote_args = " ".join([args.config] + overrides)
         if args.dag_depth is not None:
             remote_args += f" --dag-depth={args.dag_depth}"
@@ -1291,8 +1292,43 @@ def main() -> None:
         )
         return
 
-    Path(CHECKPOINT_DIR).mkdir(parents=True, exist_ok=True)
-    train_predictor(cfg, wandb_run_id=args.wandb_run_id)
+    # For local training, wrap everything in error handling for proper runpod termination
+    cfg = None
+    try:
+        cfg = DAGTrainConfig()
+        update_config(cfg, load_config_file(args.config))
+        apply_overrides(cfg, overrides)
+
+        if args.dag_depth is not None:
+            cfg.dag_depth = args.dag_depth
+        if args.keep_alive:
+            cfg.keep_alive = args.keep_alive
+        if args.note:
+            cfg.note = args.note
+
+        if args.wandb_api_key:
+            os.environ["WANDB_API_KEY"] = args.wandb_api_key
+        if not os.getenv("WANDB_API_KEY"):
+            parser.error("WANDB_API_KEY is required")
+
+        Path(CHECKPOINT_DIR).mkdir(parents=True, exist_ok=True)
+        train_predictor(cfg, wandb_run_id=args.wandb_run_id)
+
+    except Exception as e:
+        print(f"Fatal error in predictor training: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+        # Stop RunPod instance on error if we're running on RunPod
+        if os.getenv("RUNPOD_POD_ID") and (
+            cfg is None or not getattr(cfg, "keep_alive", False)
+        ):
+            print("Stopping RunPod instance due to error...")
+            runpod_service.stop_runpod()
+
+        # Re-raise the exception to ensure proper exit code
+        raise
 
 
 if __name__ == "__main__":

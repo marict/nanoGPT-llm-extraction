@@ -39,8 +39,7 @@ batch_size = 128
 sequence_length = 128
 
 # Model architecture (larger for RunPod training)
-n_layer = 32
-n_head = n_layer
+n_head = 32
 n_embd = n_head * 64
 dropout = 0.3  # Slight dropout for regularization
 bias = False

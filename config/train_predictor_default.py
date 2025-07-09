@@ -48,7 +48,6 @@ batch_size = 4
 sequence_length = 32
 
 # Model architecture (should match target model)
-n_layer = 1
 n_head = 1
 n_embd = 32
 dropout = 0.0
