@@ -600,7 +600,9 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                             "iter": iter_num,
                             "train/loss": losses["train"],
                             "val/loss": losses["val"],
-                            "lr": lr,
+                            # Log the *actual* learning rate in the optimizer to ensure we record
+                            # the value that was truly applied this step.
+                            "lr": optimizer.param_groups[0]["lr"],
                             "mfu": running_mfu * 100,
                             **eval_extra,
                         }

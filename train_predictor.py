@@ -1195,13 +1195,17 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
                 # Log to wandb
                 if run is not None:
+                    # Capture the *actual* learning rate currently in the optimizer. This avoids any
+                    # issues where the local `lr` variable drifts from the value that is ultimately
+                    # used for the step (e.g. if the optimizer or scheduler modifies it).
+                    current_lr = optimizer.param_groups[0]["lr"]
                     log_dict = {
                         "iter": iter_num,
                         "train/total_loss": loss_accum["total_loss"],
                         "train/sign_loss": loss_accum["sign_loss"],
                         "train/log_loss": loss_accum["log_loss"],
                         "train/op_loss": loss_accum["op_loss"],
-                        "lr": lr,
+                        "lr": current_lr,
                         "train/op_accuracy": loss_accum["op_accuracy"],
                         "train/full_dag_op_match": loss_accum["full_dag_op_match"],
                         "train/sign_accuracy": loss_accum["sign_accuracy"],
