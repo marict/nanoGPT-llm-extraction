@@ -32,7 +32,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import runpod_service
 import wandb
 from data.dagset.streaming import create_dag_structure_dataloaders
-from models.dag_model import OP_NAMES
+from models.dag_model import GPT, OP_NAMES, GPTConfig
 from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
 from python_version_check import check_python_version
 from training_utils import (CHECKPOINT_DIR, BaseConfig, _check_for_nonfinite,
@@ -220,6 +220,16 @@ class DAGTrainConfig(BaseConfig):
     # Random seeds
     train_seed: int = 42
     val_seed: int = 43
+
+    # New options
+    # If True, use the full GPT backbone (models.dag_model.GPT) instead of the
+    # shallow PredictorOnlyModel. Loss is still computed only on the DAG
+    # predictor outputs so the language model head is not used.
+    full_backbone: bool = False
+
+    # Number of transformer layers when using the full backbone (ignored when
+    # `full_backbone` is False and the shallow predictor is used).
+    n_layer: int = 12
 
 
 def generate_run_name(cfg: DAGTrainConfig) -> str:
@@ -499,8 +509,13 @@ def evaluate_dag_model(
 
             # Forward pass through shallow attention DAG predictor model
             with ctx:
-                # Use the standalone shallow attention model
-                pred_sgn, pred_log, pred_ops = model(input_tokens)
+                if cfg.full_backbone and hasattr(model, "dag"):
+                    # Obtain hidden states from the GPT backbone and run the DAG plan predictor
+                    hidden = model.forward_hidden(input_tokens)
+                    pred_sgn, pred_log, pred_ops = model.dag.plan_predictor(hidden)
+                else:
+                    # Predictor-only model (shallow attention)
+                    pred_sgn, pred_log, pred_ops = model(input_tokens)
 
                 # Average predictions over sequence length for structure prediction
                 pred_sgn = pred_sgn.mean(dim=1)  # (B, num_nodes_pred)
@@ -650,6 +665,58 @@ def evaluate_dag_model(
     return {**total_losses, **total_metrics}
 
 
+def _get_dag_predictions(
+    model: torch.nn.Module,
+    input_tokens: torch.Tensor,
+    cfg: DAGTrainConfig,
+    ctx,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Helper function to get predictions from the DAG model."""
+    with ctx:
+        pred_sgn, pred_log, pred_ops = model(input_tokens)
+
+    # Average over sequence dimension
+    pred_sgn_avg = pred_sgn.mean(dim=1)  # (B, num_nodes_pred)
+    pred_log_avg = pred_log.mean(dim=1)  # (B, num_nodes_pred)
+    pred_ops_avg = pred_ops.mean(dim=1)  # (B, depth_pred, n_ops)
+
+    # Ensure target and prediction tensors have compatible shapes
+    target_nodes = input_tokens.size(1)  # Assuming input_tokens shape is (B, T, ...)
+    pred_nodes = pred_sgn_avg.size(1)
+    target_depth = pred_ops_avg.size(
+        1
+    )  # Assuming pred_ops_avg shape is (B, T, depth, ...)
+    pred_depth = pred_ops_avg.size(1)
+
+    # Handle mismatched node dimensions
+    if pred_nodes != target_nodes:
+        if pred_nodes > target_nodes:
+            # Truncate predictions
+            pred_sgn_avg = pred_sgn_avg[:, :target_nodes]
+            pred_log_avg = pred_log_avg[:, :target_nodes]
+        else:
+            # Pad predictions with zeros
+            pad_nodes = target_nodes - pred_nodes
+            pred_sgn_avg = F.pad(pred_sgn_avg, (0, pad_nodes))
+            pred_log_avg = F.pad(pred_log_avg, (0, pad_nodes))
+
+    if pred_depth != target_depth:
+        if pred_depth > target_depth:
+            # Truncate predictions
+            pred_ops_avg = pred_ops_avg[:, :target_depth]
+        else:
+            # Pad predictions with zeros
+            pad_depth = target_depth - pred_depth
+            pred_ops_avg = F.pad(pred_ops_avg, (0, 0, 0, pad_depth))
+
+    # Add sequence dimension
+    pred_sgn_seq = pred_sgn_avg.unsqueeze(1)
+    pred_log_seq = pred_log_avg.unsqueeze(1)
+    pred_ops_seq = pred_ops_avg.unsqueeze(1)
+
+    return pred_sgn_seq, pred_log_seq, pred_ops_seq
+
+
 def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
     """Run DAG predictor training loop."""
     # --------------------------------------------------------------------- #
@@ -680,7 +747,33 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     print(
         f"[{time.time() - setup_start:.2f}s] DDP setup completed in {time.time() - ddp_start:.2f}s"
     )
-    model_name = PredictorOnlyModel.__name__
+
+    # Determine model name and create appropriate config
+    if cfg.full_backbone:
+        model_name = GPT.__name__
+        model_config = GPTConfig(
+            vocab_size=50304,
+            n_embd=cfg.n_embd,
+            n_head=cfg.n_head,
+            n_layer=cfg.n_layer,
+            dropout=cfg.dropout,
+            bias=cfg.bias,
+            dag_depth=cfg.dag_depth,
+            block_size=cfg.sequence_length,
+            softmax_temperature=20.0,
+        )
+    else:
+        model_name = PredictorOnlyModel.__name__
+        model_config = PredictorOnlyConfig(
+            vocab_size=50304,
+            n_embd=cfg.n_embd,
+            n_head=cfg.n_head,
+            dropout=cfg.dropout,
+            bias=cfg.bias,
+            dag_depth=cfg.dag_depth,
+            sequence_length=cfg.sequence_length,
+            softmax_temperature=20.0,
+        )
 
     # Clean previous checkpoints
     if master_process:
@@ -763,91 +856,20 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     # Model creation
     # --------------------------------------------------------------------- #
     print(
-        f"[{time.time() - setup_start:.2f}s] Initializing shallow attention DAG predictor model"
+        f"[{time.time() - setup_start:.2f}s] Initializing {'full GPT backbone' if cfg.full_backbone else 'shallow attention'} DAG predictor model"
     )
 
-    # Create config for shallow attention model
-    model_config = PredictorOnlyConfig(
-        vocab_size=50304,  # Standard GPT-2 vocab size
-        n_embd=cfg.n_embd,
-        n_head=cfg.n_head,
-        dropout=cfg.dropout,
-        bias=cfg.bias,
-        dag_depth=cfg.dag_depth,
-        sequence_length=cfg.sequence_length,
-        softmax_temperature=20.0,
-    )
-
-    if cfg.init_from == "scratch":
-        print(
-            f"[{time.time() - setup_start:.2f}s] Initializing shallow attention model from scratch"
-        )
-        model = PredictorOnlyModel(model_config)
-        iter_num, best_val_loss = 0, 1e9
-    elif cfg.init_from in ["resume", "latest"]:
-        print(
-            f"[{time.time() - setup_start:.2f}s] Resuming from checkpoint (mode: {cfg.init_from})"
-        )
-        if cfg.init_from == "resume":
-            print(
-                f"[{time.time() - setup_start:.2f}s] Looking for checkpoints for run '{cfg.name}'"
-            )
-        else:
-            print(
-                f"[{time.time() - setup_start:.2f}s] Looking for latest checkpoint from any run"
-            )
-
-        any_run = cfg.init_from == "latest"
-        ckpt_path = find_latest_checkpoint(cfg, model_name=model_name, any_run=any_run)
-
-        if ckpt_path is None:
-            if any_run:
-                print(
-                    f"[{time.time() - setup_start:.2f}s] No checkpoint found. Starting from scratch."
-                )
-                model = PredictorOnlyModel(model_config)
-                iter_num, best_val_loss = 0, 1e9
-            else:
-                raise ValueError(f"No checkpoint found for run '{cfg.name}' to resume.")
-        else:
-            print(
-                f"[{time.time() - setup_start:.2f}s] ✅ Found checkpoint: {ckpt_path.name}"
-            )
-            checkpoint = torch.load(ckpt_path, map_location=device)
-
-            # Log what we're loading
-            saved_iter = checkpoint["iter_num"]
-            saved_loss = checkpoint["best_val_loss"]
-            saved_config = PredictorOnlyConfig(**checkpoint["model_config"])
-
-            print(f"[{time.time() - setup_start:.2f}s] 📊 Checkpoint info:")
-            print(
-                f"[{time.time() - setup_start:.2f}s]   - Training iteration: {saved_iter}"
-            )
-            print(
-                f"[{time.time() - setup_start:.2f}s]   - Best validation loss: {saved_loss:.4f}"
-            )
-            print(
-                f"[{time.time() - setup_start:.2f}s]   - Model config: {saved_config.n_head}H, {saved_config.n_embd}D (shallow attention)"
-            )
-            print(
-                f"[{time.time() - setup_start:.2f}s]   - DAG depth: {saved_config.dag_depth}"
-            )
-
-            # Create model with saved config
-            model = PredictorOnlyModel(saved_config)
-            state_dict = {
-                k.removeprefix("_orig_mod."): v for k, v in checkpoint["model"].items()
-            }
-            model.load_state_dict(state_dict)
-            iter_num = checkpoint["iter_num"]
-            best_val_loss = checkpoint["best_val_loss"]
-
-            print(
-                f"[{time.time() - setup_start:.2f}s] ✅ Model weights loaded successfully"
-            )
+    if cfg.full_backbone:
+        model = GPT(model_config)
+        print(f"[{time.time() - setup_start:.2f}s] ✅ Full backbone model initialized.")
     else:
-        raise ValueError(f"Unsupported init_from {cfg.init_from}")
+        model = PredictorOnlyModel(model_config)
+        print(
+            f"[{time.time() - setup_start:.2f}s] ✅ Shallow predictor model initialized."
+        )
+    iter_num, best_val_loss = 0, 1e9
+    ckpt_path = None
+    checkpoint = {}
 
     model.to(device)
 
@@ -1053,7 +1075,14 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     input_tokens = tokenize_texts(texts, cfg.sequence_length, device)
 
                     # Forward pass through shallow attention DAG predictor model
-                    pred_sgn, pred_log, pred_ops = raw_model(input_tokens)
+
+                    if cfg.full_backbone and hasattr(raw_model, "dag"):
+                        hidden = raw_model.forward_hidden(input_tokens)
+                        pred_sgn, pred_log, pred_ops = raw_model.dag.plan_predictor(
+                            hidden
+                        )
+                    else:
+                        pred_sgn, pred_log, pred_ops = raw_model(input_tokens)
 
                     # Average over sequence dimension
                     pred_sgn_avg = pred_sgn.mean(dim=1)  # (B, num_nodes_pred)

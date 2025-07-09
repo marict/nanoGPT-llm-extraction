@@ -6,7 +6,7 @@ name = "predictor_pretrain"
 note = "DAG predictor pretraining on structure prediction - RunPod"
 
 # Training intervals
-eval_interval = 1000  # We don't need to do this very often because train is seeing unseen data as well.
+eval_interval = 500  # We don't need to do this very often because train is seeing unseen data as well.
 log_interval = 1  # Log every iteration for better monitoring
 eval_iters = 10  # Reduced from 5 - each eval iter is much more informative
 eval_only = False
@@ -58,9 +58,9 @@ warmup_iters = max_iters * 0.02  # 1/50 of max_iters
 lr_decay_iters = max_iters  # Updated to match max_iters
 min_lr = 1e-5
 
-use_cyclical_lr = True
-cyclical_lr_period = max_iters * 0.2  # 1/5 of max_iters
-cyclical_lr_amplitude = 0.1  # Updated from 0.3
+# use_cyclical_lr = False
+# cyclical_lr_period = max_iters * 0.2  # 1/5 of max_iters
+# cyclical_lr_amplitude = 0.1  # Updated from 0.3
 
 # System settings (optimized for RunPod)
 backend = "nccl"

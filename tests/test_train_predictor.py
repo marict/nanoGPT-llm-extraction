@@ -87,6 +87,8 @@ class TestDAGTrainConfig(unittest.TestCase):
             "always_save_checkpoint",
             "clear_previous_checkpoints",
             "init_from",
+            "full_backbone",
+            "n_layer",
         ]
 
         for attr in required_attrs:
@@ -1867,6 +1869,50 @@ class TestCheckpointLoadingPredictor(unittest.TestCase):
         self.assertIn(f"{saved_config.n_head}H", message)
         self.assertIn(f"{saved_config.n_embd}D", message)
         self.assertIn("shallow attention", message)
+
+
+# -----------------------------------------------------------------------------
+# New tests for full backbone mode
+# -----------------------------------------------------------------------------
+
+
+class TestFullBackbonePredictor(unittest.TestCase):
+    """Tests for the full GPT backbone with DAG plan predictor outputs."""
+
+    def setUp(self):
+        torch.manual_seed(0)
+        self.cfg = GPTConfig(
+            block_size=16,
+            vocab_size=50304,
+            n_layer=2,
+            n_head=2,
+            n_embd=32,
+            dropout=0.0,
+            bias=False,
+            dag_depth=2,
+            softmax_temperature=20.0,
+        )
+        self.model = GPT(self.cfg)
+        self.model.eval()
+
+    def test_plan_predictor_output_shapes(self):
+        batch = 2
+        seq_len = 16
+        input_ids = torch.randint(0, self.cfg.vocab_size, (batch, seq_len))
+        with torch.no_grad():
+            hidden = self.model.forward_hidden(input_ids)
+            pred_sgn, pred_log, pred_ops = self.model.dag.plan_predictor(hidden)
+
+        expected_nodes = self.cfg.dag_depth + 1
+        self.assertEqual(pred_sgn.shape, (batch, seq_len, expected_nodes))
+        self.assertEqual(pred_log.shape, (batch, seq_len, expected_nodes))
+        self.assertEqual(pred_ops.shape, (batch, seq_len, self.cfg.dag_depth, 5))
+
+        # Basic sanity checks on ranges
+        self.assertTrue((pred_sgn >= -1).all() and (pred_sgn <= 1).all())
+        self.assertTrue(torch.isfinite(pred_log).all())
+        op_sums = pred_ops.sum(dim=-1)
+        self.assertTrue(torch.allclose(op_sums, torch.ones_like(op_sums), atol=1e-5))
 
 
 if __name__ == "__main__":
