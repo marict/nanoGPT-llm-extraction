@@ -3,7 +3,6 @@
 
 # Project settings
 name = "predictor_pretrain"
-note = "DAG predictor pretraining on structure prediction - RunPod"
 
 # Training intervals
 eval_interval = 500  # We don't need to do this very often because train is seeing unseen data as well.
@@ -44,9 +43,7 @@ bias = False
 dag_depth = max_dag_depth  # MUST match max_dag_depth above
 
 # Optimization (tuned for longer training)
-learning_rate = (
-    1e-3  # Scaled up from 3e-4 for large batch size (conservative 3x scaling)
-)
+learning_rate = 5e-4  # Based on when performance started to degrade
 max_iters = 50_000
 weight_decay = 1e-1
 beta1 = 0.9
@@ -58,9 +55,9 @@ warmup_iters = max_iters * 0.02  # 1/50 of max_iters
 lr_decay_iters = max_iters  # Updated to match max_iters
 min_lr = 1e-5
 
-# use_cyclical_lr = False
-# cyclical_lr_period = max_iters * 0.2  # 1/5 of max_iters
-# cyclical_lr_amplitude = 0.1  # Updated from 0.3
+use_cyclical_lr = True
+cyclical_lr_period = max_iters * 0.2  # 1/5 of max_iters
+cyclical_lr_amplitude = 0.1  # Updated from 0.3
 
 # System settings (optimized for RunPod)
 backend = "nccl"
