@@ -641,6 +641,18 @@ def evaluate_dag_model(
                     pred_op_names = [OP_NAMES[idx] for idx in pred_op_indices]
                     print("Operations (predicted w/ argmax):")
                     print(pred_op_names)
+
+                    # Show masks for this sample
+                    sample_initial_mask = initial_mask[sample_idx].cpu().tolist()
+                    sample_operation_mask = operation_mask[sample_idx].cpu().tolist()
+                    print(
+                        "Initial value mask (True = used, False = discarded by identity):"
+                    )
+                    print(sample_initial_mask)
+                    print(
+                        "Operation mask (True = contributes, False = result discarded):"
+                    )
+                    print(sample_operation_mask)
                     print("==========================\n")
 
                 # ------------------------------------------------------------------ #
