@@ -789,6 +789,15 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         print(
             f"[{time.time() - setup_start:.2f}s] Resuming from checkpoint (mode: {cfg.init_from})"
         )
+        if cfg.init_from == "resume":
+            print(
+                f"[{time.time() - setup_start:.2f}s] Looking for checkpoints for run '{cfg.name}'"
+            )
+        else:
+            print(
+                f"[{time.time() - setup_start:.2f}s] Looking for latest checkpoint from any run"
+            )
+
         any_run = cfg.init_from == "latest"
         ckpt_path = find_latest_checkpoint(cfg, model_name=model_name, any_run=any_run)
 
@@ -802,10 +811,31 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
             else:
                 raise ValueError(f"No checkpoint found for run '{cfg.name}' to resume.")
         else:
-            print(f"[{time.time() - setup_start:.2f}s] Loading checkpoint {ckpt_path}")
+            print(
+                f"[{time.time() - setup_start:.2f}s] ✅ Found checkpoint: {ckpt_path.name}"
+            )
             checkpoint = torch.load(ckpt_path, map_location=device)
-            # Create model with saved config
+
+            # Log what we're loading
+            saved_iter = checkpoint["iter_num"]
+            saved_loss = checkpoint["best_val_loss"]
             saved_config = PredictorOnlyConfig(**checkpoint["model_config"])
+
+            print(f"[{time.time() - setup_start:.2f}s] 📊 Checkpoint info:")
+            print(
+                f"[{time.time() - setup_start:.2f}s]   - Training iteration: {saved_iter}"
+            )
+            print(
+                f"[{time.time() - setup_start:.2f}s]   - Best validation loss: {saved_loss:.4f}"
+            )
+            print(
+                f"[{time.time() - setup_start:.2f}s]   - Model config: {saved_config.n_layer}L, {saved_config.n_head}H, {saved_config.n_embd}D"
+            )
+            print(
+                f"[{time.time() - setup_start:.2f}s]   - DAG depth: {saved_config.dag_depth}"
+            )
+
+            # Create model with saved config
             model = PredictorOnlyModel(saved_config)
             state_dict = {
                 k.removeprefix("_orig_mod."): v for k, v in checkpoint["model"].items()
@@ -813,6 +843,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
             model.load_state_dict(state_dict)
             iter_num = checkpoint["iter_num"]
             best_val_loss = checkpoint["best_val_loss"]
+
+            print(
+                f"[{time.time() - setup_start:.2f}s] ✅ Model weights loaded successfully"
+            )
     else:
         raise ValueError(f"Unsupported init_from {cfg.init_from}")
 
@@ -838,7 +872,25 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     )
 
     if cfg.init_from == "resume":
+        print(
+            f"[{time.time() - setup_start:.2f}s] 🔄 Loading optimizer state from checkpoint"
+        )
         optimizer.load_state_dict(checkpoint["optimizer"])
+        print(
+            f"[{time.time() - setup_start:.2f}s] ✅ Optimizer state loaded (Adam momentum preserved)"
+        )
+    elif cfg.init_from == "latest" and ckpt_path is not None:
+        print(
+            f"[{time.time() - setup_start:.2f}s] 🔄 Loading optimizer state from checkpoint"
+        )
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        print(
+            f"[{time.time() - setup_start:.2f}s] ✅ Optimizer state loaded (Adam momentum preserved)"
+        )
+    else:
+        print(
+            f"[{time.time() - setup_start:.2f}s] 🆕 Initializing fresh optimizer state"
+        )
 
     # Gradient scaler
     scalar_enabled = actual_dtype == "float16"
@@ -862,6 +914,14 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     # --------------------------------------------------------------------- #
     # Training loop
     # --------------------------------------------------------------------- #
+    print(f"[{time.time() - setup_start:.2f}s] 🚀 Training initialization complete!")
+    print(f"[{time.time() - setup_start:.2f}s] 📋 Summary:")
+    print(f"[{time.time() - setup_start:.2f}s]   - Mode: {cfg.init_from}")
+    print(f"[{time.time() - setup_start:.2f}s]   - Starting iteration: {iter_num}")
+    print(
+        f"[{time.time() - setup_start:.2f}s]   - Best validation loss: {best_val_loss:.4f}"
+    )
+    print(f"[{time.time() - setup_start:.2f}s]   - Max iterations: {cfg.max_iters}")
     print(f"[{time.time() - setup_start:.2f}s] Starting training loop")
 
     t0 = time.time()

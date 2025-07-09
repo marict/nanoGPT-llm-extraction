@@ -14,7 +14,7 @@ always_save_checkpoint = False
 clear_previous_checkpoints = False  # Save space on RunPod
 
 # Model initialization
-init_from = "scratch"
+init_from = "latest"  # Resume from latest checkpoint across any run
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
@@ -33,7 +33,7 @@ english_conversion_rate = 0.3  # Probability of converting tokens to English (0.
 
 # Model configuration
 gradient_accumulation_steps = (
-    16  # Increased from 8 - effective batch size = 1024 * 16 = 16,384
+    8  # Increased from 8 - effective batch size = 1024 * 16 = 16,384
 )
 batch_size = 128
 sequence_length = 128
