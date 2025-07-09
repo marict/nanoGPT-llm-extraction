@@ -14,7 +14,7 @@ always_save_checkpoint = False
 clear_previous_checkpoints = False  # Save space on RunPod
 
 # Model initialization
-init_from = "latest"  # Resume from latest checkpoint across any run
+init_from = "scratch"  # Resume from latest checkpoint across any run
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
