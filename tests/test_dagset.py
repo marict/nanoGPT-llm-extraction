@@ -55,7 +55,7 @@ class TestIdentityFunction(unittest.TestCase):
         operations = ["identity", "add"]  # First operation is identity
 
         # Generate expression
-        expression = convert_dag_to_expression_string(
+        expression, used_mask, operation_mask = convert_dag_to_expression_string(
             initial_values=initial_values,
             operations=operations,
             convert_to_english=False,
@@ -64,23 +64,34 @@ class TestIdentityFunction(unittest.TestCase):
 
         # With identity operation, the first step should return the first operand
         # Stack starts as [5.0, 3.0, 2.0]
-        # identity: pop 2.0 and 3.0, return 3.0 (first operand), stack becomes [5.0, 3.0]
-        # add: pop 3.0 and 5.0, return 5.0 + 3.0 = 8.0, stack becomes [8.0]
-        # Result should be equivalent to "5.0 + 3.0" = 8.0
+        # identity: pop 2.0, 3.0 -> push 3.0 (discard 2.0) -> stack = [5.0, 3.0]
+        # add: pop 3.0, 5.0 -> push 5.0 + 3.0 = 8.0 -> stack = [8.0]
+        # Final expression should be "5.0 + 3.0"
 
+        # Check that the expression is correct
         self.assertIsInstance(expression, str)
-        self.assertGreater(len(expression), 0)
+        self.assertIn("5.0", expression)
+        self.assertIn("3.0", expression)
+        self.assertIn("+", expression)
+        self.assertNotIn("2.0", expression)  # 2.0 should not appear in the expression
 
-        # The expression might be simplified, but it should be evaluable
-        # and should contain the expected operands
-        import re
+        # Check used mask - should indicate which initial values are used
+        self.assertIsInstance(used_mask, torch.Tensor)
+        self.assertEqual(used_mask.dtype, torch.bool)
+        self.assertEqual(len(used_mask), len(initial_values))
 
-        numbers_in_expression = re.findall(r"\d+\.?\d*", expression)
-        self.assertGreater(
-            len(numbers_in_expression),
-            0,
-            f"Expression should contain numbers: {expression}",
-        )
+        # Values 5.0 and 3.0 should be used, 2.0 should not be used
+        expected_used = [True, True, False]
+        self.assertEqual(used_mask.tolist(), expected_used)
+
+        # Check operation mask - should indicate which operations contribute to final result
+        self.assertIsInstance(operation_mask, torch.Tensor)
+        self.assertEqual(operation_mask.dtype, torch.bool)
+        self.assertEqual(len(operation_mask), len(operations))
+
+        # Identity operation produces value used in final result, add operation produces final result
+        expected_op_used = [True, True]
+        self.assertEqual(operation_mask.tolist(), expected_op_used)
 
     def test_identity_operation_with_exact_decimal_representation(self):
         """Test that identity operations work with exact decimal representation."""
@@ -99,7 +110,7 @@ class TestIdentityFunction(unittest.TestCase):
         operations = ["identity", "multiply"]
 
         # Generate expression
-        expression = convert_dag_to_expression_string(
+        expression, used_mask, operation_mask = convert_dag_to_expression_string(
             initial_values=initial_values,
             operations=operations,
             rng=rng,
@@ -110,6 +121,11 @@ class TestIdentityFunction(unittest.TestCase):
         # Verify the expression is valid
         self.assertIsInstance(expression, str)
         self.assertGreater(len(expression), 0)
+
+        # Verify the used_mask
+        self.assertIsInstance(used_mask, torch.Tensor)
+        self.assertEqual(used_mask.dtype, torch.bool)
+        self.assertEqual(len(used_mask), len(initial_values))
 
         # Verify that exact decimal representation is maintained
         for value in initial_values:
@@ -125,7 +141,7 @@ class TestIdentityFunction(unittest.TestCase):
         initial_values = [42, 7, 3]
         operations = ["identity"]
 
-        expression = convert_dag_to_expression_string(
+        expression, used_mask, operation_mask = convert_dag_to_expression_string(
             initial_values=initial_values,
             operations=operations,
             convert_to_english=True,
@@ -134,6 +150,11 @@ class TestIdentityFunction(unittest.TestCase):
 
         self.assertIsInstance(expression, str)
         self.assertGreater(len(expression), 0)
+
+        # Verify the used_mask
+        self.assertIsInstance(used_mask, torch.Tensor)
+        self.assertEqual(used_mask.dtype, torch.bool)
+        self.assertEqual(len(used_mask), len(initial_values))
 
         # Should contain English words
         import re
@@ -208,8 +229,9 @@ class TestIdentityFunction(unittest.TestCase):
 
         # Generate expression multiple times
         expressions = []
+        masks = []
         for _ in range(3):
-            expr = convert_dag_to_expression_string(
+            expr, mask, operation_mask = convert_dag_to_expression_string(
                 initial_values=initial_values.copy(),
                 operations=operations.copy(),
                 rng=random.Random(42),  # Same seed for consistency
@@ -217,6 +239,7 @@ class TestIdentityFunction(unittest.TestCase):
                 conversion_probability=0.0,
             )
             expressions.append(expr)
+            masks.append(mask)
 
         # All expressions should be identical with same inputs and seed
         for i in range(1, len(expressions)):
@@ -224,6 +247,11 @@ class TestIdentityFunction(unittest.TestCase):
                 expressions[0],
                 expressions[i],
                 "Identity operations should produce consistent results",
+            )
+            # Masks should also be identical
+            self.assertTrue(
+                torch.equal(masks[0], masks[i]),
+                "Used masks should be consistent with same inputs and seed",
             )
 
     def test_all_operations_including_identity(self):
@@ -290,6 +318,8 @@ class TestDAGStructureDataset(unittest.TestCase):
             "operation_probs",
             "depth",
             "operations",
+            "initial_mask",  # Added for identity operation masking
+            "operation_mask",  # Added for operation masking
         }
         self.assertEqual(set(structure.keys()), expected_keys)
 
@@ -707,7 +737,7 @@ class TestExpressionMatching(unittest.TestCase):
         operations = ["add", "multiply"]
 
         # Generate expression
-        expression = convert_dag_to_expression_string(
+        expression, used_mask, operation_mask = convert_dag_to_expression_string(
             initial_values=initial_values,
             operations=operations,
             rng=random.Random(42),
@@ -751,12 +781,14 @@ class TestExpressionMatching(unittest.TestCase):
                 operations = [rng.choice(OP_NAMES) for _ in range(3)]
 
                 # Generate expression
-                expression = convert_dag_to_expression_string(
-                    initial_values=initial_values,
-                    operations=operations,
-                    rng=rng,
-                    convert_to_english=False,
-                    conversion_probability=0.0,
+                expression, used_mask, operation_mask = (
+                    convert_dag_to_expression_string(
+                        initial_values=initial_values,
+                        operations=operations,
+                        rng=rng,
+                        convert_to_english=False,
+                        conversion_probability=0.0,
+                    )
                 )
 
                 # Manually compute expected result
@@ -800,21 +832,25 @@ class TestExpressionMatching(unittest.TestCase):
         operations = ["add", "multiply"]
 
         # Test without English conversion
-        expression_numeric = convert_dag_to_expression_string(
-            initial_values=initial_values,
-            operations=operations,
-            rng=random.Random(42),
-            convert_to_english=False,
-            conversion_probability=0.0,
+        expression_numeric, used_mask_numeric, operation_mask_numeric = (
+            convert_dag_to_expression_string(
+                initial_values=initial_values,
+                operations=operations,
+                rng=random.Random(42),
+                convert_to_english=False,
+                conversion_probability=0.0,
+            )
         )
 
         # Test with English conversion
-        expression_english = convert_dag_to_expression_string(
-            initial_values=initial_values,
-            operations=operations,
-            rng=random.Random(42),
-            convert_to_english=True,
-            conversion_probability=0.3,
+        expression_english, used_mask_english, operation_mask_english = (
+            convert_dag_to_expression_string(
+                initial_values=initial_values,
+                operations=operations,
+                rng=random.Random(42),
+                convert_to_english=True,
+                conversion_probability=0.3,
+            )
         )
 
         # Both should be valid strings
@@ -850,12 +886,14 @@ class TestExpressionMatching(unittest.TestCase):
                 ops = operations[:max_ops] if len(operations) > max_ops else operations
 
                 for seed in [42, 123, 999]:
-                    expression = convert_dag_to_expression_string(
-                        initial_values=initial_values,
-                        operations=ops,
-                        rng=random.Random(seed),
-                        convert_to_english=False,
-                        conversion_probability=0.0,
+                    expression, used_mask, operation_mask = (
+                        convert_dag_to_expression_string(
+                            initial_values=initial_values,
+                            operations=ops,
+                            rng=random.Random(seed),
+                            convert_to_english=False,
+                            conversion_probability=0.0,
+                        )
                     )
 
                     # Check that there are no double negatives
@@ -891,7 +929,7 @@ class TestExpressionMatching(unittest.TestCase):
         initial_values = [-4.4262, -6.10979, -10.0]
         operations = ["subtract", "subtract"]  # depth = 2
 
-        text = convert_dag_to_expression_string(
+        text, used_mask, operation_mask = convert_dag_to_expression_string(
             initial_values=initial_values,
             operations=operations,
             rng=random.Random(42),
@@ -903,6 +941,11 @@ class TestExpressionMatching(unittest.TestCase):
         self.assertIsInstance(text, str)
         self.assertGreater(len(text), 0)
         self.assertNotIn("--", text, "Unexpected double negative in expression")
+
+        # Verify the used_mask
+        self.assertIsInstance(used_mask, torch.Tensor)
+        self.assertEqual(used_mask.dtype, torch.bool)
+        self.assertEqual(len(used_mask), len(initial_values))
 
         # Critical check: every negative value should be prefixed with the word 'negative'
         self.assertIn(
@@ -921,13 +964,18 @@ class TestExpressionMatching(unittest.TestCase):
         operations = ["add"]
 
         # Force English conversion
-        text = convert_dag_to_expression_string(
+        text, used_mask, operation_mask = convert_dag_to_expression_string(
             initial_values=initial_values,
             operations=operations,
             rng=random.Random(123),
             convert_to_english=True,
             conversion_probability=1.0,
         )
+
+        # Verify the used_mask
+        self.assertIsInstance(used_mask, torch.Tensor)
+        self.assertEqual(used_mask.dtype, torch.bool)
+        self.assertEqual(len(used_mask), len(initial_values))
 
         self.assertIn(
             "negative", text.lower(), msg=f"English text missing 'negative': {text}"

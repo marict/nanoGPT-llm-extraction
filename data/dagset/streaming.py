@@ -182,6 +182,8 @@ class DAGExample:
     signs: torch.Tensor  # for training - [D+1] tensor
     log_magnitudes: torch.Tensor  # for training - [D+1] tensor
     operations: torch.Tensor  # for training - [D x num_ops] one-hot tensor
+    used_mask: torch.Tensor  # for training - [D+1] boolean tensor
+    operation_mask: torch.Tensor  # for training - [D] boolean tensor
 
 
 def generate_uniform_digit_number(
@@ -277,7 +279,7 @@ def convert_dag_to_expression_string(
     rng: random.Random = None,
     convert_to_english: bool = True,
     conversion_probability: float = 0.3,
-) -> str:
+) -> tuple[str, torch.Tensor, torch.Tensor]:
     """Convert DAG structure to a simple mathematical expression string following stack-based execution.
 
     Args:
@@ -288,7 +290,9 @@ def convert_dag_to_expression_string(
         conversion_probability: Probability of English conversion
 
     Returns:
-        Simple mathematical expression string like "1 * (2 - 3/4)"
+        Tuple of (expression_string, used_mask, operation_mask) where:
+        - used_mask indicates which initial values are used
+        - operation_mask indicates which operations contribute to the final result
     """
     if rng is None:
         rng = random
@@ -303,6 +307,10 @@ def convert_dag_to_expression_string(
             stack.append(-pos_symbol)
         else:
             stack.append(sympy.Symbol(str(v)))
+
+    # Track which initial values each stack position depends on for masking
+    num_initial = len(initial_values)
+    stack_dependencies = [set([i]) for i in range(num_initial)]
 
     op_name_to_symbol = {
         "add": "+",
@@ -323,13 +331,39 @@ def convert_dag_to_expression_string(
     }
 
     for op in operations:
+        # Pop operands from both stacks
         b = stack.pop()
         a = stack.pop()
+        b_deps = stack_dependencies.pop()
+        a_deps = stack_dependencies.pop()
+
+        # Create expression
         op_symbol = op_name_to_symbol[op]
         expr = op_symbol_to_expression[op_symbol](a, b)
         stack.append(expr)
 
+        # Update dependencies
+        if op == "identity":
+            # Identity keeps first operand, discards second
+            result_deps = a_deps
+        else:
+            # Binary operations use both operands
+            result_deps = a_deps.union(b_deps)
+
+        stack_dependencies.append(result_deps)
+
     final_expr = stack[0]
+
+    # Compute used mask from final dependencies
+    used_indices = stack_dependencies[0] if stack_dependencies else set()
+    used_mask = torch.tensor(
+        [i in used_indices for i in range(num_initial)], dtype=torch.bool
+    )
+
+    # Compute operation mask using the mathematical relationship:
+    # operation_mask = reversed(used_mask)[1:]
+    # This works because operation[i] corresponds to the dependency pattern of initial_values[N-1-i]
+    operation_mask = used_mask.flip(0)[1:]
 
     # NOTE: We no longer permute expressions; keeping them as-is ensures sign
     # information and token alignment are preserved. The previous permutation
@@ -347,7 +381,7 @@ def convert_dag_to_expression_string(
     if convert_to_english:
         result = add_english_to_expression(result, conversion_probability, rng)
 
-    return result
+    return result, used_mask, operation_mask
 
 
 def convert_plan_to_tensors(
@@ -421,7 +455,7 @@ def generate_single_dag_example(
     )
 
     # Step 2: Convert DAG plan to simple expression string for data
-    expression = convert_dag_to_expression_string(
+    expression, used_mask, operation_mask = convert_dag_to_expression_string(
         initial_values=initial_values,
         operations=operations,
         rng=rng,
@@ -442,6 +476,8 @@ def generate_single_dag_example(
         signs=signs,
         log_magnitudes=log_magnitudes,
         operations=operations,
+        used_mask=used_mask,
+        operation_mask=operation_mask,
     )
 
 
@@ -607,10 +643,23 @@ class DAGStructureDataset:
         # Use the example's operation tensor (already one-hot encoded)
         operation_probs = example.operations
 
+        # Use the pre-computed mask from the example
+        used_mask = example.used_mask
+
+        # Create padded mask to match num_scratch_nodes
+        initial_mask = torch.zeros(num_scratch_nodes, dtype=torch.bool)
+        mask_copy_len = min(len(used_mask), num_scratch_nodes)
+        initial_mask[:mask_copy_len] = used_mask[:mask_copy_len]
+
+        # Use the pre-computed operation mask from the example
+        operation_mask = example.operation_mask
+
         return {
             "initial_sgn": initial_sgn,
             "initial_log": initial_log,
             "operation_probs": operation_probs,
+            "initial_mask": initial_mask,
+            "operation_mask": operation_mask,
             "depth": torch.tensor(depth, dtype=torch.long),
             "operations": example.operations,  # Include the raw operations list
         }
@@ -663,6 +712,8 @@ class DAGStructureDataset:
         batched_initial_sgn = torch.zeros(batch_size, max_nodes)
         batched_initial_log = torch.zeros(batch_size, max_nodes)
         batched_operation_probs = torch.zeros(batch_size, max_depth, len(OP_NAMES))
+        batched_initial_mask = torch.zeros(batch_size, max_nodes, dtype=torch.bool)
+        batched_operation_mask = torch.zeros(batch_size, max_depth, dtype=torch.bool)
         batched_depths = torch.zeros(batch_size, dtype=torch.long)
 
         # Fill batched tensors
@@ -677,6 +728,12 @@ class DAGStructureDataset:
             # Copy operation probabilities
             batched_operation_probs[i, :depth] = structure["operation_probs"][:depth]
 
+            # Copy initial mask
+            batched_initial_mask[i, :nodes] = structure["initial_mask"][:nodes]
+
+            # Copy operation mask
+            batched_operation_mask[i, :depth] = structure["operation_mask"][:depth]
+
             # Store depth
             batched_depths[i] = depth
 
@@ -684,6 +741,8 @@ class DAGStructureDataset:
             "initial_sgn": batched_initial_sgn,
             "initial_log": batched_initial_log,
             "operation_probs": batched_operation_probs,
+            "initial_mask": batched_initial_mask,
+            "operation_mask": batched_operation_mask,
             "depths": batched_depths,
         }
 
