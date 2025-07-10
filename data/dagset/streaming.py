@@ -172,7 +172,7 @@ def add_english_to_expression(
                 number = float(token)
 
             if rng.random() < conversion_probability:
-                converted_tokens.append(convert_number_to_words(number, True))
+                converted_tokens.append(convert_number_to_words(number, use_words=True))
             else:
                 converted_tokens.append(token)
         else:
@@ -309,12 +309,8 @@ def pad_dag_plan(
     # Pad initial values: since operations are processed right-to-left,
     # the rightmost operations (padding identities) will consume the rightmost initial values
     padded_initial_values = initial_values.copy()
-    num_padded_ops = len(operations) - (first_identity_idx + 1)
-
-    # Replace the rightmost initial values with 1.0s (these will be consumed by padding identities)
-    for i in range(num_padded_ops):
-        if len(padded_initial_values) - 1 - i >= 0:
-            padded_initial_values[len(padded_initial_values) - 1 - i] = 1.0
+    for i in range(first_identity_idx + 1, len(padded_initial_values)):
+        padded_initial_values[i] = 1.0
 
     return padded_initial_values, padded_operations
 
@@ -412,6 +408,9 @@ def convert_dag_to_expression_string(
             new_value = f"-{abs_values[i]}"
 
         expr_str = expr_str.replace(old_symbol, new_value)
+
+    # Replace some degenerate cases.
+    expr_str = expr_str.replace("+ (--", "- (-")
 
     # Step 4: Apply English conversion if requested
     if conversion_probability > 0:
@@ -626,6 +625,7 @@ class DAGStructureDataset:
         Returns:
             Tuple of (text_description, structure_tensors)
         """
+        # Generate a random state using the data loader seed
         # Generate the DAG example (structure-only, no execution needed)
         example = generate_single_dag_example(
             depth=depth,

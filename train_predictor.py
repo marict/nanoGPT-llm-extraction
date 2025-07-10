@@ -467,6 +467,7 @@ def evaluate_dag_model(
     ctx,
     cfg: DAGTrainConfig,
     eval_iters: int,
+    seed: int,
 ) -> Dict[str, float]:
     """Evaluate DAG model on validation set."""
     model.eval()
@@ -475,7 +476,7 @@ def evaluate_dag_model(
     # seed in the console output so the exact example can be regenerated
     # later for debugging or unit testing purposes.
     # ------------------------------------------------------------------ #
-    eval_sample_seed = getattr(cfg, "seed", 0)
+    eval_sample_seed = seed
     _eval_random.seed(eval_sample_seed)
 
     total_losses = {
@@ -528,26 +529,11 @@ def evaluate_dag_model(
                 target_depth = target_ops.size(1)
                 pred_depth = pred_ops.size(1)
 
-                # Resize predictions to match targets if needed
-                if pred_nodes != target_nodes:
-                    if pred_nodes > target_nodes:
-                        # Truncate predictions
-                        pred_sgn = pred_sgn[:, :target_nodes]
-                        pred_log = pred_log[:, :target_nodes]
-                    else:
-                        # Pad predictions with zeros
-                        pad_nodes = target_nodes - pred_nodes
-                        pred_sgn = F.pad(pred_sgn, (0, pad_nodes))
-                        pred_log = F.pad(pred_log, (0, pad_nodes))
-
-                if pred_depth != target_depth:
-                    if pred_depth > target_depth:
-                        # Truncate predictions
-                        pred_ops = pred_ops[:, :target_depth]
-                    else:
-                        # Pad predictions with zeros
-                        pad_depth = target_depth - pred_depth
-                        pred_ops = F.pad(pred_ops, (0, 0, 0, pad_depth))
+                # Predictions should match targets, throw error if not
+                if pred_nodes != target_nodes or pred_depth != target_depth:
+                    raise ValueError(
+                        f"Predictions do not match targets. Pred nodes: {pred_nodes}, Target nodes: {target_nodes}, Pred depth: {pred_depth}, Target depth: {target_depth}"
+                    )
 
                 # Add sequence dimension to match loss function expectations
                 pred_sgn = pred_sgn.unsqueeze(1)  # (B, 1, num_nodes)
@@ -843,9 +829,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     # --------------------------------------------------------------------- #
     print(f"[{time.time() - setup_start:.2f}s] Creating DAG structure dataloaders")
 
-    if cfg.seed == -1:
-        cfg.seed = random.randint(0, 1000000)
-
     train_loader, val_loader = create_dag_structure_dataloaders(
         train_batch_size=cfg.batch_size,
         val_batch_size=cfg.batch_size,
@@ -982,13 +965,14 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 # the underlying generator would advance each epoch, giving
                 # different samples even though the RNG seed itself is fixed.
                 if cfg.seed == -1:
-                    cfg.seed = random.randint(0, 1000000)
+                    seed = random.randint(0, 10000)
+
                 _train_loader_unused, val_loader_eval = (
                     create_dag_structure_dataloaders(
                         train_batch_size=cfg.batch_size,
                         val_batch_size=cfg.batch_size,
                         max_depth=cfg.dag_depth,
-                        seed=cfg.seed,
+                        seed=seed,
                         english_conversion_rate=cfg.english_conversion_rate,
                         max_digits=cfg.max_digits,
                         max_decimal_places=cfg.max_decimal_places,
@@ -997,7 +981,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
                 model.eval()
                 eval_losses = evaluate_dag_model(
-                    raw_model, val_loader_eval, device, ctx, cfg, cfg.eval_iters
+                    raw_model, val_loader_eval, device, ctx, cfg, cfg.eval_iters, seed
                 )
                 print(
                     f"step {iter_num}: train loss {loss_accum.get('total_loss', 'N/A'):.4f}, "

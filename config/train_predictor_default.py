@@ -13,9 +13,9 @@ name = "dag_predictor-default"
 # Training intervals
 # ------------------
 # Evaluate every step and keep logs chatty for debugging.
-eval_interval = 3
+eval_interval = 1
 log_interval = 1
-eval_iters = 1
+eval_iters = 20
 eval_only = False
 always_save_checkpoint = True
 # Remove any stale checkpoints when starting a new run.
@@ -56,7 +56,7 @@ dag_depth = 4  # Target DAG depth
 
 # Optimization
 learning_rate = 6e-4
-max_iters = 6
+max_iters = 10
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
