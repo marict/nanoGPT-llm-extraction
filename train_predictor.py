@@ -404,8 +404,6 @@ def compute_dag_structure_loss(
     target_log: torch.Tensor,
     target_ops: torch.Tensor,
     cfg: DAGTrainConfig,
-    initial_mask: torch.Tensor,
-    operation_mask: torch.Tensor,
 ) -> Dict[str, torch.Tensor]:
     """Compute loss for DAG structure prediction.
 
@@ -417,23 +415,11 @@ def compute_dag_structure_loss(
         target_log: (B, T, num_nodes) target log magnitudes
         target_ops: (B, T, depth, n_ops) target operation probabilities (one-hot)
         cfg: Training configuration
-        initial_mask: (B, num_nodes) mask indicating which initial values are used
-                     (True = used, False = discarded by identity ops)
-        operation_mask: (B, depth) mask indicating which operations contribute to the final result
-                       (True = contributes, False = result discarded)
 
     Returns:
         Dictionary with loss components
     """
-    if initial_mask is None:
-        raise ValueError(
-            "initial_mask is required but was None. All DAG examples should provide initial value masks."
-        )
 
-    if operation_mask is None:
-        raise ValueError(
-            "operation_mask is required but was None. All DAG examples should provide operation masks."
-        )
     B, T = pred_sgn.shape[:2]
 
     # Sign loss (MSE)
@@ -454,22 +440,9 @@ def compute_dag_structure_loss(
     op_loss_flat = F.nll_loss(log_pred_ops, target_op_indices, reduction="none")
     op_loss = op_loss_flat.reshape(B, T, -1)  # (B, T, depth)
 
-    # Create masks for valid positions based on actual depths and identity removal
-    # Use the initial_mask to exclude nodes removed by identity operations
-    # initial_mask: (B, num_nodes) - True for nodes that are used
-    node_mask = initial_mask.unsqueeze(1)  # (B, 1, num_nodes) to match loss dims
-    sign_mask = node_mask.expand_as(sign_loss).float()
-    log_mask = node_mask.expand_as(log_loss).float()
-
-    # Use the operation_mask to exclude operations that don't contribute to the final result
-    # operation_mask: (B, depth) - True for operations that contribute
-    op_node_mask = operation_mask.unsqueeze(1)  # (B, 1, depth) to match loss dims
-    op_mask = op_node_mask.expand_as(op_loss).float()
-
-    # Apply masks and compute weighted losses
-    sign_loss = (sign_loss * sign_mask).sum() / sign_mask.sum()
-    log_loss = (log_loss * log_mask).sum() / log_mask.sum()
-    op_loss = (op_loss * op_mask).sum() / op_mask.sum()
+    sign_loss = sign_loss.sum() / B
+    log_loss = log_loss.sum() / B
+    op_loss = op_loss.sum() / B
 
     # Weighted total loss - ONLY from the main predictions (signs, magnitudes, operations)
     total_loss = (
@@ -524,10 +497,6 @@ def evaluate_dag_model(
             target_sgn = structures["initial_sgn"].to(device)  # (B, num_nodes)
             target_log = structures["initial_log"].to(device)  # (B, num_nodes)
             target_ops = structures["operation_probs"].to(device)  # (B, depth, n_ops)
-            initial_mask = structures.get("initial_mask", None)  # (B, num_nodes)
-            initial_mask = initial_mask.to(device)
-            operation_mask = structures.get("operation_mask", None)  # (B, depth)
-            operation_mask = operation_mask.to(device)
 
             # Tokenize texts properly using the mathematical expressions
             input_tokens = tokenize_texts(texts, cfg.sequence_length, device)
@@ -592,8 +561,6 @@ def evaluate_dag_model(
                     target_log,
                     target_ops,
                     cfg,
-                    initial_mask,
-                    operation_mask,
                 )
 
                 # Console debug: show one random sample's text and initial values (first batch only)
@@ -641,18 +608,6 @@ def evaluate_dag_model(
                     pred_op_names = [OP_NAMES[idx] for idx in pred_op_indices]
                     print("Operations (predicted w/ argmax):")
                     print(pred_op_names)
-
-                    # Show masks for this sample
-                    sample_initial_mask = initial_mask[sample_idx].cpu().tolist()
-                    sample_operation_mask = operation_mask[sample_idx].cpu().tolist()
-                    print(
-                        "Initial value mask (True = used, False = discarded by identity):"
-                    )
-                    print(sample_initial_mask)
-                    print(
-                        "Operation mask (True = contributes, False = result discarded):"
-                    )
-                    print(sample_operation_mask)
                     print("==========================\n")
 
                 # ------------------------------------------------------------------ #
@@ -1091,10 +1046,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
             target_sgn = structures["initial_sgn"].to(device)
             target_log = structures["initial_log"].to(device)
             target_ops = structures["operation_probs"].to(device)
-            initial_mask = structures.get("initial_mask", None)
-            initial_mask = initial_mask.to(device)
-            operation_mask = structures.get("operation_mask", None)
-            operation_mask = operation_mask.to(device)
 
             loss_accum = {
                 "total_loss": 0.0,
@@ -1178,8 +1129,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         target_log_seq,
                         target_ops_seq,
                         cfg,
-                        initial_mask,
-                        operation_mask,
                     )
 
                     loss = losses["total_loss"] / cfg.gradient_accumulation_steps

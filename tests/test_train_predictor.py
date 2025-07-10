@@ -355,10 +355,6 @@ class TestLossFunctions(unittest.TestCase):
         target_ops = torch.zeros(B, T, depth, n_ops)
         target_ops[:, :, :, 0] = 1  # One-hot
 
-        # Create default masks (all True)
-        initial_mask = torch.ones(B, num_nodes, dtype=torch.bool)
-        operation_mask = torch.ones(B, depth, dtype=torch.bool)
-
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_log,
@@ -367,8 +363,6 @@ class TestLossFunctions(unittest.TestCase):
             target_log,
             target_ops,
             self.cfg,
-            initial_mask,
-            operation_mask,
         )
 
         # Check return format
@@ -399,10 +393,6 @@ class TestLossFunctions(unittest.TestCase):
         target_ops = torch.zeros(B, T, depth, n_ops)
         target_ops[:, :, :, 0] = 1
 
-        # Create default masks (all True)
-        initial_mask = torch.ones(B, num_nodes, dtype=torch.bool)
-        operation_mask = torch.ones(B, depth, dtype=torch.bool)
-
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_log,
@@ -411,8 +401,6 @@ class TestLossFunctions(unittest.TestCase):
             target_log,
             target_ops,
             self.cfg,
-            initial_mask,
-            operation_mask,
         )
 
         # Should have the basic loss components
@@ -449,10 +437,6 @@ class TestLossFunctions(unittest.TestCase):
         cfg_weighted.log_loss_weight = 0.5
         cfg_weighted.op_loss_weight = 1.5
 
-        # Create default masks (all True)
-        initial_mask = torch.ones(B, num_nodes, dtype=torch.bool)
-        operation_mask = torch.ones(B, depth, dtype=torch.bool)
-
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_log,
@@ -461,8 +445,6 @@ class TestLossFunctions(unittest.TestCase):
             target_log,
             target_ops,
             cfg_weighted,
-            initial_mask,
-            operation_mask,
         )
 
         # Verify total loss incorporates weights
@@ -491,10 +473,6 @@ class TestLossFunctions(unittest.TestCase):
         pred_log = target_log.clone()
         pred_ops = target_ops.clone()
 
-        # Create default masks (all True)
-        initial_mask = torch.ones(B, num_nodes, dtype=torch.bool)
-        operation_mask = torch.ones(B, depth, dtype=torch.bool)
-
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_log,
@@ -503,414 +481,12 @@ class TestLossFunctions(unittest.TestCase):
             target_log,
             target_ops,
             self.cfg,
-            initial_mask,
-            operation_mask,
         )
 
         # Losses should be very small for perfect predictions
         self.assertLess(losses["sign_loss"].item(), 1e-6)
         self.assertLess(losses["log_loss"].item(), 1e-6)
         self.assertLess(losses["op_loss"].item(), 1e-6)
-
-    def test_initial_mask_application(self):
-        """Test that initial_mask is correctly applied to sign/log losses but not operation losses."""
-        batch_size = 2
-        seq_len = 1
-        num_nodes = 4
-        depth = 3
-        n_ops = 5
-
-        # Create realistic test data
-        pred_sgn = torch.randn(batch_size, seq_len, num_nodes)
-        pred_log = torch.randn(batch_size, seq_len, num_nodes)
-        pred_ops_logits = torch.randn(batch_size, seq_len, depth, n_ops)
-        pred_ops = F.softmax(pred_ops_logits, dim=-1)
-
-        target_sgn = torch.randn(batch_size, seq_len, num_nodes)
-        target_log = torch.randn(batch_size, seq_len, num_nodes)
-        target_ops = torch.zeros(batch_size, seq_len, depth, n_ops)
-
-        # Make target_ops one-hot
-        for b in range(batch_size):
-            for d in range(depth):
-                target_ops[b, 0, d, d % n_ops] = 1.0
-
-        # Create initial mask - some values discarded by identity operations
-        initial_mask = torch.tensor(
-            [
-                [True, True, False, False],  # Example 1: only first 2 values used
-                [True, False, True, False],  # Example 2: values 0 and 2 used
-            ],
-            dtype=torch.bool,
-        )
-
-        # Test without mask (baseline) - use all True masks
-        no_mask_initial = torch.ones(batch_size, num_nodes, dtype=torch.bool)
-        no_mask_operation = torch.ones(batch_size, depth, dtype=torch.bool)
-
-        losses_no_mask = compute_dag_structure_loss(
-            pred_sgn,
-            pred_log,
-            pred_ops,
-            target_sgn,
-            target_log,
-            target_ops,
-            self.cfg,
-            no_mask_initial,
-            no_mask_operation,
-        )
-
-        # Test with mask
-        operation_mask_for_test = torch.ones(batch_size, depth, dtype=torch.bool)
-
-        losses_with_mask = compute_dag_structure_loss(
-            pred_sgn,
-            pred_log,
-            pred_ops,
-            target_sgn,
-            target_log,
-            target_ops,
-            self.cfg,
-            initial_mask,
-            operation_mask_for_test,
-        )
-
-        # Verify that operation loss is unchanged (not masked)
-        op_loss_diff = abs(
-            losses_no_mask["op_loss"].item() - losses_with_mask["op_loss"].item()
-        )
-        self.assertLess(
-            op_loss_diff, 1e-6, "Operation loss should not be affected by initial_mask"
-        )
-
-        # Verify that sign/log losses are different (masked)
-        sign_loss_diff = abs(
-            losses_no_mask["sign_loss"].item() - losses_with_mask["sign_loss"].item()
-        )
-        log_loss_diff = abs(
-            losses_no_mask["log_loss"].item() - losses_with_mask["log_loss"].item()
-        )
-
-        # At least one should be different (depending on the random data)
-        self.assertTrue(
-            sign_loss_diff > 1e-6 or log_loss_diff > 1e-6,
-            "Sign or log loss should be affected by initial_mask",
-        )
-
-        # Verify that total loss is also different
-        total_loss_diff = abs(
-            losses_no_mask["total_loss"].item() - losses_with_mask["total_loss"].item()
-        )
-        self.assertTrue(
-            total_loss_diff > 1e-6, "Total loss should be affected by initial_mask"
-        )
-
-    def test_initial_mask_reasoning(self):
-        """Test that documents the reasoning behind masking application."""
-        # This test documents the expected behavior:
-        #
-        # 1. Sign/log losses are for INITIAL VALUES
-        #    - If an initial value is discarded by identity operation,
-        #      it's not observable in the final text
-        #    - We should NOT supervise the model on predicting discarded values
-        #    - Therefore: Apply initial_mask to sign/log losses
-        #
-        # 2. Operation losses are for OPERATIONS
-        #    - If an operation's result doesn't contribute to the final expression,
-        #      it's not observable in the final text
-        #    - We should NOT supervise the model on predicting non-contributing operations
-        #    - Therefore: Apply operation_mask to operation losses
-
-        # Create a simple test case to verify this reasoning
-        batch_size = 1
-        seq_len = 1
-        num_nodes = 3
-        depth = 2
-        n_ops = 5
-
-        # Mock data
-        pred_sgn = torch.ones(batch_size, seq_len, num_nodes)
-        pred_log = torch.ones(batch_size, seq_len, num_nodes)
-        pred_ops = (
-            torch.ones(batch_size, seq_len, depth, n_ops) / n_ops
-        )  # Uniform probs
-
-        target_sgn = torch.zeros(batch_size, seq_len, num_nodes)
-        target_log = torch.zeros(batch_size, seq_len, num_nodes)
-        target_ops = torch.zeros(batch_size, seq_len, depth, n_ops)
-        target_ops[0, 0, 0, 0] = 1.0  # First operation
-        target_ops[0, 0, 1, 1] = 1.0  # Second operation
-
-        # Mask that discards the last initial value
-        initial_mask = torch.tensor([[True, True, False]], dtype=torch.bool)
-        operation_mask = torch.ones(batch_size, depth, dtype=torch.bool)
-
-        losses = compute_dag_structure_loss(
-            pred_sgn,
-            pred_log,
-            pred_ops,
-            target_sgn,
-            target_log,
-            target_ops,
-            self.cfg,
-            initial_mask,
-            operation_mask,
-        )
-
-        # All losses should be finite and positive
-        self.assertTrue(torch.isfinite(losses["sign_loss"]))
-        self.assertTrue(torch.isfinite(losses["log_loss"]))
-        self.assertTrue(torch.isfinite(losses["op_loss"]))
-        self.assertTrue(torch.isfinite(losses["total_loss"]))
-
-        # This test mainly documents the expected behavior
-        # The actual masking logic is tested in test_initial_mask_application
-
-    def test_operation_mask_application(self):
-        """Test that operation_mask is correctly applied to operation losses."""
-        batch_size = 2
-        seq_len = 1
-        num_nodes = 4
-        depth = 3
-        n_ops = 5
-
-        # Create realistic test data
-        pred_sgn = torch.randn(batch_size, seq_len, num_nodes)
-        pred_log = torch.randn(batch_size, seq_len, num_nodes)
-        pred_ops_logits = torch.randn(batch_size, seq_len, depth, n_ops)
-        pred_ops = F.softmax(pred_ops_logits, dim=-1)
-
-        target_sgn = torch.randn(batch_size, seq_len, num_nodes)
-        target_log = torch.randn(batch_size, seq_len, num_nodes)
-        target_ops = torch.zeros(batch_size, seq_len, depth, n_ops)
-        # Make target_ops one-hot
-        for b in range(batch_size):
-            for d in range(depth):
-                target_ops[b, 0, d, d % n_ops] = 1.0
-
-        # Create operation mask - some operations don't contribute to final result
-        operation_mask = torch.tensor(
-            [
-                [True, False, True],  # Example 1: operations 0 and 2 used
-                [False, True, True],  # Example 2: operations 1 and 2 used
-            ],
-            dtype=torch.bool,
-        )
-
-        # Compute losses without operation mask (all True)
-        no_mask_initial = torch.ones(batch_size, num_nodes, dtype=torch.bool)
-        no_mask_operation = torch.ones(batch_size, depth, dtype=torch.bool)
-
-        losses_no_mask = compute_dag_structure_loss(
-            pred_sgn,
-            pred_log,
-            pred_ops,
-            target_sgn,
-            target_log,
-            target_ops,
-            self.cfg,
-            no_mask_initial,
-            no_mask_operation,
-        )
-
-        # Compute losses with operation mask
-        initial_mask_for_test = torch.ones(batch_size, num_nodes, dtype=torch.bool)
-
-        losses_with_mask = compute_dag_structure_loss(
-            pred_sgn,
-            pred_log,
-            pred_ops,
-            target_sgn,
-            target_log,
-            target_ops,
-            self.cfg,
-            initial_mask_for_test,
-            operation_mask,
-        )
-
-        # Operation loss should be different when masked
-        self.assertNotEqual(
-            losses_no_mask["op_loss"].item(),
-            losses_with_mask["op_loss"].item(),
-            "Operation loss should change when operation mask is applied",
-        )
-
-        # Other losses should remain the same (no initial mask provided)
-        self.assertAlmostEqual(
-            losses_no_mask["sign_loss"].item(),
-            losses_with_mask["sign_loss"].item(),
-            places=5,
-        )
-        self.assertAlmostEqual(
-            losses_no_mask["log_loss"].item(),
-            losses_with_mask["log_loss"].item(),
-            places=5,
-        )
-
-        # Total loss should be different
-        self.assertNotEqual(
-            losses_no_mask["total_loss"].item(),
-            losses_with_mask["total_loss"].item(),
-            "Total loss should change when operation mask is applied",
-        )
-
-    def test_combined_masking(self):
-        """Test that both initial_mask and operation_mask work together correctly."""
-        batch_size = 2
-        seq_len = 1
-        num_nodes = 4
-        depth = 3
-        n_ops = 5
-
-        # Create test data
-        pred_sgn = torch.randn(batch_size, seq_len, num_nodes)
-        pred_log = torch.randn(batch_size, seq_len, num_nodes)
-        pred_ops_logits = torch.randn(batch_size, seq_len, depth, n_ops)
-        pred_ops = F.softmax(pred_ops_logits, dim=-1)
-
-        target_sgn = torch.randn(batch_size, seq_len, num_nodes)
-        target_log = torch.randn(batch_size, seq_len, num_nodes)
-        target_ops = torch.zeros(batch_size, seq_len, depth, n_ops)
-        for b in range(batch_size):
-            for d in range(depth):
-                target_ops[b, 0, d, d % n_ops] = 1.0
-
-        # Create masks
-        initial_mask = torch.tensor(
-            [
-                [True, True, False, False],  # Example 1: first 2 values used
-                [True, False, True, False],  # Example 2: values 0 and 2 used
-            ],
-            dtype=torch.bool,
-        )
-
-        operation_mask = torch.tensor(
-            [
-                [True, False, True],  # Example 1: operations 0 and 2 used
-                [False, True, True],  # Example 2: operations 1 and 2 used
-            ],
-            dtype=torch.bool,
-        )
-
-        # Test with both masks
-        losses = compute_dag_structure_loss(
-            pred_sgn,
-            pred_log,
-            pred_ops,
-            target_sgn,
-            target_log,
-            target_ops,
-            self.cfg,
-            initial_mask,
-            operation_mask,
-        )
-
-        # Should complete without error and return reasonable loss values
-        self.assertIsInstance(losses["total_loss"], torch.Tensor)
-        self.assertIsInstance(losses["sign_loss"], torch.Tensor)
-        self.assertIsInstance(losses["log_loss"], torch.Tensor)
-        self.assertIsInstance(losses["op_loss"], torch.Tensor)
-
-        # All losses should be finite
-        for loss_name, loss_value in losses.items():
-            self.assertTrue(torch.isfinite(loss_value), f"{loss_name} should be finite")
-
-    def test_operation_mask_reasoning(self):
-        """Test the reasoning behind operation masking with a concrete example."""
-        # This test documents why operation masking is necessary
-
-        # Example: [1.0, 2.0, 3.0, 4.0] with operations [add, identity, multiply]
-        # 1. add: 3.0 + 4.0 = 7.0, stack = [1.0, 2.0, 7.0]
-        # 2. identity: keep 2.0, discard 7.0, stack = [1.0, 2.0]
-        # 3. multiply: 1.0 * 2.0 = 2.0, stack = [2.0]
-        #
-        # Final text: "1.0 * 2.0"
-        # Used initial values: [1.0, 2.0] (indices 0, 1)
-        # Used operations: [identity, multiply] (indices 1, 2)
-        #   - add is NOT used because its result (7.0) was discarded
-        #   - identity IS used because it produces 2.0 which appears in final result
-        #   - multiply IS used because it produces the final result
-
-        print("\n=== Operation Masking Reasoning ===")
-        print("Example: [1.0, 2.0, 3.0, 4.0] with operations [add, identity, multiply]")
-        print("Expected:")
-        print("- Used initial values: [1.0, 2.0] (mask: [True, True, False, False])")
-        print("- Used operations: [identity, multiply] (mask: [False, True, True])")
-        print(
-            "- The ADD operation should NOT be supervised because its result was discarded"
-        )
-        print("=====================================\n")
-
-        # This reasoning is tested in our convert_dag_to_expression_string tests
-        # and verified in the actual loss computation
-
-    def test_gradient_masking_behavior(self):
-        """Test that gradients are properly blocked for masked regions in loss computation."""
-        # This test verifies that element-wise multiplication with masks
-        # properly zeros out gradients for masked positions
-
-        # Create simple test tensors
-        batch_size, seq_len, num_nodes = 2, 1, 3
-
-        # Create predictions that require gradients
-        pred_sgn = torch.randn(batch_size, seq_len, num_nodes, requires_grad=True)
-        target_sgn = torch.randn(batch_size, seq_len, num_nodes)
-
-        # Create mask - first example uses all nodes, second uses only first node
-        mask = torch.tensor(
-            [
-                [[1.0, 1.0, 1.0]],  # All nodes active
-                [[1.0, 0.0, 0.0]],  # Only first node active
-            ]
-        )
-
-        # Compute masked loss (same as in compute_dag_structure_loss)
-        elementwise_loss = F.mse_loss(pred_sgn, target_sgn, reduction="none")
-        masked_loss = (elementwise_loss * mask).sum() / mask.sum()
-
-        # Backward pass
-        masked_loss.backward()
-
-        # Verify that gradients are zero for masked positions
-        expected_grad_mask = mask.expand_as(pred_sgn.grad)
-        masked_positions = expected_grad_mask == 0
-
-        # Check that masked positions have zero gradient
-        masked_grads_zero = torch.allclose(
-            pred_sgn.grad[masked_positions],
-            torch.zeros_like(pred_sgn.grad[masked_positions]),
-            atol=1e-6,
-        )
-
-        self.assertTrue(masked_grads_zero, "Masked positions should have zero gradient")
-
-        # Check that unmasked positions have non-zero gradients (in general)
-        unmasked_positions = expected_grad_mask == 1
-        unmasked_grads = pred_sgn.grad[unmasked_positions]
-
-        # At least some unmasked positions should have non-zero gradients
-        has_nonzero_unmasked = torch.any(torch.abs(unmasked_grads) > 1e-6)
-        self.assertTrue(
-            has_nonzero_unmasked,
-            "Unmasked positions should generally have non-zero gradients",
-        )
-
-        # Verify exact gradient values for masked positions
-        self.assertEqual(
-            pred_sgn.grad[0, 0, 0].item(),
-            pred_sgn.grad[0, 0, 0].item(),
-            "First example should have gradients for all positions",
-        )
-        self.assertEqual(
-            pred_sgn.grad[1, 0, 1].item(),
-            0.0,
-            "Second example should have zero gradient for second position",
-        )
-        self.assertEqual(
-            pred_sgn.grad[1, 0, 2].item(),
-            0.0,
-            "Second example should have zero gradient for third position",
-        )
 
 
 class TestUtilityFunctions(unittest.TestCase):

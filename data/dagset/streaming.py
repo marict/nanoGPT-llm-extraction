@@ -109,7 +109,19 @@ def add_english_to_expression(
         if expression[i] == "-":
             # Check if this is a negative number or a minus operator
             # It's a negative number if it's at the start or after (, +, -, *, /
-            if i == 0 or expression[i - 1] in "(+-*/":
+            # We need to look backwards past spaces to find the actual operator
+            is_negative_number = False
+            if i == 0:
+                is_negative_number = True
+            else:
+                # Look backwards past spaces to find the last non-space character
+                k = i - 1
+                while k >= 0 and expression[k] == " ":
+                    k -= 1
+                if k >= 0 and expression[k] in "(+-*/":
+                    is_negative_number = True
+
+            if is_negative_number:
                 # Look ahead to see if there's a number after the minus
                 j = i + 1
                 while j < len(expression) and expression[j] in "0123456789.":
@@ -242,7 +254,6 @@ def generate_uniform_digit_number(
     # Combine integer and decimal parts
     magnitude = integer_part + decimal_part
 
-    # Randomly assign sign
     sign = rng.choice([-1, 1])
     value = sign * magnitude
 
@@ -261,15 +272,12 @@ def generate_random_dag_plan(
 
     # Generate random initial values with uniform digit count distribution
     # for both integer part and decimal part
-    initial_values = []
-    for _ in range(num_initial_values):
-        # Generate number with uniform digit distribution
-        value = generate_uniform_digit_number(rng, max_digits, max_decimal_places)
-
-        # Apply standardized rounding (though we already have exact decimal representation)
-        initial_values.append(value)
-
+    initial_values = [
+        generate_uniform_digit_number(rng, max_digits, max_decimal_places)
+        for _ in range(num_initial_values)
+    ]
     operations = [rng.choice(OP_NAMES) for _ in range(depth)]
+
     return initial_values, operations
 
 
@@ -319,10 +327,16 @@ def convert_dag_to_expression_string(
     initial_values: list[float],
     operations: list[str],
     rng: random.Random = None,
-    convert_to_english: bool = True,
     conversion_probability: float = 0.3,
 ) -> tuple[str, torch.Tensor, torch.Tensor]:
     """Convert DAG structure to a simple mathematical expression string following stack-based execution.
+
+    This implementation uses a cleaner approach:
+    1. Generates expressions using only positive (absolute) values with unique identifiers
+    2. Assigns signs to values without sympy interference
+    3. Replaces symbols with actual signed values
+
+    This avoids sympy's automatic simplifications that collapse "a + -b" to "a - b".
 
     Args:
         initial_values: List of initial values
@@ -339,16 +353,13 @@ def convert_dag_to_expression_string(
     if rng is None:
         rng = random
 
-    # Create symbols using absolute values to avoid double negatives
-    # Then handle the sign by wrapping in negation if needed
-    stack = []
-    for v in initial_values:
-        if v < 0:
-            # Create symbol with positive value, then negate
-            pos_symbol = sympy.Symbol(str(abs(v)))
-            stack.append(-pos_symbol)
-        else:
-            stack.append(sympy.Symbol(str(v)))
+    # Step 1: Generate expression using only absolute values with unique identifiers
+    # This avoids sympy's automatic simplification of signs
+    abs_values = [abs(v) for v in initial_values]
+    unique_symbols = [f"VAL_{i}_{abs_values[i]}" for i in range(len(abs_values))]
+
+    # Create sympy symbols with unique identifiers
+    stack = [sympy.Symbol(symbol) for symbol in unique_symbols]
 
     # Track which initial values each stack position depends on for masking
     num_initial = len(initial_values)
@@ -362,7 +373,7 @@ def convert_dag_to_expression_string(
         "identity": "identity",
     }
     op_symbol_to_expression = {
-        # Use unevaluated SymPy objects so signs are not collapsed (e.g. `a - (-b)` stays `a - -b`).
+        # Use unevaluated SymPy objects for consistent behavior
         "+": lambda a, b: sympy.Add(a, b, evaluate=False),
         "-": lambda a, b: sympy.Add(a, -b, evaluate=False),
         "*": lambda a, b: sympy.Mul(a, b, evaluate=False),
@@ -395,13 +406,25 @@ def convert_dag_to_expression_string(
 
         stack_dependencies.append(result_deps)
 
-    final_expr = stack[0]
+    # Step 2: Get expression string with unique symbols
+    expr_str = str(stack[0])
 
-    # Apply English conversion if requested
-    if convert_to_english:
-        result = add_english_to_expression(str(final_expr), conversion_probability, rng)
+    # Step 3: Replace symbols with actual signed values
+    # This preserves the original operation structure without sympy interference
+    for i, original_value in enumerate(initial_values):
+        old_symbol = unique_symbols[i]
+        if original_value >= 0:
+            new_value = str(abs_values[i])
+        else:
+            new_value = f"-{abs_values[i]}"
+
+        expr_str = expr_str.replace(old_symbol, new_value)
+
+    # Step 4: Apply English conversion if requested
+    if conversion_probability > 0:
+        result = add_english_to_expression(expr_str, conversion_probability, rng)
     else:
-        result = str(final_expr)
+        result = expr_str
 
     # Always return all-True masks since we're always using padding
     return (
@@ -449,7 +472,6 @@ def generate_single_dag_example(
     depth: int,
     num_initial_values: int = None,
     rng: random.Random = None,
-    convert_to_english: bool = False,
     conversion_probability: float = 0.3,
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
@@ -460,7 +482,6 @@ def generate_single_dag_example(
         depth: Depth of the DAG computation
         num_initial_values: Number of initial values
         rng: Random number generator to use
-        convert_to_english: Whether to convert to English words
         conversion_probability: Probability of English conversion
         max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
         max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
@@ -489,7 +510,6 @@ def generate_single_dag_example(
         initial_values=initial_values,
         operations=operations,
         rng=rng,
-        convert_to_english=convert_to_english,
         conversion_probability=conversion_probability,
     )
 
@@ -516,7 +536,6 @@ def generate_dag_dataset(
     max_depth: int = 8,
     num_initial_values: int = None,
     rng: random.Random = None,
-    convert_to_english: bool = False,
     conversion_probability: float = 0.3,
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
@@ -528,7 +547,6 @@ def generate_dag_dataset(
         max_depth: DAG depth (all examples will have this depth)
         num_initial_values: Number of initial values per example
         rng: Random number generator to use
-        convert_to_english: Whether to convert to English words
         conversion_probability: Probability of English conversion
         max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
         max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
@@ -551,7 +569,6 @@ def generate_dag_dataset(
             depth,
             num_initial_values,
             rng,
-            convert_to_english,
             conversion_probability,
             max_digits,
             max_decimal_places,

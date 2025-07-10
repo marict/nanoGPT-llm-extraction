@@ -991,6 +991,203 @@ class TestExpressionMatching(unittest.TestCase):
             has_plus_word, msg=f"English text missing plus/added-to wording: {text}"
         )
 
+    def test_addition_with_negative_operands_preservation(self):
+        """Test that addition operations with negative operands preserve structure without sympy collapsing.
+
+        This test ensures that the cleaner implementation correctly preserves expressions like
+        'a + -b' without collapsing them to 'a - b', which was misleading to the model.
+        """
+        # Test cases that previously caused issues with sympy automatic simplification
+        test_cases = [
+            # Simple addition with negative operands
+            {
+                "initial_values": [-54.412, -94.0],
+                "operations": ["add"],
+                "expected_pattern": r"-54\.412 \+ -94\.0",
+                "description": "Simple addition with negative operands",
+            },
+            # Complex nested expression with addition of negative operands
+            {
+                "initial_values": [13.283, -5371.3, -8711.0, -54.412, -94.0],
+                "operations": ["divide", "multiply", "multiply", "add"],
+                "expected_pattern": r"13\.283/\(\(-5371\.3\*\(-8711\.0\*\(-54\.412 \+ -94\.0\)\)\)\)",
+                "description": "Complex nested expression with addition of negative operands",
+            },
+            # Mixed operations with positive and negative operands
+            {
+                "initial_values": [5.0, -3.0, 2.0],
+                "operations": ["add", "subtract"],
+                "expected_pattern": r"5\.0 \+ \(-3\.0 - 2\.0\)",
+                "description": "Mixed operations with positive and negative operands",
+            },
+            # Addition at the beginning of a complex expression
+            {
+                "initial_values": [-10.5, -20.3, 4.7],
+                "operations": ["add", "multiply"],
+                "expected_pattern": r"-10\.5 \+ -20\.3\*4\.7",
+                "description": "Addition at the beginning of complex expression",
+            },
+        ]
+
+        for i, test_case in enumerate(test_cases):
+            with self.subTest(case=i, description=test_case["description"]):
+                initial_values = test_case["initial_values"]
+                operations = test_case["operations"]
+                expected_pattern = test_case["expected_pattern"]
+
+                # Generate expression without English conversion for easier pattern matching
+                expression, used_mask, operation_mask = (
+                    convert_dag_to_expression_string(
+                        initial_values=initial_values,
+                        operations=operations,
+                        rng=random.Random(42),
+                        convert_to_english=False,
+                        conversion_probability=0.0,
+                    )
+                )
+
+                # Verify basic properties
+                self.assertIsInstance(expression, str)
+                self.assertGreater(len(expression), 0)
+
+                # Verify that the expression matches the expected pattern
+                self.assertRegex(
+                    expression,
+                    expected_pattern,
+                    f"Expression '{expression}' does not match expected pattern '{expected_pattern}'",
+                )
+
+                # Verify that addition with negative operands is preserved (not collapsed)
+                if "add" in operations:
+                    # Should contain "+ -" pattern when adding negative operands
+                    negative_values = [v for v in initial_values if v < 0]
+                    if (
+                        len(negative_values) >= 2
+                    ):  # At least 2 negative values that could be added
+                        # Check that we have the pattern "+ -" somewhere in the expression
+                        # This indicates addition of negative operands is preserved
+                        contains_add_negative = "+ -" in expression
+                        self.assertTrue(
+                            contains_add_negative,
+                            f"Expression '{expression}' should contain '+ -' pattern for addition of negative operands",
+                        )
+
+                # Verify no double negatives or malformed operators
+                self.assertNotIn(
+                    "--",
+                    expression,
+                    f"Found double negative in expression: {expression}",
+                )
+                self.assertNotIn(
+                    "+-", expression, f"Found malformed +- in expression: {expression}"
+                )
+
+                # Verify expression is mathematically valid
+                try:
+                    result = eval(expression)
+                    self.assertIsInstance(result, (int, float))
+                    self.assertTrue(math.isfinite(result) or math.isinf(result))
+                except (ZeroDivisionError, OverflowError):
+                    # These are acceptable mathematical exceptions
+                    pass
+
+                # Verify masks are correct
+                self.assertIsInstance(used_mask, torch.Tensor)
+                self.assertIsInstance(operation_mask, torch.Tensor)
+                self.assertEqual(used_mask.dtype, torch.bool)
+                self.assertEqual(operation_mask.dtype, torch.bool)
+                self.assertEqual(len(used_mask), len(initial_values))
+                self.assertEqual(len(operation_mask), len(operations))
+
+    def test_cleaner_implementation_english_conversion(self):
+        """Test that the cleaner implementation correctly handles English conversion for negative numbers."""
+        test_cases = [
+            {
+                "initial_values": [5.0, -2.0],
+                "operations": ["add"],
+                "expected_words": ["negative"],
+                "expected_addition_words": ["plus", "added to"],  # Either is acceptable
+                "description": "Addition with negative operand should use 'negative' in English",
+            },
+            {
+                "initial_values": [-7.3, -4.1],
+                "operations": ["multiply"],
+                "expected_words": ["negative"],
+                "expected_multiplication_words": [
+                    "multiplied by",
+                    "times",
+                ],  # Either is acceptable
+                "description": "Multiplication with negative operands should use 'negative' in English",
+            },
+            {
+                "initial_values": [8.5, -3.2, 1.1],
+                "operations": ["add", "divide"],
+                "expected_words": ["negative"],
+                "expected_addition_words": ["plus", "added to"],  # Either is acceptable
+                "description": "Complex expression with addition of negative operand",
+            },
+        ]
+
+        for i, test_case in enumerate(test_cases):
+            with self.subTest(case=i, description=test_case["description"]):
+                initial_values = test_case["initial_values"]
+                operations = test_case["operations"]
+                expected_words = test_case["expected_words"]
+
+                # Generate expression with full English conversion
+                expression, used_mask, operation_mask = (
+                    convert_dag_to_expression_string(
+                        initial_values=initial_values,
+                        operations=operations,
+                        rng=random.Random(42),
+                        convert_to_english=True,
+                        conversion_probability=1.0,
+                    )
+                )
+
+                # Verify basic properties
+                self.assertIsInstance(expression, str)
+                self.assertGreater(len(expression), 0)
+
+                # Check that all expected words are present
+                expression_lower = expression.lower()
+                for word in expected_words:
+                    self.assertIn(
+                        word,
+                        expression_lower,
+                        f"Expression '{expression}' should contain '{word}'",
+                    )
+
+                # Check for operation-specific words (if they exist)
+                if "add" in operations and "expected_addition_words" in test_case:
+                    addition_words = test_case["expected_addition_words"]
+                    has_addition_word = any(
+                        word in expression_lower for word in addition_words
+                    )
+                    self.assertTrue(
+                        has_addition_word,
+                        f"Expression '{expression}' should contain one of {addition_words}",
+                    )
+
+                if (
+                    "multiply" in operations
+                    and "expected_multiplication_words" in test_case
+                ):
+                    multiplication_words = test_case["expected_multiplication_words"]
+                    has_multiplication_word = any(
+                        word in expression_lower for word in multiplication_words
+                    )
+                    self.assertTrue(
+                        has_multiplication_word,
+                        f"Expression '{expression}' should contain one of {multiplication_words}",
+                    )
+
+                # Verify masks are correct
+                self.assertIsInstance(used_mask, torch.Tensor)
+                self.assertIsInstance(operation_mask, torch.Tensor)
+                self.assertEqual(used_mask.dtype, torch.bool)
+                self.assertEqual(operation_mask.dtype, torch.bool)
+
 
 if __name__ == "__main__":
     unittest.main()
