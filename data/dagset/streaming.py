@@ -194,8 +194,6 @@ class DAGExample:
     signs: torch.Tensor  # for training - [D+1] tensor
     log_magnitudes: torch.Tensor  # for training - [D+1] tensor
     operations: torch.Tensor  # for training - [D x num_ops] one-hot tensor
-    used_mask: torch.Tensor  # for training - [D+1] boolean tensor
-    operation_mask: torch.Tensor  # for training - [D] boolean tensor
 
 
 def generate_uniform_digit_number(
@@ -342,13 +340,10 @@ def convert_dag_to_expression_string(
         initial_values: List of initial values
         operations: List of operations (processed right-to-left like a stack)
         rng: Random number generator
-        convert_to_english: Whether to convert to English words
         conversion_probability: Probability of English conversion
 
     Returns:
-        Tuple of (expression_string, used_mask, operation_mask) where:
-        - used_mask indicates which initial values are used (always all-True with padding)
-        - operation_mask indicates which operations contribute to the final result (always all-True with padding)
+        Tuple of (expression_string)
     """
     if rng is None:
         rng = random
@@ -426,12 +421,7 @@ def convert_dag_to_expression_string(
     else:
         result = expr_str
 
-    # Always return all-True masks since we're always using padding
-    return (
-        result,
-        torch.ones(num_initial, dtype=torch.bool),
-        torch.ones(len(operations), dtype=torch.bool),
-    )
+    return result
 
 
 def convert_plan_to_tensors(
@@ -506,7 +496,7 @@ def generate_single_dag_example(
     initial_values, operations = pad_dag_plan(initial_values, operations)
 
     # Step 2: Convert DAG plan to simple expression string for data
-    expression, used_mask, operation_mask = convert_dag_to_expression_string(
+    expression = convert_dag_to_expression_string(
         initial_values=initial_values,
         operations=operations,
         rng=rng,
@@ -526,8 +516,6 @@ def generate_single_dag_example(
         signs=signs,
         log_magnitudes=log_magnitudes,
         operations=operations,
-        used_mask=used_mask,
-        operation_mask=operation_mask,
     )
 
 
@@ -591,7 +579,6 @@ class DAGStructureDataset:
         seed: int = 42,
         tokenizer: str = "gpt2",
         max_seq_length: int = 512,
-        convert_to_english: bool = False,
         english_conversion_probability: float = 0.3,
         max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
         max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
@@ -604,7 +591,6 @@ class DAGStructureDataset:
             seed: Random seed for reproducibility
             tokenizer: Tokenizer to use (default: gpt2)
             max_seq_length: Maximum sequence length for tokenization
-            convert_to_english: Whether to potentially convert numbers/operators to English
             english_conversion_probability: Probability of converting to English (0.0 to 1.0)
             max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
             max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
@@ -617,7 +603,6 @@ class DAGStructureDataset:
         self.seed = seed
         self.tokenizer = tokenizer
         self.max_seq_length = max_seq_length
-        self.convert_to_english = convert_to_english
         self.english_conversion_probability = english_conversion_probability
         self.max_digits = max_digits
         self.max_decimal_places = max_decimal_places
@@ -648,7 +633,6 @@ class DAGStructureDataset:
             depth=depth,
             num_initial_values=self.num_initial_values,
             rng=self.random_state,
-            convert_to_english=self.convert_to_english,
             conversion_probability=self.english_conversion_probability,
             max_digits=self.max_digits,
             max_decimal_places=self.max_decimal_places,
@@ -690,23 +674,10 @@ class DAGStructureDataset:
         # Use the example's operation tensor (already one-hot encoded)
         operation_probs = example.operations
 
-        # Use the pre-computed mask from the example
-        used_mask = example.used_mask
-
-        # Create padded mask to match num_scratch_nodes
-        initial_mask = torch.zeros(num_scratch_nodes, dtype=torch.bool)
-        mask_copy_len = min(len(used_mask), num_scratch_nodes)
-        initial_mask[:mask_copy_len] = used_mask[:mask_copy_len]
-
-        # Use the pre-computed operation mask from the example
-        operation_mask = example.operation_mask
-
         return {
             "initial_sgn": initial_sgn,
             "initial_log": initial_log,
             "operation_probs": operation_probs,
-            "initial_mask": initial_mask,
-            "operation_mask": operation_mask,
             "depth": torch.tensor(depth, dtype=torch.long),
             "operations": example.operations,  # Include the raw operations list
         }
@@ -759,8 +730,6 @@ class DAGStructureDataset:
         batched_initial_sgn = torch.zeros(batch_size, max_nodes)
         batched_initial_log = torch.zeros(batch_size, max_nodes)
         batched_operation_probs = torch.zeros(batch_size, max_depth, len(OP_NAMES))
-        batched_initial_mask = torch.zeros(batch_size, max_nodes, dtype=torch.bool)
-        batched_operation_mask = torch.zeros(batch_size, max_depth, dtype=torch.bool)
         batched_depths = torch.zeros(batch_size, dtype=torch.long)
 
         # Fill batched tensors
@@ -775,12 +744,6 @@ class DAGStructureDataset:
             # Copy operation probabilities
             batched_operation_probs[i, :depth] = structure["operation_probs"][:depth]
 
-            # Copy initial mask
-            batched_initial_mask[i, :nodes] = structure["initial_mask"][:nodes]
-
-            # Copy operation mask
-            batched_operation_mask[i, :depth] = structure["operation_mask"][:depth]
-
             # Store depth
             batched_depths[i] = depth
 
@@ -788,8 +751,6 @@ class DAGStructureDataset:
             "initial_sgn": batched_initial_sgn,
             "initial_log": batched_initial_log,
             "operation_probs": batched_operation_probs,
-            "initial_mask": batched_initial_mask,
-            "operation_mask": batched_operation_mask,
             "depths": batched_depths,
         }
 
@@ -835,13 +796,11 @@ def create_dag_structure_dataloaders(
         Tuple of (train_loader, val_loader) iterators
     """
     # Use configurable english conversion rate
-    convert_to_english = english_conversion_rate > 0.0
 
     # Create datasets with fixed depth
     train_dataset = DAGStructureDataset(
         max_depth=max_depth,
         seed=train_seed,
-        convert_to_english=convert_to_english,
         english_conversion_probability=english_conversion_rate,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
@@ -850,7 +809,6 @@ def create_dag_structure_dataloaders(
     val_dataset = DAGStructureDataset(
         max_depth=max_depth,
         seed=val_seed,
-        convert_to_english=convert_to_english,
         english_conversion_probability=english_conversion_rate,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
@@ -893,10 +851,6 @@ if __name__ == "__main__":
     print(f"Structure keys: {list(structures.keys())}")
     print(f"Initial signs shape: {structures['initial_sgn'].shape}")
     print(f"Operation probs shape: {structures['operation_probs'].shape}")
-
-    # Show the masks - should be all True with padding
-    print(f"Initial masks (all True with padding): {structures['initial_mask']}")
-    print(f"Operation masks (all True with padding): {structures['operation_mask']}")
 
     print("\n✅ Example completed successfully!")
     print("✅ Operations now processed consistently as stack (right-to-left)")
