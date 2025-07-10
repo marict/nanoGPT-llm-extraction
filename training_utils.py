@@ -10,7 +10,7 @@ import time
 from ast import literal_eval
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 from torch import Tensor
@@ -32,6 +32,175 @@ except ModuleNotFoundError:
 CHECKPOINT_DIR = (
     "/runpod-volume/checkpoints" if os.path.exists("/runpod-volume") else "checkpoints"
 )
+
+
+class CheckpointLoadError(Exception):
+    """Raised when checkpoint loading fails."""
+
+
+def load_checkpoint_from_path(
+    checkpoint_path: Union[str, Path],
+    device: str = "cpu",
+    expected_keys: Optional[List[str]] = None,
+) -> Dict:
+    """Load a checkpoint from a specific path with validation.
+
+    Args:
+        checkpoint_path: Path to the checkpoint file
+        device: Device to load the checkpoint on
+        expected_keys: List of required keys in the checkpoint
+
+    Returns:
+        Dictionary containing the loaded checkpoint data
+
+    Raises:
+        CheckpointLoadError: If the checkpoint cannot be loaded or is invalid
+    """
+    checkpoint_path = Path(checkpoint_path)
+
+    # Check if checkpoint exists
+    if not checkpoint_path.exists():
+        error_msg = f"Checkpoint file not found: {checkpoint_path}"
+        print(f"ERROR: {error_msg}")
+
+        # Kill runpod instance if running on runpod
+        if os.getenv("RUNPOD_POD_ID"):
+            try:
+                import runpod_service
+
+                print("Stopping RunPod instance due to missing checkpoint...")
+                runpod_service.stop_runpod()
+            except Exception as e:
+                print(f"Warning: Failed to stop RunPod instance: {e}")
+
+        raise CheckpointLoadError(error_msg)
+
+    # Try to load the checkpoint
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        print(f"Successfully loaded checkpoint from: {checkpoint_path}")
+    except Exception as e:
+        error_msg = f"Failed to load checkpoint from {checkpoint_path}: {e}"
+        print(f"ERROR: {error_msg}")
+
+        # Kill runpod instance if running on runpod
+        if os.getenv("RUNPOD_POD_ID"):
+            try:
+                import runpod_service
+
+                print("Stopping RunPod instance due to checkpoint loading error...")
+                runpod_service.stop_runpod()
+            except Exception as stop_e:
+                print(f"Warning: Failed to stop RunPod instance: {stop_e}")
+
+        raise CheckpointLoadError(error_msg) from e
+
+    # Validate checkpoint structure
+    if expected_keys:
+        missing_keys = [key for key in expected_keys if key not in checkpoint]
+        if missing_keys:
+            error_msg = f"Checkpoint missing required keys: {missing_keys}"
+            print(f"ERROR: {error_msg}")
+
+            # Kill runpod instance if running on runpod
+            if os.getenv("RUNPOD_POD_ID"):
+                try:
+                    import runpod_service
+
+                    print("Stopping RunPod instance due to invalid checkpoint...")
+                    runpod_service.stop_runpod()
+                except Exception as stop_e:
+                    print(f"Warning: Failed to stop RunPod instance: {stop_e}")
+
+            raise CheckpointLoadError(error_msg)
+
+    return checkpoint
+
+
+def handle_checkpoint_loading(
+    cfg: BaseConfig,
+    device: str = "cpu",
+    gpt_model_class=None,
+    expected_keys: Optional[List[str]] = None,
+) -> Tuple[Optional[Dict], int, float]:
+    """Handle checkpoint loading based on init_from configuration.
+
+    Args:
+        cfg: Configuration object with init_from field
+        device: Device to load checkpoint on
+        gpt_model_class: GPT model class for pretrained loading (optional)
+        expected_keys: List of required keys in checkpoint (optional)
+
+    Returns:
+        Tuple of (checkpoint_dict, iter_num, best_val_loss)
+
+    Raises:
+        CheckpointLoadError: If checkpoint loading fails
+        ValueError: If init_from option is unsupported
+    """
+    init_from = cfg.init_from
+
+    # Handle different init_from options
+    if init_from == "scratch":
+        print("Initializing model from scratch")
+        return None, 0, 1e9
+
+    elif init_from == "resume":
+        print("Resuming from latest checkpoint")
+        ckpt_path = find_latest_checkpoint(cfg)
+        if ckpt_path is None:
+            error_msg = (
+                f"No checkpoint found for config name '{cfg.name}' in {CHECKPOINT_DIR}"
+            )
+            print(f"ERROR: {error_msg}")
+
+            # Kill runpod instance if running on runpod
+            if os.getenv("RUNPOD_POD_ID"):
+                try:
+                    import runpod_service
+
+                    print("Stopping RunPod instance due to missing checkpoint...")
+                    runpod_service.stop_runpod()
+                except Exception as e:
+                    print(f"Warning: Failed to stop RunPod instance: {e}")
+
+            raise CheckpointLoadError(error_msg)
+
+        checkpoint = load_checkpoint_from_path(ckpt_path, device, expected_keys)
+        return (
+            checkpoint,
+            checkpoint.get("iter_num", 0),
+            checkpoint.get("best_val_loss", 1e9),
+        )
+
+    elif init_from.startswith("gpt2"):
+        print(f"Loading GPT-2 weights: {init_from}")
+        if gpt_model_class is None:
+            raise ValueError("GPT model class required for GPT-2 loading")
+
+        # This returns a model, not a checkpoint dict
+        # The calling code will handle the model directly
+        return None, 0, 1e9
+
+    else:
+        # Assume it's a direct path to a checkpoint
+        print(f"Loading checkpoint from path: {init_from}")
+        checkpoint_path = Path(init_from)
+
+        # Support both absolute and relative paths
+        if not checkpoint_path.is_absolute():
+            # Try relative to checkpoint directory first
+            checkpoint_path = Path(CHECKPOINT_DIR) / checkpoint_path
+            if not checkpoint_path.exists():
+                # Try relative to current working directory
+                checkpoint_path = Path(init_from)
+
+        checkpoint = load_checkpoint_from_path(checkpoint_path, device, expected_keys)
+        return (
+            checkpoint,
+            checkpoint.get("iter_num", 0),
+            checkpoint.get("best_val_loss", 1e9),
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -246,12 +415,21 @@ def get_lr(it: int, *, cfg: BaseConfig) -> float:
 
 
 def get_checkpoint_filename(
-    cfg: BaseConfig, iter_num: int, model_name: str | None = None
+    cfg: BaseConfig,
+    iter_num: int,
+    model_name: str | None = None,
+    val_acc: float | None = None,
 ) -> str:
-    """Generate checkpoint filename with config name and iteration number."""
+    """Generate checkpoint filename with config name, iteration number, and optional validation accuracy."""
     name_part = model_name or cfg.name
     safe_name = "".join(c for c in name_part if c.isalnum() or c in ("-", "_"))
-    return f"ckpt_{safe_name}_{iter_num}.pt"
+
+    if val_acc is not None:
+        # Format accuracy as percentage with 2 decimal places
+        acc_str = f"{val_acc * 100:.2f}acc"
+        return f"ckpt_{safe_name}_{iter_num}_{acc_str}.pt"
+    else:
+        return f"ckpt_{safe_name}_{iter_num}.pt"
 
 
 def clean_previous_checkpoints(cfg: BaseConfig, model_name: str | None = None) -> None:
@@ -267,6 +445,7 @@ def clean_previous_checkpoints(cfg: BaseConfig, model_name: str | None = None) -
 
     name_part = model_name or cfg.name
     safe_name = "".join(c for c in name_part if c.isalnum() or c in ("-", "_"))
+    # Updated pattern to handle both old and new filename formats
     pattern = f"ckpt_{safe_name}_*.pt"
 
     removed_count = 0
@@ -306,8 +485,15 @@ def find_latest_checkpoint(
     for ckpt_file in checkpoint_files:
         try:
             parts = ckpt_file.stem.split("_")
+            # Handle both old format (ckpt_name_iter) and new format (ckpt_name_iter_acc)
             if len(parts) >= 3:
-                iter_num = int(parts[-1])
+                # Extract iteration number - it's either the last part or second to last
+                iter_part = (
+                    parts[-2]
+                    if len(parts) >= 4 and parts[-1].endswith("acc")
+                    else parts[-1]
+                )
+                iter_num = int(iter_part)
                 if iter_num > latest_iter:
                     latest_iter = iter_num
                     latest_file = ckpt_file

@@ -35,11 +35,13 @@ from data.dagset.streaming import create_dag_structure_dataloaders
 from models.dag_model import GPT, OP_NAMES, GPTConfig
 from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
 from python_version_check import check_python_version
-from training_utils import (CHECKPOINT_DIR, BaseConfig, _check_for_nonfinite,
-                            _safe_torch_save, apply_overrides,
-                            clean_previous_checkpoints, find_latest_checkpoint,
-                            generate_run_name, get_checkpoint_filename, get_lr,
-                            load_config_file, parse_args, update_config)
+from training_utils import (CHECKPOINT_DIR, BaseConfig, CheckpointLoadError,
+                            _check_for_nonfinite, _safe_torch_save,
+                            apply_overrides, clean_previous_checkpoints,
+                            find_latest_checkpoint, generate_run_name,
+                            get_checkpoint_filename, get_lr,
+                            handle_checkpoint_loading, load_config_file,
+                            parse_args, update_config)
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
 CUDA_AVAILABLE = torch.cuda.is_available()
@@ -340,9 +342,16 @@ def get_lr(it: int, *, cfg: DAGTrainConfig) -> float:
     return base_lr
 
 
-def get_checkpoint_filename(cfg: DAGTrainConfig, iter_num: int, model_name: str) -> str:
+def get_checkpoint_filename(
+    cfg: DAGTrainConfig, iter_num: int, model_name: str, val_acc: float | None = None
+) -> str:
     """Generate checkpoint filename without extension."""
-    return f"dag_ckpt_{model_name}_{cfg.name}_{iter_num:06d}"
+    if val_acc is not None:
+        # Format accuracy as percentage with 2 decimal places
+        acc_str = f"{val_acc * 100:.2f}acc"
+        return f"dag_ckpt_{model_name}_{cfg.name}_{iter_num:06d}_{acc_str}"
+    else:
+        return f"dag_ckpt_{model_name}_{cfg.name}_{iter_num:06d}"
 
 
 def clean_previous_checkpoints(cfg: DAGTrainConfig, model_name: str) -> None:
@@ -388,7 +397,17 @@ def find_latest_checkpoint(
     # Sort by iteration number
     def extract_iter(path):
         try:
-            return int(path.stem.split("_")[-1])
+            parts = path.stem.split("_")
+            # Handle both old format (dag_ckpt_model_name_iter) and new format (dag_ckpt_model_name_iter_acc)
+            if len(parts) >= 4:
+                # Extract iteration number - it's either the last part or second to last
+                iter_part = (
+                    parts[-2]
+                    if len(parts) >= 5 and parts[-1].endswith("acc")
+                    else parts[-1]
+                )
+                return int(iter_part)
+            return 0
         except (ValueError, IndexError):
             return 0
 
@@ -840,23 +859,73 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     )
 
     # --------------------------------------------------------------------- #
-    # Model creation
+    # Model creation and checkpoint loading
     # --------------------------------------------------------------------- #
     print(
         f"[{time.time() - setup_start:.2f}s] Initializing {'full GPT backbone' if cfg.full_backbone else 'shallow attention'} DAG predictor model"
     )
 
-    if cfg.full_backbone:
-        model = GPT(model_config)
-        print(f"[{time.time() - setup_start:.2f}s] ✅ Full backbone model initialized.")
+    # Handle checkpoint loading using shared logic
+    expected_keys = ["model", "optimizer", "model_config", "iter_num", "best_val_loss"]
+    checkpoint, iter_num, best_val_loss = handle_checkpoint_loading(
+        cfg, device, None, expected_keys
+    )
+
+    if checkpoint is not None:
+        # Loading from checkpoint - create model from saved config
+        print(f"[{time.time() - setup_start:.2f}s] Loading model from checkpoint")
+        saved_config = checkpoint["model_config"]
+
+        if cfg.full_backbone:
+            # Reconstruct GPTConfig from saved model_config
+            model_config_dict = {
+                "vocab_size": saved_config.get("vocab_size", 50304),
+                "n_embd": saved_config.get("n_embd", cfg.n_embd),
+                "n_head": saved_config.get("n_head", cfg.n_head),
+                "n_layer": saved_config.get("n_layer", cfg.n_layer),
+                "dropout": saved_config.get("dropout", cfg.dropout),
+                "bias": saved_config.get("bias", cfg.bias),
+                "dag_depth": saved_config.get("dag_depth", cfg.dag_depth),
+                "block_size": saved_config.get("block_size", cfg.sequence_length),
+                "softmax_temperature": saved_config.get("softmax_temperature", 20.0),
+            }
+            model_config = GPTConfig(**model_config_dict)
+            model = GPT(model_config)
+        else:
+            # Reconstruct PredictorOnlyConfig from saved model_config
+            model_config_dict = {
+                "vocab_size": saved_config.get("vocab_size", 50304),
+                "n_embd": saved_config.get("n_embd", cfg.n_embd),
+                "n_head": saved_config.get("n_head", cfg.n_head),
+                "dropout": saved_config.get("dropout", cfg.dropout),
+                "bias": saved_config.get("bias", cfg.bias),
+                "dag_depth": saved_config.get("dag_depth", cfg.dag_depth),
+                "sequence_length": saved_config.get(
+                    "sequence_length", cfg.sequence_length
+                ),
+                "softmax_temperature": saved_config.get("softmax_temperature", 20.0),
+            }
+            model_config = PredictorOnlyConfig(**model_config_dict)
+            model = PredictorOnlyModel(model_config)
+
+        # Load model state
+        state_dict = {
+            k.removeprefix("_orig_mod."): v for k, v in checkpoint["model"].items()
+        }
+        model.load_state_dict(state_dict)
+        print(f"[{time.time() - setup_start:.2f}s] ✅ Model loaded from checkpoint")
     else:
-        model = PredictorOnlyModel(model_config)
-        print(
-            f"[{time.time() - setup_start:.2f}s] ✅ Shallow predictor model initialized."
-        )
-    iter_num, best_val_loss = 0, 1e9
-    ckpt_path = None
-    checkpoint = {}
+        # Creating new model from scratch
+        if cfg.full_backbone:
+            model = GPT(model_config)
+            print(
+                f"[{time.time() - setup_start:.2f}s] ✅ Full backbone model initialized."
+            )
+        else:
+            model = PredictorOnlyModel(model_config)
+            print(
+                f"[{time.time() - setup_start:.2f}s] ✅ Shallow predictor model initialized."
+            )
 
     model.to(device)
 
@@ -879,15 +948,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         weight_decay=cfg.weight_decay,
     )
 
-    if cfg.init_from == "resume":
-        print(
-            f"[{time.time() - setup_start:.2f}s] 🔄 Loading optimizer state from checkpoint"
-        )
-        optimizer.load_state_dict(checkpoint["optimizer"])
-        print(
-            f"[{time.time() - setup_start:.2f}s] ✅ Optimizer state loaded (Adam momentum preserved)"
-        )
-    elif cfg.init_from == "latest" and ckpt_path is not None:
+    if checkpoint is not None and "optimizer" in checkpoint:
         print(
             f"[{time.time() - setup_start:.2f}s] 🔄 Loading optimizer state from checkpoint"
         )
@@ -1011,9 +1072,12 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 if iter_num > 0:
                     if cfg.save_best and is_new_best:
                         # Save a single checkpoint for the best model
-                        checkpoint_base = (
-                            f"dag_ckpt_{raw_model.__class__.__name__}_{cfg.name}_best"
-                        )
+                        val_acc = eval_losses.get("op_accuracy", None)
+                        if val_acc is not None:
+                            acc_str = f"{val_acc * 100:.2f}acc"
+                            checkpoint_base = f"dag_ckpt_{raw_model.__class__.__name__}_{cfg.name}_best_{acc_str}"
+                        else:
+                            checkpoint_base = f"dag_ckpt_{raw_model.__class__.__name__}_{cfg.name}_best"
                         checkpoint_path = Path(CHECKPOINT_DIR) / checkpoint_base
                         print(f"saving new best checkpoint to {checkpoint_path}")
                         checkpoint = {
@@ -1029,8 +1093,9 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         not cfg.save_best and is_new_best
                     ):
                         # Save a checkpoint with the iteration number
+                        val_acc = eval_losses.get("op_accuracy", None)
                         checkpoint_base = get_checkpoint_filename(
-                            cfg, iter_num, raw_model.__class__.__name__
+                            cfg, iter_num, raw_model.__class__.__name__, val_acc=val_acc
                         )
                         checkpoint_path = Path(CHECKPOINT_DIR) / checkpoint_base
                         print(f"saving checkpoint to {checkpoint_path}")

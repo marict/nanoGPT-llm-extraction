@@ -55,10 +55,6 @@ warmup_iters = max_iters * 0.02  # 1/50 of max_iters
 lr_decay_iters = max_iters  # Updated to match max_iters
 min_lr = 1e-5
 
-use_cyclical_lr = True
-cyclical_lr_period = max_iters * 0.2  # 1/5 of max_iters
-cyclical_lr_amplitude = 0.1  # Updated from 0.3
-
 # System settings (optimized for RunPod)
 backend = "nccl"
 dtype = "bfloat16"  # Use bfloat16 for efficiency if available
@@ -68,7 +64,7 @@ check_nans = False  # Check for NaNs in cloud training
 
 # Loss weights (balanced for full training)
 sign_loss_weight = 1.0
-log_loss_weight = 1.2
+log_loss_weight = 2.0
 op_loss_weight = 1.0
 
 # Random seeds

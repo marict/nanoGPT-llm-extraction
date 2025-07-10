@@ -36,11 +36,13 @@ from data import prepare_dataset
 from evaluation import estimate_loss, evaluate_math
 from models.dag_model import GPT, OP_NAMES, GPTConfig
 from python_version_check import check_python_version
-from training_utils import (CHECKPOINT_DIR, BaseConfig, _check_for_nonfinite,
-                            _safe_torch_save, apply_overrides,
-                            clean_previous_checkpoints, find_latest_checkpoint,
-                            generate_run_name, get_checkpoint_filename, get_lr,
-                            load_config_file, parse_args, update_config)
+from training_utils import (CHECKPOINT_DIR, BaseConfig, CheckpointLoadError,
+                            _check_for_nonfinite, _safe_torch_save,
+                            apply_overrides, clean_previous_checkpoints,
+                            find_latest_checkpoint, generate_run_name,
+                            get_checkpoint_filename, get_lr,
+                            handle_checkpoint_loading, load_config_file,
+                            parse_args, update_config)
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
 CUDA_AVAILABLE = torch.cuda.is_available()
@@ -380,31 +382,17 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     model_args["dag_depth"] = cfg.dag_depth
     ModelConfig, ModelClass = GPTConfig, GPT
 
+    # Handle checkpoint loading using shared logic
+    expected_keys = ["model_args", "model", "iter_num", "best_val_loss"]
+    checkpoint, iter_num, best_val_loss = handle_checkpoint_loading(
+        cfg, device, GPT, expected_keys
+    )
+
     if cfg.init_from == "scratch":
         if master_process:
             print(f"[{time.time() - setup_start:.2f}s] Initializing model from scratch")
         gptconf = ModelConfig(**model_args)
         model = ModelClass(gptconf)
-    elif cfg.init_from == "resume":
-        # Find the latest checkpoint for this config name
-        ckpt_path = find_latest_checkpoint(cfg)
-        if ckpt_path is None:
-            raise FileNotFoundError(
-                f"No checkpoint found for config name '{cfg.name}' in {CHECKPOINT_DIR}"
-            )
-
-        print(f"Resuming from checkpoint: {ckpt_path}")
-        checkpoint = torch.load(ckpt_path, map_location=device)
-        for k in ("n_layer", "n_head", "n_embd", "block_size", "bias", "vocab_size"):
-            model_args[k] = checkpoint["model_args"][k]
-        gptconf = ModelConfig(**model_args)
-        model = ModelClass(gptconf)
-        state_dict = {
-            k.removeprefix("_orig_mod."): v for k, v in checkpoint["model"].items()
-        }
-        model.load_state_dict(state_dict)
-        iter_num = checkpoint["iter_num"]
-        best_val_loss = checkpoint["best_val_loss"]
     elif cfg.init_from.startswith("gpt2"):
         if master_process:
             print(
@@ -422,7 +410,17 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
             model.load_state_dict(base_model.state_dict(), strict=False)
         except Exception as e:
             print(f"Warning: partial weight loading failed: {e}")
-        iter_num, best_val_loss = 0, 1e9
+    elif checkpoint is not None:
+        # Loading from checkpoint (resume or direct path)
+        print(f"[{time.time() - setup_start:.2f}s] Loading model from checkpoint")
+        for k in ("n_layer", "n_head", "n_embd", "block_size", "bias", "vocab_size"):
+            model_args[k] = checkpoint["model_args"][k]
+        gptconf = ModelConfig(**model_args)
+        model = ModelClass(gptconf)
+        state_dict = {
+            k.removeprefix("_orig_mod."): v for k, v in checkpoint["model"].items()
+        }
+        model.load_state_dict(state_dict)
     else:
         raise ValueError(f"Unsupported init_from {cfg.init_from}")
 
@@ -470,7 +468,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
         (cfg.beta1, cfg.beta2),
         device,
     )
-    if cfg.init_from == "resume":
+    if checkpoint is not None and "optimizer" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer"])
     print(
         f"[{time.time() - setup_start:.2f}s] Optimizer initialization completed in {time.time() - optimizer_start:.2f}s"
@@ -639,7 +637,22 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                                 "best_val_loss": best_val_loss,
                                 "config": cfg.__dict__,
                             }
-                            checkpoint_filename = get_checkpoint_filename(cfg, iter_num)
+
+                            # Calculate validation accuracy for filename
+                            val_acc = None
+                            if math_scores:
+                                # Use average of math evaluation scores as validation accuracy
+                                valid_scores = [
+                                    score
+                                    for score in math_scores.values()
+                                    if score >= 0
+                                ]
+                                if valid_scores:
+                                    val_acc = sum(valid_scores) / len(valid_scores)
+
+                            checkpoint_filename = get_checkpoint_filename(
+                                cfg, iter_num, val_acc=val_acc
+                            )
                             checkpoint_path = Path(CHECKPOINT_DIR) / checkpoint_filename
                             if master_process:
                                 print(f"Saving checkpoint: {checkpoint_path}")
