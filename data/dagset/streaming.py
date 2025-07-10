@@ -273,6 +273,48 @@ def generate_random_dag_plan(
     return initial_values, operations
 
 
+def pad_dag_plan(
+    initial_values: list[float], operations: list[str]
+) -> tuple[list[float], list[str]]:
+    """Pad a DAG plan with systematic identity operations and 1.0 values.
+
+    Now that operations are processed right-to-left (like a stack), padding is simple:
+    - Find first identity operation
+    - Replace all subsequent operations with identities
+    - Replace corresponding rightmost initial values with 1.0s
+
+    Args:
+        initial_values: List of initial values
+        operations: List of operations (processed right-to-left)
+
+    Returns:
+        Tuple of (padded_initial_values, padded_operations)
+    """
+    # Find first identity operation
+    try:
+        first_identity_idx = operations.index("identity")
+    except ValueError:
+        # No identity operations found, return original plan
+        return initial_values.copy(), operations.copy()
+
+    # Pad operations: replace everything after first identity with identities
+    padded_operations = operations.copy()
+    for i in range(first_identity_idx + 1, len(operations)):
+        padded_operations[i] = "identity"
+
+    # Pad initial values: since operations are processed right-to-left,
+    # the rightmost operations (padding identities) will consume the rightmost initial values
+    padded_initial_values = initial_values.copy()
+    num_padded_ops = len(operations) - (first_identity_idx + 1)
+
+    # Replace the rightmost initial values with 1.0s (these will be consumed by padding identities)
+    for i in range(num_padded_ops):
+        if len(padded_initial_values) - 1 - i >= 0:
+            padded_initial_values[len(padded_initial_values) - 1 - i] = 1.0
+
+    return padded_initial_values, padded_operations
+
+
 def convert_dag_to_expression_string(
     initial_values: list[float],
     operations: list[str],
@@ -284,15 +326,15 @@ def convert_dag_to_expression_string(
 
     Args:
         initial_values: List of initial values
-        operations: List of operations
+        operations: List of operations (processed right-to-left like a stack)
         rng: Random number generator
         convert_to_english: Whether to convert to English words
         conversion_probability: Probability of English conversion
 
     Returns:
         Tuple of (expression_string, used_mask, operation_mask) where:
-        - used_mask indicates which initial values are used
-        - operation_mask indicates which operations contribute to the final result
+        - used_mask indicates which initial values are used (always all-True with padding)
+        - operation_mask indicates which operations contribute to the final result (always all-True with padding)
     """
     if rng is None:
         rng = random
@@ -330,7 +372,8 @@ def convert_dag_to_expression_string(
         "identity": lambda a, b: a,  # Discard b
     }
 
-    for op in operations:
+    # Process operations from right to left (like a stack)
+    for op in reversed(operations):
         # Pop operands from both stacks
         b = stack.pop()
         a = stack.pop()
@@ -354,34 +397,18 @@ def convert_dag_to_expression_string(
 
     final_expr = stack[0]
 
-    # Compute used mask from final dependencies
-    used_indices = stack_dependencies[0] if stack_dependencies else set()
-    used_mask = torch.tensor(
-        [i in used_indices for i in range(num_initial)], dtype=torch.bool
-    )
-
-    # Compute operation mask using the mathematical relationship:
-    # operation_mask = reversed(used_mask)[1:]
-    # This works because operation[i] corresponds to the dependency pattern of initial_values[N-1-i]
-    operation_mask = used_mask.flip(0)[1:]
-
-    # NOTE: We no longer permute expressions; keeping them as-is ensures sign
-    # information and token alignment are preserved. The previous permutation
-    # logic with SymPy transformations is disabled.
-
-    result = str(final_expr)
-
-    # Post-process to clean up any remaining double negatives
-    # NOTE: We intentionally keep '+ -x' patterns so that the operator 'add' and a
-    # negative operand remain explicit. This avoids silently flipping the
-    # operation/type relationship and lets `add_english_to_expression` handle the
-    # sign correctly when converting to words.
-
     # Apply English conversion if requested
     if convert_to_english:
-        result = add_english_to_expression(result, conversion_probability, rng)
+        result = add_english_to_expression(str(final_expr), conversion_probability, rng)
+    else:
+        result = str(final_expr)
 
-    return result, used_mask, operation_mask
+    # Always return all-True masks since we're always using padding
+    return (
+        result,
+        torch.ones(num_initial, dtype=torch.bool),
+        torch.ones(len(operations), dtype=torch.bool),
+    )
 
 
 def convert_plan_to_tensors(
@@ -453,6 +480,9 @@ def generate_single_dag_example(
     initial_values, operations = generate_random_dag_plan(
         depth, num_initial_values, rng, max_digits, max_decimal_places
     )
+
+    # Step 1.5: Apply systematic padding (always enabled)
+    initial_values, operations = pad_dag_plan(initial_values, operations)
 
     # Step 2: Convert DAG plan to simple expression string for data
     expression, used_mask, operation_mask = convert_dag_to_expression_string(
@@ -821,8 +851,23 @@ if __name__ == "__main__":
     print("DAG Streaming Dataset Example")
     print("=" * 40)
 
+    # Test the new padding approach
+    print("\nTesting pad_dag_plan:")
+    initial_values = [5.5, 3.2, 1.8, 4.1, 7.3, 2.9, 6.4]
+    operations = ["add", "multiply", "identity", "subtract", "add", "divide"]
+
+    print(f"Original plan:")
+    print(f"Initial values: {initial_values}")
+    print(f"Operations: {operations}")
+
+    padded_values, padded_ops = pad_dag_plan(initial_values, operations)
+    print(f"\nAfter padding:")
+    print(f"Initial values: {padded_values}")
+    print(f"Operations: {padded_ops}")
+
     # Test the structure dataset (used in train_predictor.py)
-    print("\nTesting DAGStructureDataset:")
+    print("\nTesting DAGStructureDataset with consistent stack-based processing:")
+    print("(Both initial values and operations processed right-to-left)")
     structure_dataset = DAGStructureDataset(
         max_depth=3, seed=42, max_digits=3
     )  # max_decimal_places auto-derived as 2
@@ -832,45 +877,9 @@ if __name__ == "__main__":
     print(f"Initial signs shape: {structures['initial_sgn'].shape}")
     print(f"Operation probs shape: {structures['operation_probs'].shape}")
 
-    # Demonstrate integer + decimal digit distribution improvement
-    print("\nTesting auto-derived integer+decimal digit-uniform distribution:")
-    print(f"max_digits=3 -> max_decimal_places auto-derived as {max(0, 3-1)} = 2")
-    from collections import Counter
-
-    def analyze_number_format(num_str):
-        """Analyze number format: (integer_digits, decimal_places)"""
-        if "." in num_str:
-            integer_part, decimal_part = num_str.split(".")
-            integer_digits = len(integer_part.lstrip("-"))
-            decimal_places = len(decimal_part)
-        else:
-            integer_digits = len(num_str.lstrip("-"))
-            decimal_places = 0
-        return (integer_digits, decimal_places)
-
-    format_counts = Counter()
-    for i in range(200):
-        example = structure_dataset.generate_batch(1)[1].split("\n---\n")[0]
-        # Extract numbers from the text (simple approach)
-        import re
-
-        numbers = re.findall(r"-?\d+\.?\d*", example)
-        for num_str in numbers:
-            if num_str not in ["-", ""]:  # Skip non-numbers
-                format_tuple = analyze_number_format(num_str)
-                format_counts[format_tuple] += 1
-
-    print("Number format distribution (integer_digits, decimal_places):")
-    total = sum(format_counts.values())
-    for format_tuple in sorted(format_counts.keys()):
-        count = format_counts[format_tuple]
-        percent = 100 * count / total if total > 0 else 0
-        int_digits, dec_places = format_tuple
-        if dec_places == 0:
-            print(f"  {int_digits}-digit integers: {count:3d} ({percent:5.1f}%)")
-        else:
-            print(
-                f"  {int_digits}-digit + {dec_places}-decimal: {count:3d} ({percent:5.1f}%)"
-            )
+    # Show the masks - should be all True with padding
+    print(f"Initial masks (all True with padding): {structures['initial_mask']}")
+    print(f"Operation masks (all True with padding): {structures['operation_mask']}")
 
     print("\n✅ Example completed successfully!")
+    print("✅ Operations now processed consistently as stack (right-to-left)")

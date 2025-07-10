@@ -528,7 +528,7 @@ def execute_stack(
     Args:
         initial_values_sgn: (B, T, num_initial) - initial stack signs
         initial_values_log: (B, T, num_initial) - initial stack log magnitudes
-        ops: (B, T, depth, n_ops) - operation probabilities for each step
+        ops: (B, T, depth, n_ops) - operation probabilities for each step (processed right-to-left)
 
     Returns:
         final_sgn: (B, T) - final sign
@@ -573,9 +573,9 @@ def execute_stack(
         top_log = buffer_log[..., current_size - 1]  # (B, T)
         second_log = buffer_log[..., current_size - 2]  # (B, T)
 
-        # Apply operation
+        # Apply operation (process operations right-to-left like a stack)
         result_sgn, result_log = apply_op(
-            second_sgn, second_log, top_sgn, top_log, ops[:, :, step]
+            second_sgn, second_log, top_sgn, top_log, ops[:, :, depth - 1 - step]
         )
 
         # Apply RMS rescaling to keep magnitudes bounded
@@ -616,7 +616,7 @@ def stack_based_execution(
     Args:
         initial_values_sgn: (B, T, num_initial) - initial stack signs
         initial_values_log: (B, T, num_initial) - initial stack log magnitudes
-        ops: (B, T, depth, n_ops) - operation probabilities for each step
+        ops: (B, T, depth, n_ops) - operation probabilities for each step (processed right-to-left)
 
     Returns:
         final_sgn: (B, T) - final sign
@@ -637,7 +637,7 @@ def stack_based_execution_original(
     Args:
         initial_values_sgn: (B, T, num_initial) - initial stack signs
         initial_values_log: (B, T, num_initial) - initial stack log magnitudes
-        ops: (B, T, depth, n_ops) - operation probabilities for each step
+        ops: (B, T, depth, n_ops) - operation probabilities for each step (processed right-to-left)
 
     Returns:
         final_sgn: (B, T) - final sign
@@ -668,9 +668,9 @@ def stack_based_execution_original(
         top_log = current_log[..., stack_size - 1]  # (B, T)
         second_log = current_log[..., stack_size - 2]  # (B, T)
 
-        # Apply operation
+        # Apply operation (process operations right-to-left like a stack)
         result_sgn, result_log = apply_op(
-            second_sgn, second_log, top_sgn, top_log, ops[:, :, step]
+            second_sgn, second_log, top_sgn, top_log, ops[:, :, depth - 1 - step]
         )
 
         # Apply RMS rescaling to keep magnitudes bounded
