@@ -218,8 +218,7 @@ class DAGTrainConfig(BaseConfig):
     op_loss_weight: float = 1.0
 
     # Random seeds
-    train_seed: int = 42
-    val_seed: int = 43
+    seed: int = 42
 
     # New options
     # If True, use the full GPT backbone (models.dag_model.GPT) instead of the
@@ -471,6 +470,13 @@ def evaluate_dag_model(
 ) -> Dict[str, float]:
     """Evaluate DAG model on validation set."""
     model.eval()
+    # ------------------------------------------------------------------ #
+    # Seed RNG for reproducible validation sample selection and expose the
+    # seed in the console output so the exact example can be regenerated
+    # later for debugging or unit testing purposes.
+    # ------------------------------------------------------------------ #
+    eval_sample_seed = getattr(cfg, "seed", 0)
+    _eval_random.seed(eval_sample_seed)
 
     total_losses = {
         "total_loss": 0.0,
@@ -588,6 +594,8 @@ def evaluate_dag_model(
                     sample_tokens = enc.encode_ordinary(sample_text)
 
                     print("\n=== Validation Sample ===")
+                    # Log the RNG seed so we can reproduce this sample exactly
+                    print(f"Validation RNG seed: {eval_sample_seed}")
                     print(f"Text: {sample_text}")
                     print(f"Tokens: {len(sample_tokens)}")
                     print("Target initial values:")
@@ -835,12 +843,14 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     # --------------------------------------------------------------------- #
     print(f"[{time.time() - setup_start:.2f}s] Creating DAG structure dataloaders")
 
+    if cfg.seed == -1:
+        cfg.seed = random.randint(0, 1000000)
+
     train_loader, val_loader = create_dag_structure_dataloaders(
         train_batch_size=cfg.batch_size,
         val_batch_size=cfg.batch_size,
         max_depth=cfg.dag_depth,  # All examples have exactly this depth to match the model
-        train_seed=cfg.train_seed,
-        val_seed=cfg.val_seed,
+        seed=cfg.seed,
         english_conversion_rate=cfg.english_conversion_rate,
         max_digits=cfg.max_digits,
         max_decimal_places=cfg.max_decimal_places,
@@ -966,9 +976,28 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
             # Evaluation
             if iter_num % cfg.eval_interval == 0 and master_process:
+                # Recreate validation loader each time so that with a fixed
+                # `seed` we always evaluate on the *same* sequence of
+                # examples (starting from the very first batch). Without this
+                # the underlying generator would advance each epoch, giving
+                # different samples even though the RNG seed itself is fixed.
+                if cfg.seed == -1:
+                    cfg.seed = random.randint(0, 1000000)
+                _train_loader_unused, val_loader_eval = (
+                    create_dag_structure_dataloaders(
+                        train_batch_size=cfg.batch_size,
+                        val_batch_size=cfg.batch_size,
+                        max_depth=cfg.dag_depth,
+                        seed=cfg.seed,
+                        english_conversion_rate=cfg.english_conversion_rate,
+                        max_digits=cfg.max_digits,
+                        max_decimal_places=cfg.max_decimal_places,
+                    )
+                )
+
                 model.eval()
                 eval_losses = evaluate_dag_model(
-                    raw_model, val_loader, device, ctx, cfg, cfg.eval_iters
+                    raw_model, val_loader_eval, device, ctx, cfg, cfg.eval_iters
                 )
                 print(
                     f"step {iter_num}: train loss {loss_accum.get('total_loss', 'N/A'):.4f}, "

@@ -772,8 +772,7 @@ def create_dag_structure_dataloaders(
     train_batch_size: int = 32,
     val_batch_size: int = 32,
     max_depth: int = 8,
-    train_seed: int = 42,
-    val_seed: int = 43,
+    seed: int = 42,
     english_conversion_rate: float = 0.3,
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
@@ -784,8 +783,7 @@ def create_dag_structure_dataloaders(
         train_batch_size: Training batch size
         val_batch_size: Validation batch size
         max_depth: DAG depth (all examples will have this depth)
-        train_seed: Seed for training data
-        val_seed: Seed for validation data
+        seed: Seed for training data
         english_conversion_rate: Probability of converting to English (0.0 to 1.0)
         max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
         max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
@@ -798,7 +796,7 @@ def create_dag_structure_dataloaders(
     # Create datasets with fixed depth
     train_dataset = DAGStructureDataset(
         max_depth=max_depth,
-        seed=train_seed,
+        seed=seed,
         english_conversion_probability=english_conversion_rate,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
@@ -806,7 +804,7 @@ def create_dag_structure_dataloaders(
 
     val_dataset = DAGStructureDataset(
         max_depth=max_depth,
-        seed=val_seed,
+        seed=seed,
         english_conversion_probability=english_conversion_rate,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,

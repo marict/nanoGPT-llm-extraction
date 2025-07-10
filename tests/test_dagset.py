@@ -416,8 +416,7 @@ class TestDAGStructureDataset(unittest.TestCase):
             train_batch_size=4,
             val_batch_size=2,
             max_depth=3,
-            train_seed=42,
-            val_seed=43,
+            seed=42,
         )
 
         # Test train loader

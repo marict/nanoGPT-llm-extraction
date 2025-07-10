@@ -72,5 +72,4 @@ log_loss_weight = 1.2
 op_loss_weight = 1.0
 
 # Random seeds
-train_seed = 42
-val_seed = 42
+seed = -1

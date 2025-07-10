@@ -99,8 +99,7 @@ class TrainConfig(BaseConfig):
     max_dag_depth: int = 8
     train_examples_per_batch: int = 1000
     val_examples_per_batch: int = 100
-    train_seed: int = 42
-    val_seed: int = 43
+    seed: int = 42
 
     # Loss weights for DAG predictor training
     sign_loss_weight: float = 1.0
