@@ -8,12 +8,10 @@ import math
 import random
 import re
 import sys
-from collections import deque  # fast FIFO buffer for tokens
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterator, List, Tuple
 
-import numpy as np
 import sympy
 import torch
 from num2words import num2words
