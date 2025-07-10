@@ -24,7 +24,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from models.dag_model import OP_NAMES
 
 
-def convert_number_to_words(number) -> str:
+def convert_number_to_words(number, max_decimal_places: int = 6) -> str:
     """Convert a number to its English word equivalent.
 
     Args:
@@ -64,7 +64,7 @@ def convert_number_to_words(number) -> str:
             result += " point"
 
             # Convert each decimal digit to words (limit to 5 decimal places)
-            for digit in decimal_part[:5]:
+            for digit in decimal_part[:max_decimal_places]:
                 result += " " + num2words(int(digit))
 
             return f"negative {result}" if is_negative else result
@@ -73,7 +73,10 @@ def convert_number_to_words(number) -> str:
 
 
 def format_expression_string(
-    expression: str, conversion_probability: float = 0.3, rng: random.Random = None
+    expression: str,
+    conversion_probability: float = 0.3,
+    rng: random.Random = None,
+    max_decimal_places: int = 6,
 ) -> str:
     """Format an expression string with optional english words and spaces.
 
@@ -169,7 +172,9 @@ def format_expression_string(
                 number = float(token)
 
             if rng.random() < conversion_probability:
-                converted_tokens.append(convert_number_to_words(number))
+                converted_tokens.append(
+                    convert_number_to_words(number, max_decimal_places)
+                )
             else:
                 converted_tokens.append(token)
         else:
@@ -274,7 +279,7 @@ def generate_random_dag_plan(
     return initial_values, operations
 
 
-def pad_dag_plan(
+def pad_plan(
     initial_values: list[float], operations: list[str]
 ) -> tuple[list[float], list[str]]:
     """Pad a DAG plan with systematic identity operations and 1.0 values.
@@ -312,11 +317,12 @@ def pad_dag_plan(
     return padded_initial_values, padded_operations
 
 
-def convert_dag_to_expression(
+def plan_to_string_expression(
     initial_values: list[float],
     operations: list[str],
     rng: random.Random = None,
     conversion_probability: float = 0.3,
+    max_decimal_places: int = 6,
 ) -> tuple[str, torch.Tensor, torch.Tensor]:
     """Convert DAG structure to a simple mathematical expression string following stack-based execution."""
     if rng is None:
@@ -395,12 +401,14 @@ def convert_dag_to_expression(
         expr_str = expr_str.replace(old_symbol, new_value)
 
     # Apply final formatting
-    result = format_expression_string(expr_str, conversion_probability, rng)
+    result = format_expression_string(
+        expr_str, conversion_probability, rng, max_decimal_places
+    )
 
     return result
 
 
-def convert_plan_to_tensors(
+def plan_to_tensors(
     initial_values: list[float],
     operations: list[str],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -463,24 +471,25 @@ def generate_single_dag_example(
         # For DAG with depth n, we need n+1 initial values
         num_initial_values = depth + 1
 
-    # Step 1. Generate random dag plan with uniform digit count distribution
+    # Generate random dag plan with uniform digit count distribution
     initial_values, operations = generate_random_dag_plan(
         depth, num_initial_values, rng, max_digits, max_decimal_places
     )
 
-    # Step 1.5: Apply systematic padding (always enabled)
-    initial_values, operations = pad_dag_plan(initial_values, operations)
+    # Apply systematic padding (always enabled)
+    initial_values, operations = pad_plan(initial_values, operations)
 
-    # Step 2: Convert DAG plan to simple expression string for data
-    expression = convert_dag_to_expression(
+    # Convert DAG plan to simple expression string for data
+    expression = plan_to_string_expression(
         initial_values=initial_values,
         operations=operations,
         rng=rng,
         conversion_probability=conversion_probability,
+        max_decimal_places=max_decimal_places,
     )
 
-    # Step 3: Convert dag plan to a tensor for labels
-    signs, log_magnitudes, operations = convert_plan_to_tensors(
+    # Convert dag plan to a tensor for labels
+    signs, log_magnitudes, operations = plan_to_tensors(
         initial_values=initial_values,
         operations=operations,
     )
@@ -810,7 +819,7 @@ if __name__ == "__main__":
     print(f"Initial values: {initial_values}")
     print(f"Operations: {operations}")
 
-    padded_values, padded_ops = pad_dag_plan(initial_values, operations)
+    padded_values, padded_ops = pad_plan(initial_values, operations)
     print(f"\nAfter padding:")
     print(f"Initial values: {padded_values}")
     print(f"Operations: {padded_ops}")
