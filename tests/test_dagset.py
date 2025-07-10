@@ -13,7 +13,7 @@ import numpy as np
 import torch
 
 from data.dagset.streaming import (DAGStructureDataset,
-                                   convert_dag_to_expression_string,
+                                   convert_dag_to_expression,
                                    create_dag_structure_dataloaders,
                                    generate_random_dag_plan,
                                    generate_single_dag_example,
@@ -59,7 +59,7 @@ class TestIdentityFunction(unittest.TestCase):
         ]  # Operations processed right-to-left (stack-based)
 
         # Generate expression
-        expression = convert_dag_to_expression_string(
+        expression = convert_dag_to_expression(
             initial_values=initial_values,
             operations=operations,
             conversion_probability=0.0,
@@ -95,7 +95,7 @@ class TestIdentityFunction(unittest.TestCase):
         operations = ["identity", "multiply"]
 
         # Generate expression
-        expression = convert_dag_to_expression_string(
+        expression = convert_dag_to_expression(
             initial_values=initial_values,
             operations=operations,
             rng=rng,
@@ -120,7 +120,7 @@ class TestIdentityFunction(unittest.TestCase):
         initial_values = [42, 7, 3]
         operations = ["identity"]
 
-        expression = convert_dag_to_expression_string(
+        expression = convert_dag_to_expression(
             initial_values=initial_values,
             operations=operations,
             conversion_probability=1.0,  # Force conversion
@@ -201,7 +201,7 @@ class TestIdentityFunction(unittest.TestCase):
         expressions = []
         masks = []
         for _ in range(3):
-            expr = convert_dag_to_expression_string(
+            expr = convert_dag_to_expression(
                 initial_values=initial_values.copy(),
                 operations=operations.copy(),
                 rng=random.Random(42),  # Same seed for consistency
@@ -685,7 +685,7 @@ class TestExpressionMatching(unittest.TestCase):
         operations = ["add", "multiply"]
 
         # Generate expression
-        expression = convert_dag_to_expression_string(
+        expression = convert_dag_to_expression(
             initial_values=initial_values,
             operations=operations,
             rng=random.Random(42),
@@ -729,7 +729,7 @@ class TestExpressionMatching(unittest.TestCase):
                 operations = [rng.choice(OP_NAMES) for _ in range(3)]
 
                 # Generate expression
-                expression = convert_dag_to_expression_string(
+                expression = convert_dag_to_expression(
                     initial_values=initial_values,
                     operations=operations,
                     rng=rng,
@@ -778,7 +778,7 @@ class TestExpressionMatching(unittest.TestCase):
         operations = ["add", "multiply"]
 
         # Test without English conversion
-        expression_numeric = convert_dag_to_expression_string(
+        expression_numeric = convert_dag_to_expression(
             initial_values=initial_values,
             operations=operations,
             rng=random.Random(42),
@@ -786,7 +786,7 @@ class TestExpressionMatching(unittest.TestCase):
         )
 
         # Test with English conversion
-        expression_english = convert_dag_to_expression_string(
+        expression_english = convert_dag_to_expression(
             initial_values=initial_values,
             operations=operations,
             rng=random.Random(42),
@@ -826,7 +826,7 @@ class TestExpressionMatching(unittest.TestCase):
                 ops = operations[:max_ops] if len(operations) > max_ops else operations
 
                 for seed in [42, 123, 999]:
-                    expression = convert_dag_to_expression_string(
+                    expression = convert_dag_to_expression(
                         initial_values=initial_values,
                         operations=ops,
                         rng=random.Random(seed),
@@ -866,7 +866,7 @@ class TestExpressionMatching(unittest.TestCase):
         initial_values = [-4.4262, -6.10979, -10.0]
         operations = ["subtract", "subtract"]  # depth = 2
 
-        text = convert_dag_to_expression_string(
+        text = convert_dag_to_expression(
             initial_values=initial_values,
             operations=operations,
             rng=random.Random(42),
@@ -895,7 +895,7 @@ class TestExpressionMatching(unittest.TestCase):
         operations = ["add"]
 
         # Force English conversion
-        text = convert_dag_to_expression_string(
+        text = convert_dag_to_expression(
             initial_values=initial_values,
             operations=operations,
             rng=random.Random(123),
@@ -956,7 +956,7 @@ class TestExpressionMatching(unittest.TestCase):
                 expected_pattern = test_case["expected_pattern"]
 
                 # Generate expression without English conversion for easier pattern matching
-                expression = convert_dag_to_expression_string(
+                expression = convert_dag_to_expression(
                     initial_values=initial_values,
                     operations=operations,
                     rng=random.Random(42),
@@ -1044,7 +1044,7 @@ class TestExpressionMatching(unittest.TestCase):
                 expected_words = test_case["expected_words"]
 
                 # Generate expression with full English conversion
-                expression = convert_dag_to_expression_string(
+                expression = convert_dag_to_expression(
                     initial_values=initial_values,
                     operations=operations,
                     rng=random.Random(42),

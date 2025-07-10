@@ -24,18 +24,15 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from models.dag_model import OP_NAMES
 
 
-def convert_number_to_words(number, use_words: bool = True) -> str:
+def convert_number_to_words(number) -> str:
     """Convert a number to its English word equivalent.
 
     Args:
         number: The number to convert (int or float)
-        use_words: Whether to convert to words or keep as digits
 
     Returns:
         String representation (either words or original format)
     """
-    if not use_words:
-        return str(number)
 
     # Handle zero
     if number == 0 or (isinstance(number, float) and abs(number) < 0.00001):
@@ -75,18 +72,18 @@ def convert_number_to_words(number, use_words: bool = True) -> str:
     return str(number)
 
 
-def add_english_to_expression(
+def format_expression_string(
     expression: str, conversion_probability: float = 0.3, rng: random.Random = None
 ) -> str:
-    """Convert a mathematical expression to English words with per-token probability.
+    """Format an expression string with optional english words and spaces.
 
     Args:
-        expression: Mathematical expression like "5.22 - 3.213 / 2.32"
+        expression: Expression string
         conversion_probability: Probability of converting each individual token
         rng: Random number generator
 
     Returns:
-        Mixed English/numeric like "five point two two - three point two one three divided by 2.32"
+        Formatted expression string with optional english words and spaces
     """
     if rng is None:
         rng = random
@@ -172,7 +169,7 @@ def add_english_to_expression(
                 number = float(token)
 
             if rng.random() < conversion_probability:
-                converted_tokens.append(convert_number_to_words(number, use_words=True))
+                converted_tokens.append(convert_number_to_words(number))
             else:
                 converted_tokens.append(token)
         else:
@@ -315,34 +312,17 @@ def pad_dag_plan(
     return padded_initial_values, padded_operations
 
 
-def convert_dag_to_expression_string(
+def convert_dag_to_expression(
     initial_values: list[float],
     operations: list[str],
     rng: random.Random = None,
     conversion_probability: float = 0.3,
 ) -> tuple[str, torch.Tensor, torch.Tensor]:
-    """Convert DAG structure to a simple mathematical expression string following stack-based execution.
-
-    This implementation uses a cleaner approach:
-    1. Generates expressions using only positive (absolute) values with unique identifiers
-    2. Assigns signs to values without sympy interference
-    3. Replaces symbols with actual signed values
-
-    This avoids sympy's automatic simplifications that collapse "a + -b" to "a - b".
-
-    Args:
-        initial_values: List of initial values
-        operations: List of operations (processed right-to-left like a stack)
-        rng: Random number generator
-        conversion_probability: Probability of English conversion
-
-    Returns:
-        Tuple of (expression_string)
-    """
+    """Convert DAG structure to a simple mathematical expression string following stack-based execution."""
     if rng is None:
         rng = random
 
-    # Step 1: Generate expression using only absolute values with unique identifiers
+    # Generate expression using only absolute values with unique identifiers
     # This avoids sympy's automatic simplification of signs
     abs_values = [abs(v) for v in initial_values]
     unique_symbols = [f"VAL_{i}_{abs_values[i]}" for i in range(len(abs_values))]
@@ -395,10 +375,15 @@ def convert_dag_to_expression_string(
 
         stack_dependencies.append(result_deps)
 
-    # Step 2: Get expression string with unique symbols
+    # Get expression string with unique symbols
     expr_str = str(stack[0])
 
-    # Step 3: Replace symbols with actual signed values
+    # At this point, since we know our expression contains non-negative values, we can collapse + - into -
+    expr_str = expr_str.replace("+ (-", "- (")
+    expr_str = expr_str.replace("+-", "-")
+    expr_str = expr_str.replace("+ -", "-")
+
+    # Replace symbols with actual signed values
     # This preserves the original operation structure without sympy interference
     for i, original_value in enumerate(initial_values):
         old_symbol = unique_symbols[i]
@@ -409,14 +394,8 @@ def convert_dag_to_expression_string(
 
         expr_str = expr_str.replace(old_symbol, new_value)
 
-    # Replace some degenerate cases.
-    expr_str = expr_str.replace("+ (--", "- (-")
-
-    # Step 4: Apply English conversion if requested
-    if conversion_probability > 0:
-        result = add_english_to_expression(expr_str, conversion_probability, rng)
-    else:
-        result = expr_str
+    # Apply final formatting
+    result = format_expression_string(expr_str, conversion_probability, rng)
 
     return result
 
@@ -493,7 +472,7 @@ def generate_single_dag_example(
     initial_values, operations = pad_dag_plan(initial_values, operations)
 
     # Step 2: Convert DAG plan to simple expression string for data
-    expression = convert_dag_to_expression_string(
+    expression = convert_dag_to_expression(
         initial_values=initial_values,
         operations=operations,
         rng=rng,

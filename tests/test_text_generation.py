@@ -1,8 +1,32 @@
 import random
+import re
 
 from tiktoken import get_encoding
 
 from data.dagset.streaming import generate_single_dag_example
+from models.dag_model import OP_NAMES
+
+
+def test_text_generation_rounding():
+    """Generates 1000 dag examples without english conversion and checks that the string values
+    are the example same as the target initial values"""
+    for i in range(1000):
+        rng = random.Random(i)
+        example = generate_single_dag_example(
+            depth=4, rng=rng, conversion_probability=0
+        )
+        text = example.text
+        exp_initial_values = example.initial_values
+        target_operations = example.operations
+        # Convert operation vectors to readable names
+        operation_names = [OP_NAMES[idx] for idx in target_operations.argmax(dim=1)]
+        # Extract all numbers from the generated text
+        numbers = re.findall(r"-?\d+\.\d+", text)
+        # Check that the numbers are the same as the target initial values
+        for number in numbers:
+            assert (
+                float(number) in exp_initial_values
+            ), f"Seed {i} generated value mismatch. \nText: {text!r}, \nInitial values: {exp_initial_values!r}, \nOperations: {operation_names!r}"
 
 
 def test_text_generation_seed_1620():
@@ -53,8 +77,5 @@ def test_text_generation_seed_2652():
 
     # Check that operations are all identity as expected
     expected_ops = ["identity", "identity", "identity", "identity"]
-    actual_ops = [
-        ["add", "subtract", "multiply", "divide", "identity"][i]
-        for i in example.operations.argmax(dim=1)
-    ]
+    actual_ops = [OP_NAMES[i] for i in example.operations.argmax(dim=1)]
     assert actual_ops == expected_ops, f"Seed 2652 operations differ. Got: {actual_ops}"
