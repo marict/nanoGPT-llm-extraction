@@ -211,7 +211,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
         print(f"[{time.time() - setup_start:.2f}s] Tokens / iter: {tokens_per_iter:,}")
 
     seed_start = time.time()
-    torch.manual_seed(1337 + seed_offset)
+    torch.manual_seed(cfg.seed)
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 

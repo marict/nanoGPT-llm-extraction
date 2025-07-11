@@ -667,7 +667,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         run = None
 
     # Device and dtype setup
-    torch.manual_seed(1337 + seed_offset)
+    torch.manual_seed(cfg.seed)
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
