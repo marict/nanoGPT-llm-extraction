@@ -10,8 +10,8 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from checkpoint_manager import (CheckpointLoadError,
-                                create_regular_checkpoint_manager)
+from checkpoint_manager import CheckpointLoadError, CheckpointManager
+from train_predictor import DAGTrainConfig
 from training_utils import BaseConfig, get_checkpoint_filename
 
 
@@ -34,7 +34,7 @@ class TestCheckpointLoading:
         self.test_checkpoint_dir.mkdir(exist_ok=True)
 
         # Create checkpoint manager
-        self.checkpoint_manager = create_regular_checkpoint_manager()
+        self.checkpoint_manager = CheckpointManager("regular")
 
         # Sample checkpoint data
         self.sample_checkpoint = {
@@ -365,10 +365,8 @@ class TestCheckpointLoading:
 
     def test_dag_checkpoint_filename_with_accuracy(self):
         """Test that DAG predictor checkpoint filenames include validation accuracy."""
-        from checkpoint_manager import create_dag_checkpoint_manager
-        from train_predictor import DAGTrainConfig
 
-        checkpoint_manager = create_dag_checkpoint_manager()
+        checkpoint_manager = CheckpointManager("dag")
         cfg = DAGTrainConfig()
         cfg.name = "dag_test"
         iter_num = 1000
@@ -413,7 +411,7 @@ class TestCheckpointLoadingIntegration:
         cfg.init_from = "scratch"
         cfg.name = "test_train"
 
-        checkpoint_manager = create_regular_checkpoint_manager()
+        checkpoint_manager = CheckpointManager("regular")
         # Should work without errors
         checkpoint, iter_num, best_val_loss = (
             checkpoint_manager.handle_checkpoint_loading(cfg)
@@ -424,14 +422,12 @@ class TestCheckpointLoadingIntegration:
 
     def test_dag_train_config_compatibility(self):
         """Test that checkpoint loading works with DAG training configs."""
-        from checkpoint_manager import create_dag_checkpoint_manager
-        from train_predictor import DAGTrainConfig
 
         cfg = DAGTrainConfig()
         cfg.init_from = "scratch"
         cfg.name = "test_dag_train"
 
-        checkpoint_manager = create_dag_checkpoint_manager()
+        checkpoint_manager = CheckpointManager("dag")
         # Should work without errors
         checkpoint, iter_num, best_val_loss = (
             checkpoint_manager.handle_checkpoint_loading(cfg)
@@ -450,7 +446,7 @@ class TestCheckpointLoadingIntegration:
         cfg.init_from = "/nonexistent/checkpoint.pt"
         cfg.name = "runpod_integration_test"
 
-        checkpoint_manager = create_regular_checkpoint_manager()
+        checkpoint_manager = CheckpointManager("regular")
         with pytest.raises(CheckpointLoadError):
             checkpoint_manager.handle_checkpoint_loading(cfg)
 

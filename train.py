@@ -31,8 +31,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 import runpod_service
 import wandb
-from checkpoint_manager import (CheckpointLoadError,
-                                create_regular_checkpoint_manager)
+from checkpoint_manager import CheckpointManager
 from dag_logger import DAGLogger
 from data import prepare_dataset
 from evaluation import estimate_loss, evaluate_math
@@ -163,7 +162,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     # --------------------------------------------------------------------- #
     # Initialize checkpoint manager and clean previous checkpoints if requested
     # --------------------------------------------------------------------- #
-    checkpoint_manager = create_regular_checkpoint_manager()
+    checkpoint_manager = CheckpointManager("regular")
     if cfg.clear_previous_checkpoints:
         checkpoint_manager.clean_previous_checkpoints(cfg.name)
 
@@ -382,15 +381,47 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     model_args["dag_depth"] = cfg.dag_depth
     ModelConfig, ModelClass = GPTConfig, GPT
 
-    # Initialize model using checkpoint manager
-    model, checkpoint = checkpoint_manager.initialize_model(
-        cfg, model_args, ModelConfig, ModelClass, device, setup_start
+    # Handle checkpoint loading using unified checkpoint manager
+    expected_keys = ["model_args", "model", "iter_num", "best_val_loss"]
+    checkpoint, iter_num, best_val_loss = checkpoint_manager.handle_checkpoint_loading(
+        cfg, device, expected_keys=expected_keys
     )
 
-    # Get iteration info for training loop
-    _, iter_num, best_val_loss = checkpoint_manager.handle_checkpoint_loading(
-        cfg, device, expected_keys=["model_args", "model", "iter_num", "best_val_loss"]
-    )
+    if cfg.init_from == "scratch":
+        if master_process:
+            print(f"[{time.time() - setup_start:.2f}s] Initializing model from scratch")
+        gptconf = ModelConfig(**model_args)
+        model = ModelClass(gptconf)
+    elif cfg.init_from.startswith("gpt2"):
+        if master_process:
+            print(
+                f"[{time.time() - setup_start:.2f}s] Loading GPT-2 weights {cfg.init_from}"
+            )
+        base_model = GPT.from_pretrained(cfg.init_from, dict(dropout=cfg.dropout))
+        for k in ("n_layer", "n_head", "n_embd", "block_size", "bias", "vocab_size"):
+            model_args[k] = getattr(base_model.config, k)
+        # Create new model with desired dag_depth (may be >0)
+        gptconf = ModelConfig(**model_args)
+        model = ModelClass(gptconf)
+
+        # Load overlapping GPT weights regardless of dag_depth
+        try:
+            model.load_state_dict(base_model.state_dict(), strict=False)
+        except Exception as e:
+            print(f"Warning: partial weight loading failed: {e}")
+    elif checkpoint is not None:
+        # Loading from checkpoint (resume or direct path)
+        print(f"[{time.time() - setup_start:.2f}s] Loading model from checkpoint")
+        for k in ("n_layer", "n_head", "n_embd", "block_size", "bias", "vocab_size"):
+            model_args[k] = checkpoint["model_args"][k]
+        gptconf = ModelConfig(**model_args)
+        model = ModelClass(gptconf)
+        state_dict = {
+            k.removeprefix("_orig_mod."): v for k, v in checkpoint["model"].items()
+        }
+        model.load_state_dict(state_dict)
+    else:
+        raise ValueError(f"Unsupported init_from {cfg.init_from}")
 
     if cfg.sequence_length < model.config.block_size:
         model.crop_block_size(cfg.sequence_length)

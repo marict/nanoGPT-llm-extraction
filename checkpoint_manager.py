@@ -25,6 +25,7 @@ except ModuleNotFoundError:
 
 # Import model classes for initialization
 from models.dag_model import GPT, GPTConfig
+from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
 
 # Checkpoint directory
 CHECKPOINT_DIR = (
@@ -580,13 +581,91 @@ class CheckpointManager:
         else:
             raise ValueError(f"Unsupported init_from {config.init_from}")
 
+    def initialize_dag_model(
+        self,
+        cfg,
+        checkpoint: Optional[Dict],
+        device: str = "cpu",
+        setup_start_time: float | None = None,
+    ) -> Tuple[torch.nn.Module, object]:
+        """Initialize a DAG predictor (GPT backbone or PredictorOnly) model.
 
-# Convenience functions for backward compatibility
-def create_regular_checkpoint_manager():
-    """Create a checkpoint manager for regular training (train.py)."""
-    return CheckpointManager("regular")
+        Args:
+            cfg: DAGTrainConfig or compatible namespace with relevant attributes
+            checkpoint: Loaded checkpoint dictionary (or None)
+            device: Device string ("cpu", "cuda", etc.)
+            setup_start_time: Reference start time for consistent logging (optional)
 
+        Returns:
+            Tuple (model, model_config) where model_config is the instantiated
+            GPTConfig or PredictorOnlyConfig.
+        """
+        if setup_start_time is None:
+            setup_start_time = time.time()
 
-def create_dag_checkpoint_manager():
-    """Create a checkpoint manager for DAG training (train_predictor.py)."""
-    return CheckpointManager("dag")
+        # ------------------------------------------------------------------ #
+        # Decide model type based on cfg.full_backbone flag
+        # ------------------------------------------------------------------ #
+        use_full_backbone = getattr(cfg, "full_backbone", False)
+
+        # When resuming, prefer the saved model configuration; otherwise derive
+        # from the current cfg.
+        saved_cfg = checkpoint.get("model_config") if checkpoint is not None else None
+
+        if use_full_backbone:
+            # Prepare configuration for GPT backbone
+            model_cfg_dict = {
+                "vocab_size": (saved_cfg or {}).get("vocab_size", 50304),
+                "n_embd": (saved_cfg or {}).get("n_embd", cfg.n_embd),
+                "n_head": (saved_cfg or {}).get("n_head", cfg.n_head),
+                "n_layer": (saved_cfg or {}).get(
+                    "n_layer", getattr(cfg, "n_layer", 12)
+                ),
+                "dropout": (saved_cfg or {}).get("dropout", cfg.dropout),
+                "bias": (saved_cfg or {}).get("bias", cfg.bias),
+                "dag_depth": (saved_cfg or {}).get("dag_depth", cfg.dag_depth),
+                "block_size": (saved_cfg or {}).get("block_size", cfg.sequence_length),
+                "softmax_temperature": (saved_cfg or {}).get(
+                    "softmax_temperature", 20.0
+                ),
+            }
+            model_config = GPTConfig(**model_cfg_dict)
+            model = GPT(model_config)
+        else:
+            # Shallow PredictorOnly model
+            model_cfg_dict = {
+                "vocab_size": (saved_cfg or {}).get("vocab_size", 50304),
+                "n_embd": (saved_cfg or {}).get("n_embd", cfg.n_embd),
+                "n_head": (saved_cfg or {}).get("n_head", cfg.n_head),
+                "dropout": (saved_cfg or {}).get("dropout", cfg.dropout),
+                "bias": (saved_cfg or {}).get("bias", cfg.bias),
+                "dag_depth": (saved_cfg or {}).get("dag_depth", cfg.dag_depth),
+                "sequence_length": (saved_cfg or {}).get(
+                    "sequence_length", cfg.sequence_length
+                ),
+                "softmax_temperature": (saved_cfg or {}).get(
+                    "softmax_temperature", 20.0
+                ),
+            }
+            model_config = PredictorOnlyConfig(**model_cfg_dict)
+            model = PredictorOnlyModel(model_config)
+
+        # ------------------------------------------------------------------ #
+        # Load weights if checkpoint provided
+        # ------------------------------------------------------------------ #
+        if checkpoint is not None and "model" in checkpoint:
+            state_dict = {
+                k.removeprefix("_orig_mod."): v for k, v in checkpoint["model"].items()
+            }
+            model.load_state_dict(state_dict)
+            print(
+                f"[{time.time() - setup_start_time:.2f}s] ✅ Model loaded from checkpoint"
+            )
+        else:
+            init_msg = "Full backbone" if use_full_backbone else "Shallow predictor"
+            print(
+                f"[{time.time() - setup_start_time:.2f}s] ✅ {init_msg} model initialized."
+            )
+
+        # Caller will move model to device; we just return it.
+        return model, model_config

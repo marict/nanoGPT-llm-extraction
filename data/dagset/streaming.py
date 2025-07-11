@@ -52,8 +52,7 @@ def convert_number_to_words(number, max_decimal_places: int = 6) -> str:
     # Handle floats with decimals
     if isinstance(abs_number, float):
         # Convert to string to get the decimal representation
-        # Use high-precision formatting to avoid losing decimal places
-        number_str = f"{abs_number:.15f}"
+        number_str = str(abs_number)
 
         if "." in number_str:
             parts = number_str.split(".")

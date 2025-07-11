@@ -5,16 +5,12 @@ from types import SimpleNamespace
 from unittest import mock
 from unittest.mock import patch
 
-import pytest
 import torch
 
-import train
-from checkpoint_manager import create_regular_checkpoint_manager
-from train import TrainConfig, estimate_loss, generate_run_name
+from checkpoint_manager import CheckpointManager
+from train import estimate_loss
 
 REPO_ROOT = Path(__file__).parent.parent
-
-import pytest
 
 
 # --------------------------------------------------------------------- #
@@ -256,7 +252,7 @@ def test_checkpoint_functionality_comprehensive(tmp_path):
         for filename in matching_files:
             (checkpoints_dir / filename).touch()
 
-        checkpoint_manager = create_regular_checkpoint_manager()
+        checkpoint_manager = CheckpointManager("regular")
         checkpoint_manager.clean_previous_checkpoints(test_cfg.name)
 
         # All matching files should be cleaned
@@ -288,7 +284,7 @@ def test_checkpoint_functionality_comprehensive(tmp_path):
     for filename in test_checkpoints:
         (checkpoints_dir / filename).touch()
 
-    checkpoint_manager = create_regular_checkpoint_manager()
+    checkpoint_manager = CheckpointManager("regular")
     with patch("checkpoint_manager.CHECKPOINT_DIR", str(checkpoints_dir)):
         latest = checkpoint_manager.find_latest_checkpoint(test_cfg.name)
         assert latest == checkpoints_dir / f"ckpt_{safe_name}_3000.pt"
@@ -319,7 +315,7 @@ def test_checkpoint_functionality_comprehensive(tmp_path):
         config_test_cfg = TrainConfig(
             name="config_test", clear_previous_checkpoints=True
         )
-        checkpoint_manager = create_regular_checkpoint_manager()
+        checkpoint_manager = CheckpointManager("regular")
         checkpoint_manager.clean_previous_checkpoints(config_test_cfg.name)
         remaining = [
             f.name

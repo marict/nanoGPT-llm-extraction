@@ -31,15 +31,14 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 import runpod_service
 import wandb
-from checkpoint_manager import (CheckpointLoadError,
-                                create_dag_checkpoint_manager)
+from checkpoint_manager import CheckpointManager
 from data.dagset.streaming import create_dag_structure_dataloaders
-from models.dag_model import GPT, OP_NAMES, GPTConfig
-from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
+from models.dag_model import GPT, OP_NAMES
+from models.predictor_only_model import PredictorOnlyModel
 from python_version_check import check_python_version
-from training_utils import (CHECKPOINT_DIR, BaseConfig, _check_for_nonfinite,
-                            apply_overrides, generate_run_name, get_lr,
-                            load_config_file, parse_args, update_config)
+from training_utils import (CHECKPOINT_DIR, BaseConfig, apply_overrides,
+                            generate_run_name, get_lr, load_config_file,
+                            parse_args, update_config)
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
 CUDA_AVAILABLE = torch.cuda.is_available()
@@ -630,34 +629,12 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     )
 
     # Determine model name and create appropriate config
-    if cfg.full_backbone:
-        model_name = GPT.__name__
-        model_config = GPTConfig(
-            vocab_size=50304,
-            n_embd=cfg.n_embd,
-            n_head=cfg.n_head,
-            n_layer=cfg.n_layer,
-            dropout=cfg.dropout,
-            bias=cfg.bias,
-            dag_depth=cfg.dag_depth,
-            block_size=cfg.sequence_length,
-            softmax_temperature=20.0,
-        )
-    else:
-        model_name = PredictorOnlyModel.__name__
-        model_config = PredictorOnlyConfig(
-            vocab_size=50304,
-            n_embd=cfg.n_embd,
-            n_head=cfg.n_head,
-            dropout=cfg.dropout,
-            bias=cfg.bias,
-            dag_depth=cfg.dag_depth,
-            sequence_length=cfg.sequence_length,
-            softmax_temperature=20.0,
-        )
+    # Model configuration will be created (or reconstructed) later by the
+    # checkpoint manager, so we only need the model name here.
+    model_name = GPT.__name__ if cfg.full_backbone else PredictorOnlyModel.__name__
 
     # Initialize checkpoint manager
-    checkpoint_manager = create_dag_checkpoint_manager()
+    checkpoint_manager = CheckpointManager("dag")
 
     # Clean previous checkpoints
     if master_process and cfg.clear_previous_checkpoints:
@@ -742,67 +719,27 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         f"[{time.time() - setup_start:.2f}s] Initializing {'full GPT backbone' if cfg.full_backbone else 'shallow attention'} DAG predictor model"
     )
 
-    # Handle checkpoint loading using unified checkpoint manager
-    expected_keys = ["model", "optimizer", "model_config", "iter_num", "best_val_loss"]
+    # Load checkpoint (if any) to resume training and obtain iteration/metrics
+    expected_keys = [
+        "model",
+        "optimizer",
+        "model_config",
+        "iter_num",
+        "best_val_loss",
+    ]
     checkpoint, iter_num, best_val_loss = checkpoint_manager.handle_checkpoint_loading(
-        cfg, device, model_name, expected_keys, prefer_best=cfg.save_best
+        cfg,
+        device,
+        model_name,
+        expected_keys,
+        prefer_best=cfg.save_best,
     )
 
-    if checkpoint is not None:
-        # Loading from checkpoint - create model from saved config
-        print(f"[{time.time() - setup_start:.2f}s] Loading model from checkpoint")
-        saved_config = checkpoint["model_config"]
-
-        if cfg.full_backbone:
-            # Reconstruct GPTConfig from saved model_config
-            model_config_dict = {
-                "vocab_size": saved_config.get("vocab_size", 50304),
-                "n_embd": saved_config.get("n_embd", cfg.n_embd),
-                "n_head": saved_config.get("n_head", cfg.n_head),
-                "n_layer": saved_config.get("n_layer", cfg.n_layer),
-                "dropout": saved_config.get("dropout", cfg.dropout),
-                "bias": saved_config.get("bias", cfg.bias),
-                "dag_depth": saved_config.get("dag_depth", cfg.dag_depth),
-                "block_size": saved_config.get("block_size", cfg.sequence_length),
-                "softmax_temperature": saved_config.get("softmax_temperature", 20.0),
-            }
-            model_config = GPTConfig(**model_config_dict)
-            model = GPT(model_config)
-        else:
-            # Reconstruct PredictorOnlyConfig from saved model_config
-            model_config_dict = {
-                "vocab_size": saved_config.get("vocab_size", 50304),
-                "n_embd": saved_config.get("n_embd", cfg.n_embd),
-                "n_head": saved_config.get("n_head", cfg.n_head),
-                "dropout": saved_config.get("dropout", cfg.dropout),
-                "bias": saved_config.get("bias", cfg.bias),
-                "dag_depth": saved_config.get("dag_depth", cfg.dag_depth),
-                "sequence_length": saved_config.get(
-                    "sequence_length", cfg.sequence_length
-                ),
-                "softmax_temperature": saved_config.get("softmax_temperature", 20.0),
-            }
-            model_config = PredictorOnlyConfig(**model_config_dict)
-            model = PredictorOnlyModel(model_config)
-
-        # Load model state
-        state_dict = {
-            k.removeprefix("_orig_mod."): v for k, v in checkpoint["model"].items()
-        }
-        model.load_state_dict(state_dict)
-        print(f"[{time.time() - setup_start:.2f}s] ✅ Model loaded from checkpoint")
-    else:
-        # Creating new model from scratch
-        if cfg.full_backbone:
-            model = GPT(model_config)
-            print(
-                f"[{time.time() - setup_start:.2f}s] ✅ Full backbone model initialized."
-            )
-        else:
-            model = PredictorOnlyModel(model_config)
-            print(
-                f"[{time.time() - setup_start:.2f}s] ✅ Shallow predictor model initialized."
-            )
+    # Initialise or load the model via the checkpoint manager helper. This
+    # centralises all checkpoint/model-config logic in one place.
+    model, model_config = checkpoint_manager.initialize_dag_model(
+        cfg, checkpoint, device, setup_start
+    )
 
     model.to(device)
 

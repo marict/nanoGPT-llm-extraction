@@ -16,12 +16,13 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
-from checkpoint_manager import create_dag_checkpoint_manager
+from checkpoint_manager import CheckpointManager
 from models.dag_model import GPT, GPTConfig
-from train_predictor import (DAGTrainConfig, PredictorOnlyConfig,
-                             PredictorOnlyModel, apply_overrides,
-                             compute_dag_structure_loss, get_lr,
-                             load_config_file, tokenize_texts, update_config)
+from models.predictor_only_model import PredictorOnlyConfig
+from train_predictor import (DAGTrainConfig, PredictorOnlyModel,
+                             apply_overrides, compute_dag_structure_loss,
+                             get_lr, load_config_file, tokenize_texts,
+                             update_config)
 
 
 class TestDAGTrainConfig(unittest.TestCase):
@@ -585,7 +586,7 @@ class TestUtilityFunctions(unittest.TestCase):
 
     def test_get_checkpoint_filename(self):
         """Test checkpoint filename generation."""
-        checkpoint_manager = create_dag_checkpoint_manager()
+        checkpoint_manager = CheckpointManager("dag")
 
         filename = checkpoint_manager.generate_checkpoint_filename(
             "test_run", 1000, "TestModel"
@@ -594,7 +595,7 @@ class TestUtilityFunctions(unittest.TestCase):
 
     def test_all_tensors(self):
         """Test _all_tensors utility function."""
-        checkpoint_manager = create_dag_checkpoint_manager()
+        checkpoint_manager = CheckpointManager("dag")
 
         # Test with all tensors
         state_all_tensors = {
@@ -947,7 +948,7 @@ class TestCheckpointManagement(unittest.TestCase):
 
     def test_safe_torch_save(self):
         """Test safe checkpoint saving."""
-        checkpoint_manager = create_dag_checkpoint_manager()
+        checkpoint_manager = CheckpointManager("dag")
 
         test_data = {
             "model": {"param1": torch.randn(5, 3), "param2": torch.randn(10)},
@@ -974,7 +975,7 @@ class TestCheckpointManagement(unittest.TestCase):
 
     def test_clean_previous_checkpoints(self):
         """Test cleaning previous checkpoints."""
-        checkpoint_manager = create_dag_checkpoint_manager()
+        checkpoint_manager = CheckpointManager("dag")
 
         cfg = DAGTrainConfig()
         cfg.name = "test_clean"
@@ -999,7 +1000,7 @@ class TestCheckpointManagement(unittest.TestCase):
 
     def test_find_latest_checkpoint(self):
         """Test finding the latest checkpoint."""
-        checkpoint_manager = create_dag_checkpoint_manager()
+        checkpoint_manager = CheckpointManager("dag")
 
         cfg = DAGTrainConfig()
         cfg.name = "test_find"
@@ -1021,7 +1022,7 @@ class TestCheckpointManagement(unittest.TestCase):
     def test_save_best_checkpoint_logic(self):
         # This is a conceptual test of the logic, not a full training run.
         # We'll simulate the saving part.
-        checkpoint_manager = create_dag_checkpoint_manager()
+        checkpoint_manager = CheckpointManager("dag")
 
         cfg = DAGTrainConfig(name="best_run", save_best=True)
         model_name = "BestModel"

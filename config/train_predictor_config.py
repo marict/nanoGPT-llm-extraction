@@ -68,4 +68,4 @@ log_loss_weight = 10.0
 op_loss_weight = 1.0
 
 # Random seeds
-seed = -1
+seed = 42
