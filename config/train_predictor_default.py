@@ -22,7 +22,7 @@ always_save_checkpoint = True
 clear_previous_checkpoints = True
 
 # Model initialization
-init_from = "latest"  # or "resume"
+init_from = "scratch"  # or "resume"
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training

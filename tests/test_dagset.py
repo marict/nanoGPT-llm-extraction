@@ -1090,5 +1090,34 @@ class TestExpressionMatching(unittest.TestCase):
                     )
 
 
+class TestNumberConversionFix(unittest.TestCase):
+    def test_e2e_conversion_with_zero_in_decimal(self):
+        """Verify that floats with zeros in decimal part are converted correctly in the full pipeline."""
+        initial_values = [0.167, -6183.3013, -1124.6998, 1.0, 1.0]
+        operations = ["subtract", "subtract", "identity", "identity"]
+
+        # We need a random generator, but it's only used for choosing words for operators,
+        # so a fixed seed is fine.
+        rng = random.Random(42)
+
+        # Force conversion to English
+        expression = plan_to_string_expression(
+            initial_values=initial_values,
+            operations=operations,
+            rng=rng,
+            conversion_probability=1.0,
+            max_decimal_places=10,  # ensure we don't truncate
+        )
+
+        self.assertIn(
+            "six thousand, one hundred and eighty-three point three zero one three",
+            expression,
+        )
+        self.assertIn(
+            "one thousand, one hundred and twenty-four point six nine nine eight",
+            expression,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -52,7 +52,8 @@ def convert_number_to_words(number, max_decimal_places: int = 6) -> str:
     # Handle floats with decimals
     if isinstance(abs_number, float):
         # Convert to string to get the decimal representation
-        number_str = str(abs_number)
+        # Use high-precision formatting to avoid losing decimal places
+        number_str = f"{abs_number:.15f}"
 
         if "." in number_str:
             parts = number_str.split(".")
@@ -220,10 +221,8 @@ def generate_uniform_digit_number(
         # max_digits=4 -> max_decimal_places=3 gives good balance
         max_decimal_places = max(0, max_digits - 1)
 
-    # Uniformly choose the number of integer digits (1 to max_digits)
     num_integer_digits = rng.randint(0, max_digits)
 
-    # Uniformly choose the number of decimal places (0 to max_decimal_places)
     # 0 decimal places = integer
     num_decimal_places = rng.randint(0, max_decimal_places)
 
@@ -232,8 +231,8 @@ def generate_uniform_digit_number(
         # 0-digit: just 0 (for numbers like 0.003)
         integer_part = 0
     elif num_integer_digits == 1:
-        # 1-digit: 0 to 9 (now including 0)
-        integer_part = rng.randint(0, 9)
+        # 1-digit: 1 to 9 (0 is handled by num_integer_digits=0)
+        integer_part = rng.randint(1, 9)
     else:
         # n-digit: from 10^(n-1) to 10^n - 1
         min_val = 10 ** (num_integer_digits - 1)
@@ -246,10 +245,17 @@ def generate_uniform_digit_number(
         decimal_part = 0.0
     else:
         # Generate exactly num_decimal_places digits after decimal
-        # For n decimal places: from 0.1...1 to 0.9...9 (n digits)
-        min_decimal = 10 ** (num_decimal_places - 1)
+        min_decimal = 1
+        if num_decimal_places > 1:
+            min_decimal = 10 ** (num_decimal_places - 1)
         max_decimal = 10**num_decimal_places - 1
-        decimal_digits = rng.randint(min_decimal, max_decimal)
+
+        # Handle case where min_decimal can be > max_decimal if max_decimal is small
+        if min_decimal > max_decimal:
+            decimal_digits = max_decimal
+        else:
+            decimal_digits = rng.randint(min_decimal, max_decimal)
+
         decimal_part = decimal_digits / (10**num_decimal_places)
 
     # Combine integer and decimal parts
@@ -479,7 +485,7 @@ def generate_single_dag_example(
     num_initial_values: int = None,
     rng: random.Random = None,
     conversion_probability: float = 0.3,
-    max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
+    max_digits: int = 4,
     max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
 ) -> DAGExample:
     """Generate a single DAG computation example as a simple math expression.
@@ -503,15 +509,12 @@ def generate_single_dag_example(
         # For DAG with depth n, we need n+1 initial values
         num_initial_values = depth + 1
 
-    # Generate random dag plan with uniform digit count distribution
     initial_values, operations = generate_random_dag_plan(
         depth, num_initial_values, rng, max_digits, max_decimal_places
     )
 
-    # Apply systematic padding (always enabled)
     initial_values, operations = pad_plan(initial_values, operations)
 
-    # Convert DAG plan to simple expression string for data
     expression = plan_to_string_expression(
         initial_values=initial_values,
         operations=operations,
@@ -520,7 +523,6 @@ def generate_single_dag_example(
         max_decimal_places=max_decimal_places,
     )
 
-    # Convert dag plan to a tensor for labels
     signs, log_magnitudes, operations = plan_to_tensors(
         initial_values=initial_values,
         operations=operations,

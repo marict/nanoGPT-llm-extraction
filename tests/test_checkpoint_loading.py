@@ -5,7 +5,7 @@ Tests for checkpoint loading functionality with path-based init_from support.
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 import torch
