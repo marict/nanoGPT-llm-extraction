@@ -272,6 +272,67 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
                     torch.isfinite(param.grad).all(), f"Non-finite gradient for {name}"
                 )
 
+    def test_backwards_pass_with_zero_inputs(self):
+        """Test that backwards pass can go through the predictor only model if the input string just contains 0s."""
+        model = PredictorOnlyModel(self.config)
+        model.train()
+
+        batch_size = 2
+        seq_len = 16
+        # Create input tensor containing only zeros
+        input_ids = torch.zeros((batch_size, seq_len), dtype=torch.long)
+
+        # Forward pass with zero inputs
+        pred_sgn, pred_log, pred_ops = model(input_ids)
+
+        # Verify outputs have reasonable shapes and values
+        expected_nodes = self.config.dag_depth + 1
+        self.assertEqual(pred_sgn.shape, (batch_size, seq_len, expected_nodes))
+        self.assertEqual(pred_log.shape, (batch_size, seq_len, expected_nodes))
+        self.assertEqual(
+            pred_ops.shape, (batch_size, seq_len, self.config.dag_depth, 5)
+        )
+
+        # Verify outputs are finite (not NaN or Inf)
+        self.assertTrue(
+            torch.isfinite(pred_sgn).all(), "pred_sgn contains non-finite values"
+        )
+        self.assertTrue(
+            torch.isfinite(pred_log).all(), "pred_log contains non-finite values"
+        )
+        self.assertTrue(
+            torch.isfinite(pred_ops).all(), "pred_ops contains non-finite values"
+        )
+
+        # Create dummy loss from outputs
+        loss = pred_sgn.mean() + pred_log.mean() + pred_ops.mean()
+
+        # Verify loss is finite
+        self.assertTrue(torch.isfinite(loss), "Loss is not finite")
+
+        # Clear any existing gradients
+        model.zero_grad()
+
+        # Backward pass - this should work without errors
+        loss.backward()
+
+        # Check that gradients were computed and are finite
+        gradient_count = 0
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.assertIsNotNone(param.grad, f"No gradient for parameter {name}")
+                self.assertTrue(
+                    torch.isfinite(param.grad).all(), f"Non-finite gradient for {name}"
+                )
+                # Check that gradient is not all zeros (at least some learning signal)
+                self.assertTrue(
+                    param.grad.abs().sum() > 0, f"Gradient is all zeros for {name}"
+                )
+                gradient_count += 1
+
+        # Ensure we actually checked some gradients
+        self.assertGreater(gradient_count, 0, "No parameters with gradients found")
+
 
 class TestConfigManagement(unittest.TestCase):
     """Test configuration loading and manipulation functions."""

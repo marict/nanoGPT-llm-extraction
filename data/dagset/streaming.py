@@ -221,16 +221,19 @@ def generate_uniform_digit_number(
         max_decimal_places = max(0, max_digits - 1)
 
     # Uniformly choose the number of integer digits (1 to max_digits)
-    num_integer_digits = rng.randint(1, max_digits)
+    num_integer_digits = rng.randint(0, max_digits)
 
     # Uniformly choose the number of decimal places (0 to max_decimal_places)
     # 0 decimal places = integer
     num_decimal_places = rng.randint(0, max_decimal_places)
 
     # Generate integer part with the chosen number of digits
-    if num_integer_digits == 1:
-        # 1-digit: 1 to 9 (excluding 0 to avoid log(0) issues)
-        integer_part = rng.randint(1, 9)
+    if num_integer_digits == 0:
+        # 0-digit: just 0 (for numbers like 0.003)
+        integer_part = 0
+    elif num_integer_digits == 1:
+        # 1-digit: 0 to 9 (now including 0)
+        integer_part = rng.randint(0, 9)
     else:
         # n-digit: from 10^(n-1) to 10^n - 1
         min_val = 10 ** (num_integer_digits - 1)
@@ -275,6 +278,35 @@ def generate_random_dag_plan(
         for _ in range(num_initial_values)
     ]
     operations = [rng.choice(OP_NAMES) for _ in range(depth)]
+
+    # Iterate operations from right-to-left (k indexes that order)
+    # and replace multiply/divide operations with identity when right-hand operand is approximately 1.0
+    # and replace add/subtract operations with identity when right-hand operand is approximately 0.0
+    for k in range(depth - 1, -1, -1):  # k goes from depth-1 to 0
+        # Right-hand operand is initial_values[k+1]
+        if k + 1 < len(initial_values):
+            right_operand = initial_values[k + 1]
+
+            # Check if operation should be replaced with identity
+            should_replace = False
+
+            # Check for multiply/divide with operand approximately 1.0
+            if (
+                operations[k] in ["multiply", "divide"]
+                and abs(right_operand - 1.0) < 1e-6
+            ):
+                should_replace = True
+
+            # Check for add/subtract with operand approximately 0.0
+            elif (
+                operations[k] in ["add", "subtract"] and abs(right_operand - 0.0) < 1e-6
+            ):
+                should_replace = True
+
+            if should_replace:
+                # Replace with identity operation
+                operations[k] = "identity"
+                # Leave the constant untouched (don't modify initial_values[k+1])
 
     return initial_values, operations
 
