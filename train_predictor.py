@@ -460,7 +460,8 @@ def evaluate_dag_model(
                     tgt_sign_vec = target_sgn.squeeze(1)[sample_idx]
                     tgt_log_vec = target_log.squeeze(1)[sample_idx]
 
-                    # Convert to real numbers: sign * exp(log_mag)
+                    # Convert to real numbers: sign * exp(log_mag) for logging.
+                    # Note that this introduces some numerical error so we round to 4 decimal places for logging.
                     pred_real_vals = (
                         (pred_sign_vec * _torch.exp(pred_log_vec)).cpu().tolist()
                     )
