@@ -193,6 +193,40 @@ class TestCheckpointLoading:
         assert iter_num == 0
         assert best_val_loss == 1e9
 
+    @patch("training_utils.find_latest_checkpoint")
+    def test_handle_checkpoint_loading_latest_success(self, mock_find_latest):
+        """Test handle_checkpoint_loading with init_from='latest'."""
+        cfg = _TestConfig()
+        cfg.init_from = "latest"
+
+        # Create a test checkpoint and set up mock
+        checkpoint_path = self.create_test_checkpoint("latest_test.pt")
+        mock_find_latest.return_value = checkpoint_path
+
+        checkpoint, iter_num, best_val_loss = handle_checkpoint_loading(cfg)
+
+        assert checkpoint is not None
+        assert iter_num == 1000
+        assert best_val_loss == 0.5
+
+    @patch("training_utils.find_latest_checkpoint")
+    def test_handle_checkpoint_loading_latest_not_found(self, mock_find_latest):
+        """Test handle_checkpoint_loading with init_from='latest' when no checkpoint exists."""
+        cfg = _TestConfig()
+        cfg.init_from = "latest"
+
+        # Mock returning None (no checkpoint found)
+        mock_find_latest.return_value = None
+
+        with pytest.raises(CheckpointLoadError) as excinfo:
+            handle_checkpoint_loading(cfg)
+        
+        # Verify error message contains helpful information
+        error_msg = str(excinfo.value)
+        assert "No checkpoint found" in error_msg
+        assert "Available checkpoints" in error_msg
+        assert "You can use init_from='scratch'" in error_msg
+
     def test_handle_checkpoint_loading_absolute_path(self):
         """Test handle_checkpoint_loading with absolute path."""
         cfg = _TestConfig()

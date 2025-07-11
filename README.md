@@ -170,3 +170,16 @@ Optimized for cloud GPU training with:
 
 ## License
 MIT (same as nanoGPT)
+
+## Checkpointing
+
+The training script supports various checkpoint loading options via the `init_from` parameter:
+
+- `init_from="scratch"` - Initialize model from scratch
+- `init_from="resume"` or `init_from="latest"` - Load the latest checkpoint for the current config name
+- `init_from="gpt2"`, `init_from="gpt2-medium"`, etc. - Load pretrained GPT-2 weights
+- `init_from="path/to/checkpoint.pt"` - Load from a specific checkpoint file
+
+When no checkpoint is found, the error message will show available checkpoints to help you choose the right one.
+
+## sample

@@ -10,15 +10,12 @@ import os
 import shutil
 import tempfile
 import unittest
-from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
-from data.dagset.streaming import create_dag_structure_dataloaders
 from models.dag_model import GPT, GPTConfig
 from train_predictor import (DAGTrainConfig, PredictorOnlyConfig,
                              PredictorOnlyModel, _all_tensors,

@@ -38,6 +38,42 @@ class CheckpointLoadError(Exception):
     """Raised when checkpoint loading fails."""
 
 
+def _list_available_checkpoints(config_name: str | None = None) -> List[str]:
+    """List available checkpoint files in the checkpoint directory.
+    
+    Args:
+        config_name: Optional config name to filter checkpoints. If None, lists all checkpoints.
+        
+    Returns:
+        List of checkpoint filenames (without full path)
+    """
+    checkpoint_dir = Path(CHECKPOINT_DIR)
+    if not checkpoint_dir.exists():
+        return []
+    
+    if config_name:
+        safe_name = "".join(c for c in config_name if c.isalnum() or c in ("-", "_"))
+        patterns = [
+            f"ckpt_{safe_name}_*.pt",
+            f"ckpt_{safe_name}_*.safetensors",
+            f"dag_ckpt_*_{safe_name}_*.pt",
+            f"dag_ckpt_*_{safe_name}_*.safetensors",
+        ]
+    else:
+        patterns = [
+            "ckpt_*.pt",
+            "ckpt_*.safetensors", 
+            "dag_ckpt_*.pt",
+            "dag_ckpt_*.safetensors",
+        ]
+    
+    checkpoint_files = []
+    for pattern in patterns:
+        checkpoint_files.extend(checkpoint_dir.glob(pattern))
+    
+    return [f.name for f in sorted(checkpoint_files, key=lambda x: x.stat().st_mtime, reverse=True)]
+
+
 def load_checkpoint_from_path(
     checkpoint_path: Union[str, Path],
     device: str = "cpu",
@@ -60,7 +96,22 @@ def load_checkpoint_from_path(
 
     # Check if checkpoint exists
     if not checkpoint_path.exists():
-        error_msg = f"Checkpoint file not found: {checkpoint_path}"
+        # List available checkpoints for a helpful error message
+        available_checkpoints = _list_available_checkpoints()
+        if available_checkpoints:
+            checkpoint_list = "\n".join(f"  - {name}" for name in available_checkpoints[:10])
+            if len(available_checkpoints) > 10:
+                checkpoint_list += f"\n  ... and {len(available_checkpoints) - 10} more"
+            error_msg = (
+                f"Checkpoint file not found: {checkpoint_path}\n"
+                f"Available checkpoints in {CHECKPOINT_DIR}:\n{checkpoint_list}"
+            )
+        else:
+            error_msg = (
+                f"Checkpoint file not found: {checkpoint_path}\n"
+                f"No checkpoints found in {CHECKPOINT_DIR}"
+            )
+        
         print(f"ERROR: {error_msg}")
 
         # Kill runpod instance if running on runpod
@@ -137,6 +188,12 @@ def handle_checkpoint_loading(
     Raises:
         CheckpointLoadError: If checkpoint loading fails
         ValueError: If init_from option is unsupported
+        
+    Supported init_from values:
+        - "scratch": Initialize model from scratch
+        - "resume" or "latest": Load the latest checkpoint for this config name
+        - "gpt2", "gpt2-medium", etc.: Load pretrained GPT-2 weights
+        - Any other string: Treat as a direct path to a checkpoint file
     """
     init_from = cfg.init_from
 
@@ -145,13 +202,39 @@ def handle_checkpoint_loading(
         print("Initializing model from scratch")
         return None, 0, 1e9
 
-    elif init_from == "resume":
+    elif init_from == "resume" or init_from == "latest":
         print("Resuming from latest checkpoint")
         ckpt_path = find_latest_checkpoint(cfg)
         if ckpt_path is None:
-            error_msg = (
-                f"No checkpoint found for config name '{cfg.name}' in {CHECKPOINT_DIR}"
-            )
+            # List available checkpoints for a helpful error message
+            available_checkpoints = _list_available_checkpoints(cfg.name)
+            if available_checkpoints:
+                checkpoint_list = "\n".join(f"  - {name}" for name in available_checkpoints[:10])
+                if len(available_checkpoints) > 10:
+                    checkpoint_list += f"\n  ... and {len(available_checkpoints) - 10} more"
+                error_msg = (
+                    f"No checkpoint found for config name '{cfg.name}' in {CHECKPOINT_DIR}\n"
+                    f"Available checkpoints for '{cfg.name}':\n{checkpoint_list}\n"
+                    f"You can use init_from='scratch' to start from scratch, or specify a specific checkpoint path."
+                )
+            else:
+                all_checkpoints = _list_available_checkpoints()
+                if all_checkpoints:
+                    checkpoint_list = "\n".join(f"  - {name}" for name in all_checkpoints[:10])
+                    if len(all_checkpoints) > 10:
+                        checkpoint_list += f"\n  ... and {len(all_checkpoints) - 10} more"
+                    error_msg = (
+                        f"No checkpoint found for config name '{cfg.name}' in {CHECKPOINT_DIR}\n"
+                        f"Available checkpoints (all configs):\n{checkpoint_list}\n"
+                        f"You can use init_from='scratch' to start from scratch, or specify a specific checkpoint path."
+                    )
+                else:
+                    error_msg = (
+                        f"No checkpoint found for config name '{cfg.name}' in {CHECKPOINT_DIR}\n"
+                        f"No checkpoints found in {CHECKPOINT_DIR}\n"
+                        f"You can use init_from='scratch' to start from scratch."
+                    )
+            
             print(f"ERROR: {error_msg}")
 
             # Kill runpod instance if running on runpod
