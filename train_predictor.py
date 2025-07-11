@@ -841,6 +841,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 # different samples even though the RNG seed itself is fixed.
                 if cfg.seed == -1:
                     seed = random.randint(0, 10000)
+                else:
+                    seed = cfg.seed
 
                 _train_loader_unused, val_loader_eval = (
                     create_dag_structure_dataloaders(

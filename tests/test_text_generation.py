@@ -1,15 +1,12 @@
 import random
 import re
 
-from tiktoken import get_encoding
-
 from data.dagset.streaming import generate_single_dag_example
 from models.dag_model import OP_NAMES
 
 
 def test_seed_8073():
-    rng = random.Random(8073)
-    example = generate_single_dag_example(depth=4, rng=rng, conversion_probability=0)
+    example = generate_single_dag_example(depth=4, conversion_probability=0.3)
     text = example.text
     exp_initial_values = example.initial_values
     print(text)
@@ -20,10 +17,7 @@ def test_text_generation_rounding():
     """Generates 1000 dag examples without english conversion and checks that the string values
     are the example same as the target initial values"""
     for i in range(1000):
-        rng = random.Random(i)
-        example = generate_single_dag_example(
-            depth=4, rng=rng, conversion_probability=0
-        )
+        example = generate_single_dag_example(depth=4, conversion_probability=0)
         text = example.text
         exp_initial_values = example.initial_values
         target_operations = example.operations

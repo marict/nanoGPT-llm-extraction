@@ -75,7 +75,7 @@ def convert_number_to_words(number, max_decimal_places: int = 6) -> str:
 def format_expression_string(
     expression: str,
     conversion_probability: float = 0.3,
-    rng: random.Random = None,
+    seed: int = 42,
     max_decimal_places: int = 6,
 ) -> str:
     """Format an expression string with optional english words and spaces.
@@ -88,8 +88,7 @@ def format_expression_string(
     Returns:
         Formatted expression string with optional english words and spaces
     """
-    if rng is None:
-        rng = random
+    rng = random.Random(seed)
 
     # Symbol to English word mappings
     symbol_to_english = {
@@ -197,24 +196,12 @@ class DAGExample:
 
 
 def generate_uniform_digit_number(
-    rng: random.Random,
+    seed: int = None,
     max_digits: int = 4,
     max_decimal_places: int = None,
 ) -> float:
-    """Generate a number with uniform distribution over digit count combinations.
-
-    This creates uniform distribution over string representations that the tokenizer sees,
-    rather than uniform distribution over numerical values.
-
-    Args:
-        rng: Random number generator
-        max_digits: Maximum number of integer digits (1 to max_digits)
-        max_decimal_places: Maximum decimal places. If None, derived as max_digits-1
-                           to create more uniform string length distribution
-
-    Returns:
-        Generated number as float
-    """
+    """Generate a number with uniform distribution over digit count combinations."""
+    rng = random.Random(seed)
     if max_decimal_places is None:
         # Derive decimal places to create more uniform string lengths
         # max_digits=4 -> max_decimal_places=3 gives good balance
@@ -269,17 +256,18 @@ def generate_uniform_digit_number(
 def generate_random_dag_plan(
     depth: int,
     num_initial_values: int = 1,
-    rng: random.Random = None,
+    seed: int = 42,
     max_digits: int = 4,  # Maximum number of integer digits (1=1-digit, 2=2-digit, etc.)
     max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
 ) -> tuple[list[float], list[str]]:
-    if rng is None:
-        rng = random
+    rng = random.Random(seed)
 
     # Generate random initial values with uniform digit count distribution
     # for both integer part and decimal part
     initial_values = [
-        generate_uniform_digit_number(rng, max_digits, max_decimal_places)
+        generate_uniform_digit_number(
+            max_digits=max_digits, max_decimal_places=max_decimal_places, seed=seed
+        )
         for _ in range(num_initial_values)
     ]
     operations = [rng.choice(OP_NAMES) for _ in range(depth)]
@@ -357,13 +345,11 @@ def pad_plan(
 def plan_to_string_expression(
     initial_values: list[float],
     operations: list[str],
-    rng: random.Random = None,
+    seed: int = 42,
     conversion_probability: float = 0.3,
     max_decimal_places: int = 6,
 ) -> tuple[str, torch.Tensor, torch.Tensor]:
     """Convert DAG structure to a simple mathematical expression string following stack-based execution."""
-    if rng is None:
-        rng = random
 
     # Generate expression using only absolute values with unique identifiers
     # This avoids sympy's automatic simplification of signs
@@ -439,7 +425,7 @@ def plan_to_string_expression(
 
     # Apply final formatting
     result = format_expression_string(
-        expr_str, conversion_probability, rng, max_decimal_places
+        expr_str, conversion_probability, seed, max_decimal_places
     )
 
     return result
@@ -482,7 +468,7 @@ def plan_to_tensors(
 def generate_single_dag_example(
     depth: int,
     num_initial_values: int = None,
-    rng: random.Random = None,
+    seed: int = 42,
     conversion_probability: float = 0.3,
     max_digits: int = 4,
     max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
@@ -500,16 +486,13 @@ def generate_single_dag_example(
     Returns:
         DAG computation example with simple expression format
     """
-    if rng is None:
-        rng = random
-
     # Determine number of initial values to match DAG predictor expectations
     if num_initial_values is None:
         # For DAG with depth n, we need n+1 initial values
         num_initial_values = depth + 1
 
     initial_values, operations = generate_random_dag_plan(
-        depth, num_initial_values, rng, max_digits, max_decimal_places
+        depth, num_initial_values, seed, max_digits, max_decimal_places
     )
 
     initial_values, operations = pad_plan(initial_values, operations)
@@ -517,7 +500,7 @@ def generate_single_dag_example(
     expression = plan_to_string_expression(
         initial_values=initial_values,
         operations=operations,
-        rng=rng,
+        seed=seed,
         conversion_probability=conversion_probability,
         max_decimal_places=max_decimal_places,
     )
@@ -541,7 +524,7 @@ def generate_dag_dataset(
     num_examples: int = 10000,
     max_depth: int = 8,
     num_initial_values: int = None,
-    rng: random.Random = None,
+    seed: int = 42,
     conversion_probability: float = 0.3,
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
@@ -560,9 +543,6 @@ def generate_dag_dataset(
     Returns:
         List of DAG examples with structure only (no computed results)
     """
-    if rng is None:
-        rng = random
-
     examples = []
 
     for _ in range(num_examples):
@@ -574,7 +554,7 @@ def generate_dag_dataset(
         example = generate_single_dag_example(
             depth,
             num_initial_values,
-            rng,
+            seed,
             conversion_probability,
             max_digits,
             max_decimal_places,
@@ -628,9 +608,6 @@ class DAGStructureDataset:
         # Initialize tokenizer
         self.enc = get_encoding(tokenizer)
 
-        # Create random state
-        self.random_state = random.Random(seed)
-
         # Operation name to index mapping
         self.op_name_to_idx = {name: i for i, name in enumerate(OP_NAMES)}
         self.op_idx_to_name = {i: name for i, name in enumerate(OP_NAMES)}
@@ -651,7 +628,7 @@ class DAGStructureDataset:
         example = generate_single_dag_example(
             depth=depth,
             num_initial_values=self.num_initial_values,
-            rng=self.random_state,
+            seed=self.seed,
             conversion_probability=self.english_conversion_probability,
             max_digits=self.max_digits,
             max_decimal_places=self.max_decimal_places,

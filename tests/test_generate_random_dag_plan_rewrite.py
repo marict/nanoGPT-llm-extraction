@@ -143,7 +143,6 @@ class TestGenerateRandomDagPlanRewrite:
             initial_values, operations = generate_random_dag_plan(
                 depth=depth,
                 num_initial_values=num_initial_values,
-                rng=rng,
                 max_digits=4,
             )
 
@@ -221,7 +220,6 @@ class TestGenerateRandomDagPlanRewrite:
             initial_values, operations = generate_random_dag_plan(
                 depth=depth,
                 num_initial_values=num_initial_values,
-                rng=rng,
                 max_digits=4,
             )
 
@@ -368,7 +366,6 @@ class TestGenerateRandomDagPlanRewrite:
             initial_values, operations = generate_random_dag_plan(
                 depth=depth,
                 num_initial_values=num_initial_values,
-                rng=rng,
                 max_digits=4,
             )
 
@@ -411,7 +408,6 @@ class TestGenerateRandomDagPlanRewrite:
             initial_values, operations = generate_random_dag_plan(
                 depth=depth,
                 num_initial_values=num_initial_values,
-                rng=rng,
                 max_digits=4,
             )
 
@@ -443,11 +439,10 @@ class TestGenerateRandomDagPlanRewrite:
 
     def test_edge_cases(self):
         """Test edge cases and boundary conditions."""
-        rng = random.Random(111)
 
         # Test with minimal depth
         initial_values, operations = generate_random_dag_plan(
-            depth=1, num_initial_values=2, rng=rng, max_digits=4
+            depth=1, num_initial_values=2, max_digits=4
         )
         assert len(initial_values) == 2
         assert len(operations) == 1

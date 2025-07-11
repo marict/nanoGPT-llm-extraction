@@ -27,14 +27,12 @@ def test_mixed_conversion():
     print("Testing different conversion probabilities:")
     print("=" * 50)
 
-    rng = random.Random(42)
-
     for prob in [0.2, 0.4, 0.6]:
         print(f"\nConversion probability: {prob}")
         print("-" * 30)
 
         for expr in test_expressions[:3]:  # Test first 3 expressions
-            converted = format_expression_string(expr, prob, rng)
+            converted = format_expression_string(expr, prob)
             print(f"  Original: {expr}")
             print(f"  Mixed:    {converted}")
             print()
@@ -48,7 +46,7 @@ def test_mixed_conversion():
     print("Multiple mixed conversions:")
 
     for i in range(8):
-        converted = format_expression_string(test_expr, 0.5, rng)
+        converted = format_expression_string(test_expr, 0.5)
         print(f"  {i+1}: {converted}")
 
     print("\n" + "=" * 60)
@@ -59,12 +57,14 @@ def test_mixed_conversion():
         # Generate a DAG example
         depth = 2 + i % 3  # Depths 2, 3, 4
         dag_example = generate_single_dag_example(
-            depth=depth, max_digits=3, rng=random.Random(100 + i)
+            depth=depth,
+            max_digits=3,
         )
 
         # Apply mixed conversion
         mixed_text = format_expression_string(
-            dag_example.text, conversion_probability=0.4, rng=random.Random(200 + i)
+            dag_example.text,
+            conversion_probability=0.4,
         )
 
         print(f"\nExample {i+1} (depth {depth}):")

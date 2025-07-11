@@ -36,7 +36,7 @@ class TestIdentityFunction(unittest.TestCase):
         identity_found = False
         for seed in range(100):  # Try many seeds to find identity operation
             initial_values, operations = generate_random_dag_plan(
-                depth=3, num_initial_values=4, rng=np.random.RandomState(seed)
+                depth=3, num_initial_values=4, seed=seed
             )
             if "identity" in operations:
                 identity_found = True
@@ -80,15 +80,12 @@ class TestIdentityFunction(unittest.TestCase):
 
     def test_identity_operation_with_exact_decimal_representation(self):
         """Test that identity operations work with exact decimal representation."""
-        import random
-
-        rng = random.Random(42)
 
         # Generate values with exact decimal representation
         initial_values = [
-            generate_uniform_digit_number(rng, max_digits=3, max_decimal_places=2),
-            generate_uniform_digit_number(rng, max_digits=2, max_decimal_places=1),
-            generate_uniform_digit_number(rng, max_digits=1, max_decimal_places=0),
+            generate_uniform_digit_number(max_digits=3, max_decimal_places=2),
+            generate_uniform_digit_number(max_digits=2, max_decimal_places=1),
+            generate_uniform_digit_number(max_digits=1, max_decimal_places=0),
         ]
 
         # Create operations with identity
@@ -98,7 +95,6 @@ class TestIdentityFunction(unittest.TestCase):
         expression = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
-            rng=rng,
             conversion_probability=0.0,
         )
 
@@ -189,22 +185,16 @@ class TestIdentityFunction(unittest.TestCase):
 
     def test_identity_operation_consistency(self):
         """Test that identity operations are consistent across different generation methods."""
-        import random
-
-        rng = random.Random(42)
-
         # Test with same initial values and operations
         initial_values = [10.5, 7.25, 3.0]
         operations = ["identity", "add"]
 
         # Generate expression multiple times
         expressions = []
-        masks = []
         for _ in range(3):
             expr = plan_to_string_expression(
                 initial_values=initial_values.copy(),
                 operations=operations.copy(),
-                rng=random.Random(42),  # Same seed for consistency
                 conversion_probability=0.0,
             )
             expressions.append(expr)
@@ -226,7 +216,7 @@ class TestIdentityFunction(unittest.TestCase):
         # Generate many examples to try to find all operations
         for seed in range(200):
             initial_values, operations = generate_random_dag_plan(
-                depth=1, num_initial_values=2, rng=np.random.RandomState(seed)
+                depth=1, num_initial_values=2, seed=seed
             )
             operations_found.update(operations)
 
@@ -689,7 +679,7 @@ class TestExpressionMatching(unittest.TestCase):
         expression = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
-            rng=random.Random(42),
+            seed=42,
             conversion_probability=0.0,
         )
 
@@ -733,7 +723,7 @@ class TestExpressionMatching(unittest.TestCase):
                 expression = plan_to_string_expression(
                     initial_values=initial_values,
                     operations=operations,
-                    rng=rng,
+                    seed=seed,
                     conversion_probability=0.0,
                 )
 
@@ -782,7 +772,7 @@ class TestExpressionMatching(unittest.TestCase):
         expression_numeric = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
-            rng=random.Random(42),
+            seed=42,
             conversion_probability=0.0,
         )
 
@@ -790,7 +780,7 @@ class TestExpressionMatching(unittest.TestCase):
         expression_english = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
-            rng=random.Random(42),
+            seed=42,
             conversion_probability=0.3,
         )
 
@@ -830,7 +820,7 @@ class TestExpressionMatching(unittest.TestCase):
                     expression = plan_to_string_expression(
                         initial_values=initial_values,
                         operations=ops,
-                        rng=random.Random(seed),
+                        seed=seed,
                         conversion_probability=0.0,
                     )
 
@@ -870,7 +860,7 @@ class TestExpressionMatching(unittest.TestCase):
         text = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
-            rng=random.Random(42),
+            seed=42,
             conversion_probability=1.0,  # Force English conversion for determinism
         )
 
@@ -899,7 +889,7 @@ class TestExpressionMatching(unittest.TestCase):
         text = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
-            rng=random.Random(123),
+            seed=123,
             conversion_probability=1.0,
         )
 
@@ -960,7 +950,7 @@ class TestExpressionMatching(unittest.TestCase):
                 expression = plan_to_string_expression(
                     initial_values=initial_values,
                     operations=operations,
-                    rng=random.Random(42),
+                    seed=42,
                     conversion_probability=0.0,
                 )
 
@@ -1048,7 +1038,7 @@ class TestExpressionMatching(unittest.TestCase):
                 expression = plan_to_string_expression(
                     initial_values=initial_values,
                     operations=operations,
-                    rng=random.Random(42),
+                    seed=42,
                     conversion_probability=1.0,
                 )
 
@@ -1096,15 +1086,10 @@ class TestNumberConversionFix(unittest.TestCase):
         initial_values = [0.167, -6183.3013, -1124.6998, 1.0, 1.0]
         operations = ["subtract", "subtract", "identity", "identity"]
 
-        # We need a random generator, but it's only used for choosing words for operators,
-        # so a fixed seed is fine.
-        rng = random.Random(42)
-
         # Force conversion to English
         expression = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
-            rng=rng,
             conversion_probability=1.0,
             max_decimal_places=10,  # ensure we don't truncate
         )
