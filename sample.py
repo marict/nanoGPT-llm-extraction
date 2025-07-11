@@ -11,6 +11,7 @@ from pathlib import Path
 import tiktoken
 import torch
 
+from checkpoint_manager import create_regular_checkpoint_manager
 from dag_logger import DAGLogger
 from models.dag_model import GPT, GPTConfig
 from python_version_check import check_python_version
@@ -65,46 +66,73 @@ ctx = (
     else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 )
 
-# model
+
+# model initialization using checkpoint manager
+class SimpleConfig:
+    """Simple configuration object for sample.py"""
+
+    def __init__(self, init_from, dropout=0.0):
+        self.init_from = init_from
+        self.dropout = dropout
+        # Default name for checkpoint lookup
+        self.name = "default"  # Will look for any available checkpoint
+
+
+# Create configuration and checkpoint manager
+config = SimpleConfig(init_from, dropout=0.0)
+checkpoint_manager = create_regular_checkpoint_manager()
+
+# Initialize model using checkpoint manager
 if init_from == "resume":
-    # init from a model saved in the checkpoint directory
-    checkpoint_dir = (
-        "/runpod-volume/checkpoints"
-        if os.path.exists("/runpod-volume")
-        else "checkpoints"
-    )
+    # For resume, use the checkpoint manager to find the latest checkpoint
+    config.init_from = "latest"
 
-    # Find the latest checkpoint file
-    checkpoint_files = glob.glob(str(Path(checkpoint_dir) / "ckpt_*.pt"))
-    if not checkpoint_files:
-        raise FileNotFoundError(f"No checkpoint files found in {checkpoint_dir}")
+    # Basic model args for initialization
+    model_args = {
+        "n_layer": 12,
+        "n_head": 12,
+        "n_embd": 768,
+        "block_size": 1024,
+        "bias": True,
+        "vocab_size": 50304,
+        "dropout": 0.0,
+        "dag_depth": 0,
+    }
 
-    # Sort by iteration number and get the latest
-    def get_iter_num(filename):
-        return int(Path(filename).stem.split("_")[1])
+    # Use checkpoint manager to find and load any available checkpoint
+    checkpoint_manager_any = create_regular_checkpoint_manager()
+    try:
+        # Look for any checkpoint files
+        latest_checkpoint = checkpoint_manager_any.find_latest_checkpoint(
+            "", any_run=True
+        )
+        if latest_checkpoint:
+            print(f"Loading checkpoint from: {latest_checkpoint}")
+            checkpoint = checkpoint_manager_any.load_checkpoint_from_path(
+                latest_checkpoint, device
+            )
 
-    latest_checkpoint = max(checkpoint_files, key=get_iter_num)
-    print(f"Loading checkpoint from: {latest_checkpoint}")
+            # Update model_args from checkpoint
+            model_args = checkpoint["model_args"]
+            model_args.setdefault("dag_depth", 0)
 
-    checkpoint = torch.load(latest_checkpoint, map_location=device)
+            # Create and load model
+            gptconf = GPTConfig(**model_args)
+            model = GPT(gptconf)
 
-    # Determine model type based on checkpoint contents
-    model_args = checkpoint["model_args"]
-    if "dag_depth" in model_args:
-        gptconf = GPTConfig(**model_args)
-        model = GPT(gptconf)
-    else:
-        # Regular GPT model (dag_depth=0 by default)
-        model_args.setdefault("dag_depth", 0)
-        gptconf = GPTConfig(**model_args)
-        model = GPT(gptconf)
-
-    state_dict = checkpoint["model"]
-    unwanted_prefix = "_orig_mod."
-    for k, v in list(state_dict.items()):
-        if k.startswith(unwanted_prefix):
-            state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
-    model.load_state_dict(state_dict)
+            state_dict = checkpoint["model"]
+            unwanted_prefix = "_orig_mod."
+            for k, v in list(state_dict.items()):
+                if k.startswith(unwanted_prefix):
+                    state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
+            model.load_state_dict(state_dict)
+        else:
+            raise FileNotFoundError(
+                f"No checkpoint files found in {checkpoint_manager.checkpoint_dir}"
+            )
+    except Exception as e:
+        print(f"Error loading checkpoint: {e}")
+        raise
 elif init_from.startswith("gpt2"):
     # init from a given GPT-2 model
     model = GPT.from_pretrained(init_from, dict(dropout=0.0))

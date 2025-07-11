@@ -16,15 +16,12 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
+from checkpoint_manager import create_dag_checkpoint_manager
 from models.dag_model import GPT, GPTConfig
 from train_predictor import (DAGTrainConfig, PredictorOnlyConfig,
-                             PredictorOnlyModel, _all_tensors,
-                             _safe_torch_save, apply_overrides,
-                             clean_previous_checkpoints,
-                             compute_dag_structure_loss, evaluate_dag_model,
-                             find_latest_checkpoint, get_checkpoint_filename,
-                             get_lr, load_config_file, tokenize_texts,
-                             update_config)
+                             PredictorOnlyModel, apply_overrides,
+                             compute_dag_structure_loss, get_lr,
+                             load_config_file, tokenize_texts, update_config)
 
 
 class TestDAGTrainConfig(unittest.TestCase):
@@ -588,27 +585,30 @@ class TestUtilityFunctions(unittest.TestCase):
 
     def test_get_checkpoint_filename(self):
         """Test checkpoint filename generation."""
-        cfg = DAGTrainConfig()
-        cfg.name = "test_run"
-        model_name = "TestModel"
-        filename = get_checkpoint_filename(cfg, 1000, model_name)
-        self.assertEqual(filename, "dag_ckpt_TestModel_test_run_001000")
+        checkpoint_manager = create_dag_checkpoint_manager()
+
+        filename = checkpoint_manager.generate_checkpoint_filename(
+            "test_run", 1000, "TestModel"
+        )
+        self.assertEqual(filename, "ckpt_test_run_1000.pt")
 
     def test_all_tensors(self):
         """Test _all_tensors utility function."""
+        checkpoint_manager = create_dag_checkpoint_manager()
+
         # Test with all tensors
         state_all_tensors = {
             "layer1": {"weight": torch.randn(10, 10), "bias": torch.randn(10)},
             "layer2": {"weight": torch.randn(5, 10)},
         }
-        self.assertTrue(_all_tensors(state_all_tensors))
+        self.assertTrue(checkpoint_manager._all_tensors(state_all_tensors))
 
         # Test with non-tensor
         state_mixed = {
             "layer1": {"weight": torch.randn(10, 10), "bias": [1, 2, 3]},
             "layer2": {"weight": torch.randn(5, 10)},
         }
-        self.assertFalse(_all_tensors(state_mixed))
+        self.assertFalse(checkpoint_manager._all_tensors(state_mixed))
 
 
 class TestTokenization(unittest.TestCase):
@@ -947,6 +947,8 @@ class TestCheckpointManagement(unittest.TestCase):
 
     def test_safe_torch_save(self):
         """Test safe checkpoint saving."""
+        checkpoint_manager = create_dag_checkpoint_manager()
+
         test_data = {
             "model": {"param1": torch.randn(5, 3), "param2": torch.randn(10)},
             "optimizer": {"state": {}, "param_groups": []},
@@ -954,10 +956,12 @@ class TestCheckpointManagement(unittest.TestCase):
             "best_val_loss": 0.5,
         }
 
-        save_path = Path(self.temp_dir) / "test_checkpoint.pt"
-
         # Test successful save
-        _safe_torch_save(test_data, save_path)
+        filename = "test_checkpoint.pt"
+        with patch("checkpoint_manager.CHECKPOINT_DIR", self.temp_dir):
+            checkpoint_manager.save_checkpoint(test_data, filename)
+
+        save_path = Path(self.temp_dir) / filename
         self.assertTrue(save_path.exists())
 
         # Load and verify
@@ -970,76 +974,74 @@ class TestCheckpointManagement(unittest.TestCase):
 
     def test_clean_previous_checkpoints(self):
         """Test cleaning previous checkpoints."""
+        checkpoint_manager = create_dag_checkpoint_manager()
 
         cfg = DAGTrainConfig()
         cfg.name = "test_clean"
         cfg.clear_previous_checkpoints = True
         model_name = "MyModel"
 
-        # Create some fake checkpoint files
+        # Create some fake checkpoint files (using new naming pattern)
         checkpoint_dir = Path(self.temp_dir)
-        (checkpoint_dir / f"dag_ckpt_{model_name}_{cfg.name}_000100.pt").touch()
-        (checkpoint_dir / f"dag_ckpt_{model_name}_{cfg.name}_000200.pt").touch()
+        (checkpoint_dir / f"ckpt_{cfg.name}_100.pt").touch()
+        (checkpoint_dir / f"ckpt_{cfg.name}_200.pt").touch()
         (
-            checkpoint_dir / f"dag_ckpt_{model_name}_other_run_000100.pt"
+            checkpoint_dir / f"ckpt_other_run_100.pt"
         ).touch()  # Different run name, shouldn't be removed
 
-        with patch("train_predictor.CHECKPOINT_DIR", self.temp_dir):
-            clean_previous_checkpoints(cfg, model_name)
+        with patch("checkpoint_manager.CHECKPOINT_DIR", self.temp_dir):
+            checkpoint_manager.clean_previous_checkpoints(cfg.name, model_name)
 
         # Check that only the matching checkpoints were removed
-        self.assertFalse(
-            (checkpoint_dir / f"dag_ckpt_{model_name}_{cfg.name}_000100.pt").exists()
-        )
-        self.assertFalse(
-            (checkpoint_dir / f"dag_ckpt_{model_name}_{cfg.name}_000200.pt").exists()
-        )
-        self.assertTrue(
-            (checkpoint_dir / f"dag_ckpt_{model_name}_other_run_000100.pt").exists()
-        )
+        self.assertFalse((checkpoint_dir / f"ckpt_{cfg.name}_100.pt").exists())
+        self.assertFalse((checkpoint_dir / f"ckpt_{cfg.name}_200.pt").exists())
+        self.assertTrue((checkpoint_dir / f"ckpt_other_run_100.pt").exists())
 
     def test_find_latest_checkpoint(self):
         """Test finding the latest checkpoint."""
+        checkpoint_manager = create_dag_checkpoint_manager()
+
         cfg = DAGTrainConfig()
         cfg.name = "test_find"
         model_name = "MyModel"
 
         checkpoint_dir = Path(self.temp_dir)
 
-        # Create checkpoint files with different iteration numbers
-        (checkpoint_dir / f"dag_ckpt_{model_name}_{cfg.name}_000100.pt").touch()
-        (checkpoint_dir / f"dag_ckpt_{model_name}_{cfg.name}_000500.pt").touch()
-        (checkpoint_dir / f"dag_ckpt_{model_name}_{cfg.name}_000300.pt").touch()
+        # Create checkpoint files with different iteration numbers (using new naming pattern)
+        (checkpoint_dir / f"ckpt_{cfg.name}_100.pt").touch()
+        (checkpoint_dir / f"ckpt_{cfg.name}_500.pt").touch()
+        (checkpoint_dir / f"ckpt_{cfg.name}_300.pt").touch()
 
-        with patch("train_predictor.CHECKPOINT_DIR", self.temp_dir):
-            latest = find_latest_checkpoint(cfg, model_name)
+        with patch("checkpoint_manager.CHECKPOINT_DIR", self.temp_dir):
+            latest = checkpoint_manager.find_latest_checkpoint(cfg.name, model_name)
 
         self.assertIsNotNone(latest)
-        self.assertEqual(latest.name, f"dag_ckpt_{model_name}_{cfg.name}_000500.pt")
+        self.assertEqual(latest.name, f"ckpt_{cfg.name}_500.pt")
 
     def test_save_best_checkpoint_logic(self):
         # This is a conceptual test of the logic, not a full training run.
         # We'll simulate the saving part.
+        checkpoint_manager = create_dag_checkpoint_manager()
+
         cfg = DAGTrainConfig(name="best_run", save_best=True)
         model_name = "BestModel"
 
-        # Simulate finding a new best checkpoint
-        best_ckpt_base = f"dag_ckpt_{model_name}_{cfg.name}_best"
+        # Simulate finding a new best checkpoint (using new naming pattern)
+        best_ckpt_filename = f"ckpt_{cfg.name}_best.pt"
 
         # First best
-        (self.checkpoint_dir / f"{best_ckpt_base}.pt").touch()
+        (self.checkpoint_dir / best_ckpt_filename).touch()
 
         # Verify it exists
-        self.assertTrue((self.checkpoint_dir / f"{best_ckpt_base}.pt").exists())
+        self.assertTrue((self.checkpoint_dir / best_ckpt_filename).exists())
 
-        # Simulate another new best, this time with safetensors
-        (self.checkpoint_dir / f"{best_ckpt_base}.safetensors").touch()
-
-        # The new file should exist, and you would typically remove the old one
-        # but the save logic should handle overwriting via rename
-        self.assertTrue(
-            (self.checkpoint_dir / f"{best_ckpt_base}.safetensors").exists()
-        )
+        # Test that we can find the best checkpoint
+        with patch("checkpoint_manager.CHECKPOINT_DIR", str(self.checkpoint_dir)):
+            best_checkpoint = checkpoint_manager.find_best_checkpoint(
+                cfg.name, model_name
+            )
+            self.assertIsNotNone(best_checkpoint)
+            self.assertEqual(best_checkpoint.name, best_ckpt_filename)
 
 
 class TestCheckpointLoadingPredictor(unittest.TestCase):

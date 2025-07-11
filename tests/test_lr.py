@@ -1,15 +1,33 @@
 """
-Comprehensive tests for cyclical learning rate functionality.
+Comprehensive tests for learning rate functionality.
 
-This test suite verifies that the cyclical learning rate implementation works correctly
-both with and without warmup composition, including edge cases and mathematical correctness.
+This test suite verifies that the learning rate implementations work correctly,
+including cosine decay, warmup, and cyclical modulation. It also tests edge
+cases and mathematical correctness.
 """
 
 import math
 import unittest
 from dataclasses import dataclass
 
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
 from training_utils import BaseConfig, get_lr
+
+
+@dataclass
+class LRTestConfig(BaseConfig):
+    name: str = "test"
+    learning_rate: float = 1e-3
+    min_lr: float = 1e-4
+    warmup_iters: int = 100
+    lr_decay_iters: int = 1000
+    max_iters: int = 1000
+    use_cyclical_lr: bool = False
+    cyclical_lr_period: int = 200
+    cyclical_lr_amplitude: float = 0.1
 
 
 @dataclass
@@ -23,6 +41,62 @@ class CyclicalLRTestConfig(BaseConfig):
     use_cyclical_lr: bool = True
     cyclical_lr_period: int = 200
     cyclical_lr_amplitude: float = 0.1
+
+
+@dataclass
+class _LRLoggingTestConfig(BaseConfig):
+    """Minimal configuration for LR schedule testing."""
+
+    name: str = "lr_logging_test"
+    learning_rate: float = 1e-3
+    min_lr: float = 1e-5
+    warmup_iters: int = 5
+    lr_decay_iters: int = 20
+    max_iters: int = 20
+
+
+class TestLRScheduler(unittest.TestCase):
+    def test_cosine_schedule(self):
+        """Test the cosine decay learning rate schedule."""
+        cfg = LRTestConfig()
+
+        # Test warmup phase
+        self.assertAlmostEqual(get_lr(0, cfg=cfg), cfg.learning_rate / cfg.warmup_iters)
+        self.assertAlmostEqual(get_lr(49, cfg=cfg), cfg.learning_rate * 0.5)
+        self.assertAlmostEqual(get_lr(99, cfg=cfg), cfg.learning_rate)
+
+        # Test decay phase
+        mid_decay_it = cfg.warmup_iters + (cfg.lr_decay_iters - cfg.warmup_iters) // 2
+        decay_ratio = (mid_decay_it - cfg.warmup_iters) / (
+            cfg.lr_decay_iters - cfg.warmup_iters
+        )
+        expected_lr = cfg.min_lr + 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) * (
+            cfg.learning_rate - cfg.min_lr
+        )
+        self.assertAlmostEqual(get_lr(mid_decay_it, cfg=cfg), expected_lr)
+
+        # Test end of decay
+        self.assertAlmostEqual(get_lr(cfg.lr_decay_iters, cfg=cfg), cfg.min_lr)
+
+    def test_compositional_cyclical_schedule(self):
+        """Test the compositional cyclical learning rate schedule."""
+        cfg = LRTestConfig(use_cyclical_lr=True)
+
+        # Test warmup phase (should not be affected)
+        self.assertAlmostEqual(get_lr(0, cfg=cfg), cfg.learning_rate / cfg.warmup_iters)
+        self.assertAlmostEqual(get_lr(49, cfg=cfg), cfg.learning_rate * 0.5)
+        self.assertAlmostEqual(get_lr(99, cfg=cfg), cfg.learning_rate)
+
+        # Test modulated decay phase
+        it = cfg.warmup_iters + cfg.cyclical_lr_period // 4
+        base_lr = get_lr(it, cfg=LRTestConfig(use_cyclical_lr=False))
+        expected_lr = base_lr * (1.0 + cfg.cyclical_lr_amplitude)
+        self.assertAlmostEqual(get_lr(it, cfg=cfg), expected_lr, delta=1e-5)
+
+        it = cfg.warmup_iters + 3 * cfg.cyclical_lr_period // 4
+        base_lr = get_lr(it, cfg=LRTestConfig(use_cyclical_lr=False))
+        expected_lr = base_lr * (1.0 - cfg.cyclical_lr_amplitude)
+        self.assertAlmostEqual(get_lr(it, cfg=cfg), expected_lr, delta=1e-5)
 
 
 class TestCyclicalLR(unittest.TestCase):
@@ -443,6 +517,35 @@ class TestCyclicalLR(unittest.TestCase):
             lr_3, base_3 * (1.0 - cfg_short.cyclical_lr_amplitude), places=5
         )  # sin(3π/2) = -1
         self.assertAlmostEqual(lr_4, base_4 * 1.0, places=5)  # sin(2π) = 0
+
+
+class TestLearningRateLogging(unittest.TestCase):
+    """Ensure that the learning-rate schedule and logging behave as expected."""
+
+    def setUp(self):
+        self.cfg = _LRLoggingTestConfig()
+        # Simple model with a single parameter so the optimizer is lightweight.
+        self.model = nn.Linear(4, 2)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=self.cfg.learning_rate)
+
+    def test_optimizer_lr_matches_schedule(self):
+        """Verify that the LR we place into the optimizer matches get_lr()."""
+        for iter_num in range(self.cfg.max_iters + 1):
+            scheduled_lr = get_lr(iter_num, cfg=self.cfg)
+            # Simulate the update performed in the training loop.
+            for pg in self.optimizer.param_groups:
+                pg["lr"] = scheduled_lr
+            # The logged value should be pulled from the optimizer after update.
+            logged_lr = self.optimizer.param_groups[0]["lr"]
+            self.assertAlmostEqual(logged_lr, scheduled_lr, places=8)
+
+    def test_schedule_is_not_strictly_linear(self):
+        """Confirm the LR schedule contains both increasing and decreasing phases."""
+        lrs = [get_lr(i, cfg=self.cfg) for i in range(self.cfg.max_iters + 1)]
+        # Ensure warmup increases.
+        self.assertGreater(lrs[self.cfg.warmup_iters], lrs[0])
+        # Ensure decay phase decreases after warmup.
+        self.assertLess(lrs[-1], lrs[self.cfg.warmup_iters])
 
 
 if __name__ == "__main__":

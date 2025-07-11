@@ -31,17 +31,15 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 import runpod_service
 import wandb
+from checkpoint_manager import (CheckpointLoadError,
+                                create_dag_checkpoint_manager)
 from data.dagset.streaming import create_dag_structure_dataloaders
 from models.dag_model import GPT, OP_NAMES, GPTConfig
 from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
 from python_version_check import check_python_version
-from training_utils import (CHECKPOINT_DIR, BaseConfig, CheckpointLoadError,
-                            _check_for_nonfinite, _safe_torch_save,
-                            apply_overrides, clean_previous_checkpoints,
-                            find_latest_checkpoint, generate_run_name,
-                            get_checkpoint_filename, get_lr,
-                            handle_checkpoint_loading, load_config_file,
-                            parse_args, update_config)
+from training_utils import (CHECKPOINT_DIR, BaseConfig, _check_for_nonfinite,
+                            apply_overrides, generate_run_name, get_lr,
+                            load_config_file, parse_args, update_config)
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
 CUDA_AVAILABLE = torch.cuda.is_available()
@@ -109,58 +107,6 @@ def tokenize_texts(texts: List[str], sequence_length: int, device: str) -> torch
 # --------------------------------------------------------------------------- #
 # Safe checkpoint saving with retry (copied from train.py)
 # --------------------------------------------------------------------------- #
-
-
-class CheckpointSaveError(Exception):
-    """Raised when saving a checkpoint fails after retries."""
-
-
-def _safe_torch_save(obj, path: Path, retries: int = 1) -> None:
-    """Save <obj> to <path> with retry; raise CheckpointSaveError on failure."""
-    tmp_path = path.with_suffix(".tmp")
-
-    for attempt in range(retries + 1):
-        try:
-            if _HAVE_ST and _all_tensors(obj):
-                # Use safetensors for pure tensor checkpoints
-                final_path = path.with_suffix(".safetensors")
-                _st.save_file(obj, str(tmp_path))
-            else:
-                # Fallback to torch.save for mixed-type or no-safetensors state
-                final_path = path.with_suffix(".pt")
-                torch.save(obj, tmp_path, _use_new_zipfile_serialization=False)
-
-            try:
-                # Perform atomic rename
-                tmp_path.rename(final_path)
-                return
-            except Exception as exc:
-                if attempt >= retries:
-                    raise CheckpointSaveError(
-                        f"Failed to rename temporary checkpoint {tmp_path} to {final_path}: {exc}"
-                    ) from exc
-                print(
-                    f"Retrying checkpoint rename ({attempt+1}/{retries}) due to error: {exc}"
-                )
-        except Exception as exc:  # noqa: BLE001
-            if attempt >= retries:
-                raise CheckpointSaveError(
-                    f"Failed to save checkpoint {path}: {exc}"
-                ) from exc
-            print(
-                f"Retrying checkpoint save ({attempt+1}/{retries}) due to error: {exc}"
-            )
-
-
-def _all_tensors(state):
-    """Return True if every leaf value in state dict is a torch.Tensor."""
-    for v in state.values():
-        if isinstance(v, dict):
-            if not _all_tensors(v):
-                return False
-        elif not isinstance(v, torch.Tensor):
-            return False
-    return True
 
 
 @dataclass
@@ -340,78 +286,6 @@ def get_lr(it: int, *, cfg: DAGTrainConfig) -> float:
         return max(cfg.min_lr, final_lr)
 
     return base_lr
-
-
-def get_checkpoint_filename(
-    cfg: DAGTrainConfig, iter_num: int, model_name: str, val_acc: float | None = None
-) -> str:
-    """Generate checkpoint filename without extension."""
-    if val_acc is not None:
-        # Format accuracy as percentage with 2 decimal places
-        acc_str = f"{val_acc * 100:.2f}acc"
-        return f"dag_ckpt_{model_name}_{cfg.name}_{iter_num:06d}_{acc_str}"
-    else:
-        return f"dag_ckpt_{model_name}_{cfg.name}_{iter_num:06d}"
-
-
-def clean_previous_checkpoints(cfg: DAGTrainConfig, model_name: str) -> None:
-    """Remove previous checkpoints if requested."""
-    if not cfg.clear_previous_checkpoints:
-        return
-
-    checkpoint_dir = Path(CHECKPOINT_DIR)
-    if not checkpoint_dir.exists():
-        return
-
-    pattern = f"dag_ckpt_{model_name}_{cfg.name}_*.*"
-    removed_count = 0
-    for ckpt_file in checkpoint_dir.glob(pattern):
-        try:
-            ckpt_file.unlink()
-            removed_count += 1
-        except Exception as e:
-            print(f"Warning: Could not remove {ckpt_file}: {e}")
-
-    if removed_count > 0:
-        print(f"Removed {removed_count} previous checkpoints")
-
-
-def find_latest_checkpoint(
-    cfg: DAGTrainConfig, model_name: str, any_run: bool = False
-) -> Path | None:
-    """Find the latest checkpoint for resuming training."""
-    checkpoint_dir = Path(CHECKPOINT_DIR)
-    if not checkpoint_dir.exists():
-        return None
-
-    if any_run:
-        pattern = f"dag_ckpt_{model_name}_*_*.*"
-    else:
-        pattern = f"dag_ckpt_{model_name}_{cfg.name}_*.*"
-
-    checkpoints = list(checkpoint_dir.glob(pattern))
-
-    if not checkpoints:
-        return None
-
-    # Sort by iteration number
-    def extract_iter(path):
-        try:
-            parts = path.stem.split("_")
-            # Handle both old format (dag_ckpt_model_name_iter) and new format (dag_ckpt_model_name_iter_acc)
-            if len(parts) >= 4:
-                # Extract iteration number - it's either the last part or second to last
-                iter_part = (
-                    parts[-2]
-                    if len(parts) >= 5 and parts[-1].endswith("acc")
-                    else parts[-1]
-                )
-                return int(iter_part)
-            return 0
-        except (ValueError, IndexError):
-            return 0
-
-    return max(checkpoints, key=extract_iter)
 
 
 def compute_dag_structure_loss(
@@ -782,9 +656,12 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
             softmax_temperature=20.0,
         )
 
+    # Initialize checkpoint manager
+    checkpoint_manager = create_dag_checkpoint_manager()
+
     # Clean previous checkpoints
-    if master_process:
-        clean_previous_checkpoints(cfg, model_name=model_name)
+    if master_process and cfg.clear_previous_checkpoints:
+        checkpoint_manager.clean_previous_checkpoints(cfg.name, model_name)
 
     # W&B initialization
     if master_process:
@@ -865,10 +742,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         f"[{time.time() - setup_start:.2f}s] Initializing {'full GPT backbone' if cfg.full_backbone else 'shallow attention'} DAG predictor model"
     )
 
-    # Handle checkpoint loading using shared logic
+    # Handle checkpoint loading using unified checkpoint manager
     expected_keys = ["model", "optimizer", "model_config", "iter_num", "best_val_loss"]
-    checkpoint, iter_num, best_val_loss = handle_checkpoint_loading(
-        cfg, device, None, expected_keys
+    checkpoint, iter_num, best_val_loss = checkpoint_manager.handle_checkpoint_loading(
+        cfg, device, model_name, expected_keys, prefer_best=cfg.save_best
     )
 
     if checkpoint is not None:
@@ -1070,43 +947,48 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     best_val_loss = eval_losses["total_loss"]
 
                 if iter_num > 0:
+                    checkpoint_data = {
+                        "model": raw_model.state_dict(),
+                        "optimizer": optimizer.state_dict(),
+                        "model_config": model_config.__dict__,
+                        "iter_num": iter_num,
+                        "best_val_loss": best_val_loss,
+                    }
+
                     if cfg.save_best and is_new_best:
                         # Save a single checkpoint for the best model
                         val_acc = eval_losses.get("op_accuracy", None)
-                        if val_acc is not None:
-                            acc_str = f"{val_acc * 100:.2f}acc"
-                            checkpoint_base = f"dag_ckpt_{raw_model.__class__.__name__}_{cfg.name}_best_{acc_str}"
-                        else:
-                            checkpoint_base = f"dag_ckpt_{raw_model.__class__.__name__}_{cfg.name}_best"
-                        checkpoint_path = Path(CHECKPOINT_DIR) / checkpoint_base
-                        print(f"saving new best checkpoint to {checkpoint_path}")
-                        checkpoint = {
-                            "model": raw_model.state_dict(),
-                            "optimizer": optimizer.state_dict(),
-                            "model_config": model_config.__dict__,
-                            "iter_num": iter_num,
-                            "best_val_loss": best_val_loss,
-                        }
-                        _safe_torch_save(checkpoint, checkpoint_path)
+                        checkpoint_filename = (
+                            checkpoint_manager.generate_checkpoint_filename(
+                                cfg.name,
+                                iter_num,
+                                raw_model.__class__.__name__,
+                                val_acc=val_acc,
+                                is_best=True,
+                            )
+                        )
+                        print(f"saving new best checkpoint: {checkpoint_filename}")
+                        checkpoint_manager.save_checkpoint(
+                            checkpoint_data, checkpoint_filename
+                        )
 
                     if cfg.always_save_checkpoint or (
                         not cfg.save_best and is_new_best
                     ):
                         # Save a checkpoint with the iteration number
                         val_acc = eval_losses.get("op_accuracy", None)
-                        checkpoint_base = get_checkpoint_filename(
-                            cfg, iter_num, raw_model.__class__.__name__, val_acc=val_acc
+                        checkpoint_filename = (
+                            checkpoint_manager.generate_checkpoint_filename(
+                                cfg.name,
+                                iter_num,
+                                raw_model.__class__.__name__,
+                                val_acc=val_acc,
+                            )
                         )
-                        checkpoint_path = Path(CHECKPOINT_DIR) / checkpoint_base
-                        print(f"saving checkpoint to {checkpoint_path}")
-                        checkpoint = {
-                            "model": raw_model.state_dict(),
-                            "optimizer": optimizer.state_dict(),
-                            "model_config": model_config.__dict__,
-                            "iter_num": iter_num,
-                            "best_val_loss": best_val_loss,
-                        }
-                        _safe_torch_save(checkpoint, checkpoint_path)
+                        print(f"saving checkpoint: {checkpoint_filename}")
+                        checkpoint_manager.save_checkpoint(
+                            checkpoint_data, checkpoint_filename
+                        )
 
                 model.train()
 

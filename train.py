@@ -31,18 +31,16 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 import runpod_service
 import wandb
+from checkpoint_manager import (CheckpointLoadError,
+                                create_regular_checkpoint_manager)
 from dag_logger import DAGLogger
 from data import prepare_dataset
 from evaluation import estimate_loss, evaluate_math
 from models.dag_model import GPT, OP_NAMES, GPTConfig
 from python_version_check import check_python_version
-from training_utils import (CHECKPOINT_DIR, BaseConfig, CheckpointLoadError,
-                            _check_for_nonfinite, _safe_torch_save,
-                            apply_overrides, clean_previous_checkpoints,
-                            find_latest_checkpoint, generate_run_name,
-                            get_checkpoint_filename, get_lr,
-                            handle_checkpoint_loading, load_config_file,
-                            parse_args, update_config)
+from training_utils import (CHECKPOINT_DIR, BaseConfig, _check_for_nonfinite,
+                            apply_overrides, generate_run_name, get_lr,
+                            load_config_file, parse_args, update_config)
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
 CUDA_AVAILABLE = torch.cuda.is_available()
@@ -163,9 +161,11 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     )
 
     # --------------------------------------------------------------------- #
-    # Clean previous checkpoints if requested (before W&B initialization)
+    # Initialize checkpoint manager and clean previous checkpoints if requested
     # --------------------------------------------------------------------- #
-    clean_previous_checkpoints(cfg)
+    checkpoint_manager = create_regular_checkpoint_manager()
+    if cfg.clear_previous_checkpoints:
+        checkpoint_manager.clean_previous_checkpoints(cfg.name)
 
     # --------------------------------------------------------------------- #
     # W&B
@@ -382,47 +382,15 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     model_args["dag_depth"] = cfg.dag_depth
     ModelConfig, ModelClass = GPTConfig, GPT
 
-    # Handle checkpoint loading using shared logic
-    expected_keys = ["model_args", "model", "iter_num", "best_val_loss"]
-    checkpoint, iter_num, best_val_loss = handle_checkpoint_loading(
-        cfg, device, GPT, expected_keys
+    # Initialize model using checkpoint manager
+    model, checkpoint = checkpoint_manager.initialize_model(
+        cfg, model_args, ModelConfig, ModelClass, device, setup_start
     )
 
-    if cfg.init_from == "scratch":
-        if master_process:
-            print(f"[{time.time() - setup_start:.2f}s] Initializing model from scratch")
-        gptconf = ModelConfig(**model_args)
-        model = ModelClass(gptconf)
-    elif cfg.init_from.startswith("gpt2"):
-        if master_process:
-            print(
-                f"[{time.time() - setup_start:.2f}s] Loading GPT-2 weights {cfg.init_from}"
-            )
-        base_model = GPT.from_pretrained(cfg.init_from, dict(dropout=cfg.dropout))
-        for k in ("n_layer", "n_head", "n_embd", "block_size", "bias", "vocab_size"):
-            model_args[k] = getattr(base_model.config, k)
-        # Create new model with desired dag_depth (may be >0)
-        gptconf = ModelConfig(**model_args)
-        model = ModelClass(gptconf)
-
-        # Load overlapping GPT weights regardless of dag_depth
-        try:
-            model.load_state_dict(base_model.state_dict(), strict=False)
-        except Exception as e:
-            print(f"Warning: partial weight loading failed: {e}")
-    elif checkpoint is not None:
-        # Loading from checkpoint (resume or direct path)
-        print(f"[{time.time() - setup_start:.2f}s] Loading model from checkpoint")
-        for k in ("n_layer", "n_head", "n_embd", "block_size", "bias", "vocab_size"):
-            model_args[k] = checkpoint["model_args"][k]
-        gptconf = ModelConfig(**model_args)
-        model = ModelClass(gptconf)
-        state_dict = {
-            k.removeprefix("_orig_mod."): v for k, v in checkpoint["model"].items()
-        }
-        model.load_state_dict(state_dict)
-    else:
-        raise ValueError(f"Unsupported init_from {cfg.init_from}")
+    # Get iteration info for training loop
+    _, iter_num, best_val_loss = checkpoint_manager.handle_checkpoint_loading(
+        cfg, device, expected_keys=["model_args", "model", "iter_num", "best_val_loss"]
+    )
 
     if cfg.sequence_length < model.config.block_size:
         model.crop_block_size(cfg.sequence_length)
@@ -650,13 +618,16 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                                 if valid_scores:
                                     val_acc = sum(valid_scores) / len(valid_scores)
 
-                            checkpoint_filename = get_checkpoint_filename(
-                                cfg, iter_num, val_acc=val_acc
+                            checkpoint_filename = (
+                                checkpoint_manager.generate_checkpoint_filename(
+                                    cfg.name, iter_num, val_acc=val_acc
+                                )
                             )
-                            checkpoint_path = Path(CHECKPOINT_DIR) / checkpoint_filename
                             if master_process:
-                                print(f"Saving checkpoint: {checkpoint_path}")
-                            _safe_torch_save(ckpt, checkpoint_path)
+                                print(f"Saving checkpoint: {checkpoint_filename}")
+                                checkpoint_manager.save_checkpoint(
+                                    ckpt, checkpoint_filename
+                                )
                 except Exception as e:
                     print(f"Warning: Error during evaluation: {e}")
 

@@ -9,8 +9,8 @@ import pytest
 import torch
 
 import train
-from train import (TrainConfig, clean_previous_checkpoints, estimate_loss,
-                   find_latest_checkpoint, generate_run_name)
+from checkpoint_manager import create_regular_checkpoint_manager
+from train import TrainConfig, estimate_loss, generate_run_name
 
 REPO_ROOT = Path(__file__).parent.parent
 
@@ -198,8 +198,7 @@ def test_config_and_edge_cases_comprehensive(monkeypatch, capsys):
 # --------------------------------------------------------------------- #
 def test_checkpoint_functionality_comprehensive(tmp_path):
     """Test comprehensive checkpoint functionality including generation, cleanup, and finding."""
-    from train import (TrainConfig, clean_previous_checkpoints,
-                       find_latest_checkpoint)
+    from train import TrainConfig
 
     # Test checkpoint filename generation
     cfg = TrainConfig()
@@ -243,7 +242,7 @@ def test_checkpoint_functionality_comprehensive(tmp_path):
         (checkpoints_dir / filename).touch()
 
     # Test cleanup using actual function signature
-    with patch("training_utils.CHECKPOINT_DIR", str(checkpoints_dir)):
+    with patch("checkpoint_manager.CHECKPOINT_DIR", str(checkpoints_dir)):
         test_cfg = TrainConfig(name="test_cleanup", clear_previous_checkpoints=True)
 
         # Create test files with pattern that matches the config name
@@ -257,7 +256,8 @@ def test_checkpoint_functionality_comprehensive(tmp_path):
         for filename in matching_files:
             (checkpoints_dir / filename).touch()
 
-        clean_previous_checkpoints(test_cfg)
+        checkpoint_manager = create_regular_checkpoint_manager()
+        checkpoint_manager.clean_previous_checkpoints(test_cfg.name)
 
         # All matching files should be cleaned
         remaining_files = [
@@ -288,14 +288,15 @@ def test_checkpoint_functionality_comprehensive(tmp_path):
     for filename in test_checkpoints:
         (checkpoints_dir / filename).touch()
 
-    with patch("training_utils.CHECKPOINT_DIR", str(checkpoints_dir)):
-        latest = find_latest_checkpoint(test_cfg)
+    checkpoint_manager = create_regular_checkpoint_manager()
+    with patch("checkpoint_manager.CHECKPOINT_DIR", str(checkpoints_dir)):
+        latest = checkpoint_manager.find_latest_checkpoint(test_cfg.name)
         assert latest == checkpoints_dir / f"ckpt_{safe_name}_3000.pt"
 
     # Test finding with no checkpoints
     (checkpoints_dir / "non_matching_file.txt").touch()
-    with patch("training_utils.CHECKPOINT_DIR", str(checkpoints_dir)):
-        latest = find_latest_checkpoint(TrainConfig(name="no_such_run"))
+    with patch("checkpoint_manager.CHECKPOINT_DIR", str(checkpoints_dir)):
+        latest = checkpoint_manager.find_latest_checkpoint("no_such_run")
         assert latest is None
 
     # Test config file checkpoint cleanup integration
@@ -314,11 +315,12 @@ def test_checkpoint_functionality_comprehensive(tmp_path):
         (config_checkpoints_dir / filename).touch()
 
     # Test cleanup works with config-based filenames
-    with patch("training_utils.CHECKPOINT_DIR", str(config_checkpoints_dir)):
+    with patch("checkpoint_manager.CHECKPOINT_DIR", str(config_checkpoints_dir)):
         config_test_cfg = TrainConfig(
             name="config_test", clear_previous_checkpoints=True
         )
-        clean_previous_checkpoints(config_test_cfg)
+        checkpoint_manager = create_regular_checkpoint_manager()
+        checkpoint_manager.clean_previous_checkpoints(config_test_cfg.name)
         remaining = [
             f.name
             for f in config_checkpoints_dir.iterdir()

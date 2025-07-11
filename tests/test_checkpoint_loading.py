@@ -10,10 +10,9 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-from training_utils import (BaseConfig, CheckpointLoadError,
-                            find_latest_checkpoint, get_checkpoint_filename,
-                            handle_checkpoint_loading,
-                            load_checkpoint_from_path)
+from checkpoint_manager import (CheckpointLoadError,
+                                create_regular_checkpoint_manager)
+from training_utils import BaseConfig, get_checkpoint_filename
 
 
 class _TestConfig(BaseConfig):
@@ -33,6 +32,9 @@ class TestCheckpointLoading:
         self.test_dir = tempfile.mkdtemp()
         self.test_checkpoint_dir = Path(self.test_dir) / "checkpoints"
         self.test_checkpoint_dir.mkdir(exist_ok=True)
+
+        # Create checkpoint manager
+        self.checkpoint_manager = create_regular_checkpoint_manager()
 
         # Sample checkpoint data
         self.sample_checkpoint = {
@@ -63,7 +65,9 @@ class TestCheckpointLoading:
         """Test successful checkpoint loading from a specific path."""
         checkpoint_path = self.create_test_checkpoint("test_checkpoint.pt")
 
-        loaded_checkpoint = load_checkpoint_from_path(checkpoint_path)
+        loaded_checkpoint = self.checkpoint_manager.load_checkpoint_from_path(
+            checkpoint_path
+        )
 
         assert "model" in loaded_checkpoint
         assert "iter_num" in loaded_checkpoint
@@ -75,7 +79,7 @@ class TestCheckpointLoading:
         missing_path = self.test_checkpoint_dir / "nonexistent.pt"
 
         with pytest.raises(CheckpointLoadError, match="Checkpoint file not found"):
-            load_checkpoint_from_path(missing_path)
+            self.checkpoint_manager.load_checkpoint_from_path(missing_path)
 
     def test_load_checkpoint_from_path_invalid_file(self):
         """Test error handling when checkpoint file is corrupted."""
@@ -85,7 +89,7 @@ class TestCheckpointLoading:
             f.write("not a valid pytorch file")
 
         with pytest.raises(CheckpointLoadError, match="Failed to load checkpoint"):
-            load_checkpoint_from_path(invalid_path)
+            self.checkpoint_manager.load_checkpoint_from_path(invalid_path)
 
     def test_load_checkpoint_from_path_missing_keys(self):
         """Test validation of required keys in checkpoint."""
@@ -97,7 +101,9 @@ class TestCheckpointLoading:
 
         expected_keys = ["model", "optimizer", "iter_num"]
         with pytest.raises(CheckpointLoadError, match="missing required keys"):
-            load_checkpoint_from_path(checkpoint_path, expected_keys=expected_keys)
+            self.checkpoint_manager.load_checkpoint_from_path(
+                checkpoint_path, expected_keys=expected_keys
+            )
 
     @patch.dict(os.environ, {"RUNPOD_POD_ID": "test_pod_123"})
     @patch("runpod_service.stop_runpod")
@@ -106,7 +112,7 @@ class TestCheckpointLoading:
         missing_path = self.test_checkpoint_dir / "nonexistent.pt"
 
         with pytest.raises(CheckpointLoadError):
-            load_checkpoint_from_path(missing_path)
+            self.checkpoint_manager.load_checkpoint_from_path(missing_path)
 
         # Verify that runpod service stop was called
         mock_stop_runpod.assert_called_once()
@@ -123,7 +129,9 @@ class TestCheckpointLoading:
 
         expected_keys = ["model", "optimizer", "iter_num"]
         with pytest.raises(CheckpointLoadError):
-            load_checkpoint_from_path(checkpoint_path, expected_keys=expected_keys)
+            self.checkpoint_manager.load_checkpoint_from_path(
+                checkpoint_path, expected_keys=expected_keys
+            )
 
         # Verify that runpod service stop was called
         mock_stop_runpod.assert_called_once()
@@ -135,96 +143,93 @@ class TestCheckpointLoading:
 
         # Should raise error but not attempt runpod termination
         with pytest.raises(CheckpointLoadError):
-            load_checkpoint_from_path(missing_path)
+            self.checkpoint_manager.load_checkpoint_from_path(missing_path)
 
     def test_handle_checkpoint_loading_scratch(self):
         """Test handle_checkpoint_loading with init_from='scratch'."""
         cfg = _TestConfig()
         cfg.init_from = "scratch"
 
-        checkpoint, iter_num, best_val_loss = handle_checkpoint_loading(cfg)
-
-        assert checkpoint is None
-        assert iter_num == 0
-        assert best_val_loss == 1e9
-
-    @patch("training_utils.find_latest_checkpoint")
-    def test_handle_checkpoint_loading_resume_success(self, mock_find_latest):
-        """Test handle_checkpoint_loading with init_from='resume'."""
-        cfg = _TestConfig()
-        cfg.init_from = "resume"
-
-        # Create a test checkpoint and set up mock
-        checkpoint_path = self.create_test_checkpoint("resume_test.pt")
-        mock_find_latest.return_value = checkpoint_path
-
-        checkpoint, iter_num, best_val_loss = handle_checkpoint_loading(cfg)
-
-        assert checkpoint is not None
-        assert iter_num == 1000
-        assert best_val_loss == 0.5
-
-    @patch("training_utils.find_latest_checkpoint")
-    def test_handle_checkpoint_loading_resume_not_found(self, mock_find_latest):
-        """Test handle_checkpoint_loading with init_from='resume' when no checkpoint exists."""
-        cfg = _TestConfig()
-        cfg.init_from = "resume"
-
-        # Mock returning None (no checkpoint found)
-        mock_find_latest.return_value = None
-
-        with pytest.raises(CheckpointLoadError, match="No checkpoint found"):
-            handle_checkpoint_loading(cfg)
-
-    def test_handle_checkpoint_loading_gpt2(self):
-        """Test handle_checkpoint_loading with init_from='gpt2'."""
-        cfg = _TestConfig()
-        cfg.init_from = "gpt2"
-
-        # Create a mock GPT model class
-        class MockGPT:
-            pass
-
-        checkpoint, iter_num, best_val_loss = handle_checkpoint_loading(
-            cfg, gpt_model_class=MockGPT
+        checkpoint, iter_num, best_val_loss = (
+            self.checkpoint_manager.handle_checkpoint_loading(cfg)
         )
 
         assert checkpoint is None
         assert iter_num == 0
         assert best_val_loss == 1e9
 
-    @patch("training_utils.find_latest_checkpoint")
-    def test_handle_checkpoint_loading_latest_success(self, mock_find_latest):
-        """Test handle_checkpoint_loading with init_from='latest'."""
+    @patch("checkpoint_manager.CHECKPOINT_DIR")
+    def test_handle_checkpoint_loading_resume_success(self, mock_checkpoint_dir):
+        """Test handle_checkpoint_loading with init_from='resume'."""
         cfg = _TestConfig()
-        cfg.init_from = "latest"
+        cfg.init_from = "resume"
 
-        # Create a test checkpoint and set up mock
-        checkpoint_path = self.create_test_checkpoint("latest_test.pt")
-        mock_find_latest.return_value = checkpoint_path
+        # Set up the mock checkpoint directory
+        mock_checkpoint_dir.__str__ = lambda: str(self.test_checkpoint_dir)
 
-        checkpoint, iter_num, best_val_loss = handle_checkpoint_loading(cfg)
+        # Create a test checkpoint
+        checkpoint_path = self.create_test_checkpoint("ckpt_test_config_1000.pt")
+
+        with patch("checkpoint_manager.CHECKPOINT_DIR", str(self.test_checkpoint_dir)):
+            checkpoint, iter_num, best_val_loss = (
+                self.checkpoint_manager.handle_checkpoint_loading(cfg)
+            )
 
         assert checkpoint is not None
         assert iter_num == 1000
         assert best_val_loss == 0.5
 
-    @patch("training_utils.find_latest_checkpoint")
-    def test_handle_checkpoint_loading_latest_not_found(self, mock_find_latest):
+    def test_handle_checkpoint_loading_resume_not_found(self):
+        """Test handle_checkpoint_loading with init_from='resume' when no checkpoint exists."""
+        cfg = _TestConfig()
+        cfg.init_from = "resume"
+
+        with patch("checkpoint_manager.CHECKPOINT_DIR", str(self.test_checkpoint_dir)):
+            with pytest.raises(CheckpointLoadError, match="No checkpoint found"):
+                self.checkpoint_manager.handle_checkpoint_loading(cfg)
+
+    def test_handle_checkpoint_loading_gpt2(self):
+        """Test handle_checkpoint_loading with init_from='gpt2'."""
+        cfg = _TestConfig()
+        cfg.init_from = "gpt2"
+
+        checkpoint, iter_num, best_val_loss = (
+            self.checkpoint_manager.handle_checkpoint_loading(cfg)
+        )
+
+        assert checkpoint is None
+        assert iter_num == 0
+        assert best_val_loss == 1e9
+
+    def test_handle_checkpoint_loading_latest_success(self):
+        """Test handle_checkpoint_loading with init_from='latest'."""
+        cfg = _TestConfig()
+        cfg.init_from = "latest"
+
+        # Create a test checkpoint
+        checkpoint_path = self.create_test_checkpoint("ckpt_test_config_1000.pt")
+
+        with patch("checkpoint_manager.CHECKPOINT_DIR", str(self.test_checkpoint_dir)):
+            checkpoint, iter_num, best_val_loss = (
+                self.checkpoint_manager.handle_checkpoint_loading(cfg)
+            )
+
+        assert checkpoint is not None
+        assert iter_num == 1000
+        assert best_val_loss == 0.5
+
+    def test_handle_checkpoint_loading_latest_not_found(self):
         """Test handle_checkpoint_loading with init_from='latest' when no checkpoint exists."""
         cfg = _TestConfig()
         cfg.init_from = "latest"
 
-        # Mock returning None (no checkpoint found)
-        mock_find_latest.return_value = None
+        with patch("checkpoint_manager.CHECKPOINT_DIR", str(self.test_checkpoint_dir)):
+            with pytest.raises(CheckpointLoadError) as excinfo:
+                self.checkpoint_manager.handle_checkpoint_loading(cfg)
 
-        with pytest.raises(CheckpointLoadError) as excinfo:
-            handle_checkpoint_loading(cfg)
-        
         # Verify error message contains helpful information
         error_msg = str(excinfo.value)
         assert "No checkpoint found" in error_msg
-        assert "Available checkpoints" in error_msg
         assert "You can use init_from='scratch'" in error_msg
 
     def test_handle_checkpoint_loading_absolute_path(self):
@@ -233,24 +238,25 @@ class TestCheckpointLoading:
         checkpoint_path = self.create_test_checkpoint("absolute_test.pt")
         cfg.init_from = str(checkpoint_path)  # Use absolute path
 
-        checkpoint, iter_num, best_val_loss = handle_checkpoint_loading(cfg)
+        checkpoint, iter_num, best_val_loss = (
+            self.checkpoint_manager.handle_checkpoint_loading(cfg)
+        )
 
         assert checkpoint is not None
         assert iter_num == 1000
         assert best_val_loss == 0.5
 
-    @patch("training_utils.CHECKPOINT_DIR")
-    def test_handle_checkpoint_loading_relative_path(self, mock_checkpoint_dir):
+    def test_handle_checkpoint_loading_relative_path(self):
         """Test handle_checkpoint_loading with relative path."""
-        mock_checkpoint_dir = str(self.test_checkpoint_dir)
-
         cfg = _TestConfig()
         # Create checkpoint and use relative filename
         self.create_test_checkpoint("relative_test.pt")
         cfg.init_from = "relative_test.pt"  # Use relative path
 
-        with patch("training_utils.CHECKPOINT_DIR", mock_checkpoint_dir):
-            checkpoint, iter_num, best_val_loss = handle_checkpoint_loading(cfg)
+        with patch("checkpoint_manager.CHECKPOINT_DIR", str(self.test_checkpoint_dir)):
+            checkpoint, iter_num, best_val_loss = (
+                self.checkpoint_manager.handle_checkpoint_loading(cfg)
+            )
 
         assert checkpoint is not None
         assert iter_num == 1000
@@ -262,7 +268,7 @@ class TestCheckpointLoading:
         cfg.init_from = "/nonexistent/path/checkpoint.pt"
 
         with pytest.raises(CheckpointLoadError):
-            handle_checkpoint_loading(cfg)
+            self.checkpoint_manager.handle_checkpoint_loading(cfg)
 
     def test_handle_checkpoint_loading_unsupported_option(self):
         """Test handle_checkpoint_loading with unsupported init_from option."""
@@ -271,7 +277,7 @@ class TestCheckpointLoading:
 
         # This should be treated as a path, so it will raise CheckpointLoadError
         with pytest.raises(CheckpointLoadError):
-            handle_checkpoint_loading(cfg)
+            self.checkpoint_manager.handle_checkpoint_loading(cfg)
 
     def test_checkpoint_loading_with_expected_keys(self):
         """Test checkpoint loading with expected keys validation."""
@@ -280,8 +286,10 @@ class TestCheckpointLoading:
         cfg.init_from = str(checkpoint_path)
 
         expected_keys = ["model", "optimizer", "iter_num", "best_val_loss"]
-        checkpoint, iter_num, best_val_loss = handle_checkpoint_loading(
-            cfg, expected_keys=expected_keys
+        checkpoint, iter_num, best_val_loss = (
+            self.checkpoint_manager.handle_checkpoint_loading(
+                cfg, expected_keys=expected_keys
+            )
         )
 
         assert checkpoint is not None
@@ -292,10 +300,14 @@ class TestCheckpointLoading:
         checkpoint_path = self.create_test_checkpoint("string_path_test.pt")
 
         # Test with string input
-        checkpoint_str = load_checkpoint_from_path(str(checkpoint_path))
+        checkpoint_str = self.checkpoint_manager.load_checkpoint_from_path(
+            str(checkpoint_path)
+        )
 
         # Test with Path input
-        checkpoint_path_obj = load_checkpoint_from_path(checkpoint_path)
+        checkpoint_path_obj = self.checkpoint_manager.load_checkpoint_from_path(
+            checkpoint_path
+        )
 
         # Both should work and return the same data
         assert checkpoint_str["iter_num"] == checkpoint_path_obj["iter_num"]
@@ -344,35 +356,37 @@ class TestCheckpointLoading:
         for path in [old_format_path, new_format_path, newer_format_path]:
             self.create_test_checkpoint(path.name)
 
-        # Patch CHECKPOINT_DIR to use our test directory
-        with patch("training_utils.CHECKPOINT_DIR", str(self.test_checkpoint_dir)):
+        # Use checkpoint manager to find latest
+        with patch("checkpoint_manager.CHECKPOINT_DIR", str(self.test_checkpoint_dir)):
             # Should find the latest checkpoint (iter 300) regardless of format
-            latest = find_latest_checkpoint(cfg)
+            latest = self.checkpoint_manager.find_latest_checkpoint(cfg.name)
             assert latest is not None
             assert latest.name == "ckpt_accuracy_test_300_90.15acc.pt"
 
     def test_dag_checkpoint_filename_with_accuracy(self):
         """Test that DAG predictor checkpoint filenames include validation accuracy."""
+        from checkpoint_manager import create_dag_checkpoint_manager
         from train_predictor import DAGTrainConfig
-        from train_predictor import \
-            get_checkpoint_filename as dag_get_checkpoint_filename
 
+        checkpoint_manager = create_dag_checkpoint_manager()
         cfg = DAGTrainConfig()
         cfg.name = "dag_test"
         iter_num = 1000
         model_name = "PredictorOnlyModel"
 
         # Test without validation accuracy
-        filename_no_acc = dag_get_checkpoint_filename(cfg, iter_num, model_name)
-        expected_no_acc = "dag_ckpt_PredictorOnlyModel_dag_test_001000"
+        filename_no_acc = checkpoint_manager.generate_checkpoint_filename(
+            cfg.name, iter_num, model_name
+        )
+        expected_no_acc = "ckpt_dag_test_1000.pt"
         assert filename_no_acc == expected_no_acc
 
         # Test with validation accuracy (op_accuracy)
         val_acc = 0.7823  # 78.23%
-        filename_with_acc = dag_get_checkpoint_filename(
-            cfg, iter_num, model_name, val_acc=val_acc
+        filename_with_acc = checkpoint_manager.generate_checkpoint_filename(
+            cfg.name, iter_num, model_name, val_acc=val_acc
         )
-        expected_with_acc = "dag_ckpt_PredictorOnlyModel_dag_test_001000_78.23acc"
+        expected_with_acc = "ckpt_dag_test_1000_78.23acc.pt"
         assert filename_with_acc == expected_with_acc
 
 
@@ -399,22 +413,29 @@ class TestCheckpointLoadingIntegration:
         cfg.init_from = "scratch"
         cfg.name = "test_train"
 
+        checkpoint_manager = create_regular_checkpoint_manager()
         # Should work without errors
-        checkpoint, iter_num, best_val_loss = handle_checkpoint_loading(cfg)
+        checkpoint, iter_num, best_val_loss = (
+            checkpoint_manager.handle_checkpoint_loading(cfg)
+        )
         assert checkpoint is None
         assert iter_num == 0
         assert best_val_loss == 1e9
 
     def test_dag_train_config_compatibility(self):
         """Test that checkpoint loading works with DAG training configs."""
+        from checkpoint_manager import create_dag_checkpoint_manager
         from train_predictor import DAGTrainConfig
 
         cfg = DAGTrainConfig()
         cfg.init_from = "scratch"
         cfg.name = "test_dag_train"
 
+        checkpoint_manager = create_dag_checkpoint_manager()
         # Should work without errors
-        checkpoint, iter_num, best_val_loss = handle_checkpoint_loading(cfg)
+        checkpoint, iter_num, best_val_loss = (
+            checkpoint_manager.handle_checkpoint_loading(cfg)
+        )
         assert checkpoint is None
         assert iter_num == 0
         assert best_val_loss == 1e9
@@ -429,8 +450,9 @@ class TestCheckpointLoadingIntegration:
         cfg.init_from = "/nonexistent/checkpoint.pt"
         cfg.name = "runpod_integration_test"
 
+        checkpoint_manager = create_regular_checkpoint_manager()
         with pytest.raises(CheckpointLoadError):
-            handle_checkpoint_loading(cfg)
+            checkpoint_manager.handle_checkpoint_loading(cfg)
 
         # Verify RunPod termination was attempted
         mock_stop_runpod.assert_called_once()
