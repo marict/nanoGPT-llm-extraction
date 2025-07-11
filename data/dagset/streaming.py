@@ -193,20 +193,14 @@ class DAGExample:
     signs: torch.Tensor  # for training - [D+1] tensor
     log_magnitudes: torch.Tensor  # for training - [D+1] tensor
     operations: torch.Tensor  # for training - [D x num_ops] one-hot tensor
+    seed: int
 
 
 def generate_uniform_digit_number(
-    seed: int = None,
-    max_digits: int = 4,
-    max_decimal_places: int = None,
+    seed: int = None, max_digits: int = 4, max_decimal_places: int = 6
 ) -> float:
     """Generate a number with uniform distribution over digit count combinations."""
     rng = random.Random(seed)
-    if max_decimal_places is None:
-        # Derive decimal places to create more uniform string lengths
-        # max_digits=4 -> max_decimal_places=3 gives good balance
-        max_decimal_places = max(0, max_digits - 1)
-
     num_integer_digits = rng.randint(0, max_digits)
 
     # 0 decimal places = integer
@@ -258,17 +252,16 @@ def generate_random_dag_plan(
     num_initial_values: int = 1,
     seed: int = 42,
     max_digits: int = 4,  # Maximum number of integer digits (1=1-digit, 2=2-digit, etc.)
-    max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
+    max_decimal_places: int = 6,
 ) -> tuple[list[float], list[str]]:
     rng = random.Random(seed)
-
     # Generate random initial values with uniform digit count distribution
     # for both integer part and decimal part
     initial_values = [
         generate_uniform_digit_number(
-            max_digits=max_digits, max_decimal_places=max_decimal_places, seed=seed
+            max_digits=max_digits, max_decimal_places=max_decimal_places, seed=seed + i
         )
-        for _ in range(num_initial_values)
+        for i in range(num_initial_values)
     ]
     operations = [rng.choice(OP_NAMES) for _ in range(depth)]
 
@@ -471,21 +464,9 @@ def generate_single_dag_example(
     seed: int = 42,
     conversion_probability: float = 0.3,
     max_digits: int = 4,
-    max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
+    max_decimal_places: int = 6,
 ) -> DAGExample:
-    """Generate a single DAG computation example as a simple math expression.
-
-    Args:
-        depth: Depth of the DAG computation
-        num_initial_values: Number of initial values
-        rng: Random number generator to use
-        conversion_probability: Probability of English conversion
-        max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
-        max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
-
-    Returns:
-        DAG computation example with simple expression format
-    """
+    """Generate a single DAG computation example as a simple math expression."""
     # Determine number of initial values to match DAG predictor expectations
     if num_initial_values is None:
         # For DAG with depth n, we need n+1 initial values
@@ -517,51 +498,8 @@ def generate_single_dag_example(
         signs=signs,
         log_magnitudes=log_magnitudes,
         operations=operations,
+        seed=seed,
     )
-
-
-def generate_dag_dataset(
-    num_examples: int = 10000,
-    max_depth: int = 8,
-    num_initial_values: int = None,
-    seed: int = 42,
-    conversion_probability: float = 0.3,
-    max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
-    max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
-) -> list[DAGExample]:
-    """Generate a dataset of DAG computation examples (structure-only).
-
-    Args:
-        num_examples: Number of examples to generate
-        max_depth: DAG depth (all examples will have this depth)
-        num_initial_values: Number of initial values per example
-        rng: Random number generator to use
-        conversion_probability: Probability of English conversion
-        max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
-        max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
-
-    Returns:
-        List of DAG examples with structure only (no computed results)
-    """
-    examples = []
-
-    for _ in range(num_examples):
-        # Use fixed depth - all examples should have the same depth as the model
-        # The identity function allows us to handle effective shorter computations naturally
-        depth = max_depth
-
-        # Generate example (structure-only for training efficiency)
-        example = generate_single_dag_example(
-            depth,
-            num_initial_values,
-            seed,
-            conversion_probability,
-            max_digits,
-            max_decimal_places,
-        )
-        examples.append(example)
-
-    return examples
 
 
 class DAGStructureDataset:
@@ -578,21 +516,10 @@ class DAGStructureDataset:
         tokenizer: str = "gpt2",
         max_seq_length: int = 512,
         english_conversion_probability: float = 0.3,
-        max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
-        max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
+        max_digits: int = 4,
+        max_decimal_places: int = 6,
     ):
-        """Initialize the DAG structure dataset.
-
-        Args:
-            max_depth: DAG depth (all examples will have this depth)
-            num_initial_values: Number of initial values per example
-            seed: Random seed for reproducibility
-            tokenizer: Tokenizer to use (default: gpt2)
-            max_seq_length: Maximum sequence length for tokenization
-            english_conversion_probability: Probability of converting to English (0.0 to 1.0)
-            max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
-            max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
-        """
+        """Initialize the DAG structure dataset."""
         self.max_depth = max_depth
         # Set num_initial_values to match DAG predictor expectations
         self.num_initial_values = (
@@ -613,7 +540,7 @@ class DAGStructureDataset:
         self.op_idx_to_name = {i: name for i, name in enumerate(OP_NAMES)}
 
     def generate_structure_example(
-        self, depth: int
+        self, depth: int, seed: int = 42
     ) -> Tuple[str, Dict[str, torch.Tensor]]:
         """Generate a single (text, structure) pair.
 
@@ -628,7 +555,7 @@ class DAGStructureDataset:
         example = generate_single_dag_example(
             depth=depth,
             num_initial_values=self.num_initial_values,
-            seed=self.seed,
+            seed=seed,
             conversion_probability=self.english_conversion_probability,
             max_digits=self.max_digits,
             max_decimal_places=self.max_decimal_places,
@@ -679,7 +606,7 @@ class DAGStructureDataset:
         }
 
     def generate_batch(
-        self, batch_size: int
+        self, batch_size: int, seed: int = 42
     ) -> Tuple[List[str], Dict[str, torch.Tensor]]:
         """Generate a batch of structure examples.
 
@@ -691,21 +618,23 @@ class DAGStructureDataset:
         """
         texts = []
         structures = []
+        seeds = []
 
-        for _ in range(batch_size):
+        for i in range(batch_size):
             # Use fixed depth - all examples in dataset should have the same depth
             # The identity function allows us to handle cases with effective depth < max_depth naturally
             depth = self.max_depth
 
             # Generate example
-            text, structure = self.generate_structure_example(depth)
+            text, structure = self.generate_structure_example(depth, seed=seed + i)
+            seeds.append(seed + i)
             texts.append(text)
             structures.append(structure)
 
         # Batch the structure tensors
         batched_structure = self._batch_structures(structures)
 
-        return texts, batched_structure
+        return texts, batched_structure, seeds
 
     def _batch_structures(
         self, structures: List[Dict[str, torch.Tensor]]
@@ -751,7 +680,7 @@ class DAGStructureDataset:
         }
 
     def create_dataloader(
-        self, batch_size: int = 32
+        self, batch_size: int = 32, seed: int = 42
     ) -> Iterator[Tuple[List[str], Dict[str, torch.Tensor]]]:
         """Create an infinite dataloader for structure examples.
 
@@ -761,9 +690,11 @@ class DAGStructureDataset:
         Yields:
             Batches of (texts, structure_tensors)
         """
+        i = 0
         while True:
-            texts, structures = self.generate_batch(batch_size)
-            yield texts, structures
+            texts, structures, seeds = self.generate_batch(batch_size, seed=seed + i)
+            i += 1
+            yield texts, structures, seeds
 
 
 def create_dag_structure_dataloaders(
@@ -773,7 +704,7 @@ def create_dag_structure_dataloaders(
     seed: int = 42,
     english_conversion_rate: float = 0.3,
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
-    max_decimal_places: int = None,  # Auto-derived from max_digits for uniform string distribution
+    max_decimal_places: int = 6,  # Auto-derived from max_digits for uniform string distribution
 ) -> Tuple[Iterator, Iterator]:
     """Create train/val DAG structure dataloaders for predictor training.
 
@@ -784,7 +715,7 @@ def create_dag_structure_dataloaders(
         seed: Seed for training data
         english_conversion_rate: Probability of converting to English (0.0 to 1.0)
         max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
-        max_decimal_places: Maximum decimal places. If None, auto-derived as max_digits-1
+        max_decimal_places: Maximum decimal places.
 
     Returns:
         Tuple of (train_loader, val_loader) iterators
@@ -809,8 +740,8 @@ def create_dag_structure_dataloaders(
     )
 
     # Create dataloaders
-    train_loader = train_dataset.create_dataloader(train_batch_size)
-    val_loader = val_dataset.create_dataloader(val_batch_size)
+    train_loader = train_dataset.create_dataloader(train_batch_size, seed=seed)
+    val_loader = val_dataset.create_dataloader(val_batch_size, seed=seed)
 
     return train_loader, val_loader
 
@@ -840,11 +771,12 @@ if __name__ == "__main__":
     structure_dataset = DAGStructureDataset(
         max_depth=3, seed=42, max_digits=3
     )  # max_decimal_places auto-derived as 2
-    texts, structures = structure_dataset.generate_batch(2)
+    texts, structures, seeds = structure_dataset.generate_batch(2)
     print(f"Generated {len(texts)} structure examples")
     print(f"Structure keys: {list(structures.keys())}")
     print(f"Initial signs shape: {structures['initial_sgn'].shape}")
     print(f"Operation probs shape: {structures['operation_probs'].shape}")
+    print(f"Seeds: {seeds}")
 
     print("\n✅ Example completed successfully!")
     print("✅ Operations now processed consistently as stack (right-to-left)")

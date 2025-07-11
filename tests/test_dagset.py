@@ -339,7 +339,7 @@ class TestDAGStructureDataset(unittest.TestCase):
         dataset = DAGStructureDataset(max_depth=4, seed=42)
 
         # Generate a batch with mixed depths
-        texts, structures = dataset.generate_batch(batch_size=5)
+        texts, structures, _ = dataset.generate_batch(batch_size=5)
 
         # Verify batch size
         self.assertEqual(len(texts), 5)
@@ -381,7 +381,7 @@ class TestDAGStructureDataset(unittest.TestCase):
         dataloader = dataset.create_dataloader(batch_size=4)
 
         # Test getting a few batches
-        for i, (texts, structures) in enumerate(dataloader):
+        for i, (texts, structures, _) in enumerate(dataloader):
             # Verify batch structure
             self.assertEqual(len(texts), 4)
             self.assertIsInstance(texts, list)
@@ -411,12 +411,12 @@ class TestDAGStructureDataset(unittest.TestCase):
         )
 
         # Test train loader
-        texts, structures = next(train_loader)
+        texts, structures, _ = next(train_loader)
         self.assertEqual(len(texts), 4)
         self.assertEqual(structures["initial_sgn"].shape[0], 4)
 
         # Test val loader
-        texts, structures = next(val_loader)
+        texts, structures, _ = next(val_loader)
         self.assertEqual(len(texts), 2)
         self.assertEqual(structures["initial_sgn"].shape[0], 2)
 
@@ -425,8 +425,8 @@ class TestDAGStructureDataset(unittest.TestCase):
         dataset1 = DAGStructureDataset(max_depth=3, seed=123)
         dataset2 = DAGStructureDataset(max_depth=3, seed=123)
 
-        texts1, structures1 = dataset1.generate_batch(5)
-        texts2, structures2 = dataset2.generate_batch(5)
+        texts1, structures1, _ = dataset1.generate_batch(5)
+        texts2, structures2, _ = dataset2.generate_batch(5)
 
         # Text should be identical
         self.assertEqual(texts1, texts2)
@@ -440,11 +440,15 @@ class TestDAGStructureDataset(unittest.TestCase):
         dataset1 = DAGStructureDataset(max_depth=3, seed=42)
         dataset2 = DAGStructureDataset(max_depth=3, seed=43)
 
-        texts1, structures1 = dataset1.generate_batch(5)
-        texts2, structures2 = dataset2.generate_batch(5)
+        texts1, structures1, _ = dataset1.generate_batch(5, seed=42)
+        texts2, structures2, _ = dataset2.generate_batch(5, seed=43)
 
         # Should be different
-        self.assertNotEqual(texts1, texts2)
+        self.assertNotEqual(
+            texts1,
+            texts2,
+            f"Texts should be different for different seeds: {texts1} != {texts2} seed1: {42} seed2: {43}",
+        )
 
         # At least one structure tensor should be different
         different = False
@@ -521,7 +525,7 @@ class TestDAGStructureDataset(unittest.TestCase):
         dataset = DAGStructureDataset(max_depth=3, seed=42)
 
         # Generate structure examples
-        texts, structures = dataset.generate_batch(batch_size=2)
+        texts, structures, _ = dataset.generate_batch(batch_size=2)
 
         # Get structure tensors in the format expected by DAG model
         initial_sgn = structures["initial_sgn"]  # (B, num_nodes)
@@ -579,7 +583,7 @@ class TestDAGStructureDataset(unittest.TestCase):
 
         # Generate structure dataset with same depth
         dataset = DAGStructureDataset(max_depth=2, seed=42)
-        texts, structures = dataset.generate_batch(batch_size=1)
+        texts, structures, _ = dataset.generate_batch(batch_size=1)
 
         # Check tensor shapes match what DAGPlanPredictor expects
         batch_size = 1

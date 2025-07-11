@@ -15,7 +15,7 @@ name = "dag_predictor-default"
 # Evaluate every step and keep logs chatty for debugging.
 eval_interval = 1
 log_interval = 1
-eval_iters = 20
+eval_iters = 1
 eval_only = False
 always_save_checkpoint = True
 # Remove any stale checkpoints when starting a new run.
@@ -30,9 +30,7 @@ dataset = "dagset"  # Use DAG dataset for predictor training
 # DAG dataset parameters
 max_dag_depth = 4
 max_digits = 4  # Maximum number of integer digits for uniform digit distribution
-max_decimal_places = (
-    None  # Auto-derived from max_digits for uniform string distribution
-)
+max_decimal_places = 6
 
 train_examples_per_batch = 100
 val_examples_per_batch = 20
@@ -85,4 +83,4 @@ log_loss_weight = 1.0
 op_loss_weight = 1.0
 
 # Random seeds
-seed = 8073
+seed = 42

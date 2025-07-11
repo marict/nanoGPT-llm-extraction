@@ -388,7 +388,7 @@ def evaluate_dag_model(
     num_batches = 0
 
     with torch.no_grad():
-        for i, (texts, structures) in enumerate(val_loader):
+        for i, (texts, structures, seeds) in enumerate(val_loader):
             if i >= eval_iters:
                 break
 
@@ -452,6 +452,7 @@ def evaluate_dag_model(
                     batch_size = target_sgn.size(0)  # Get batch size from tensor
                     sample_idx = _eval_random.randrange(batch_size)
                     sample_text = texts[sample_idx]
+                    sample_seed = seeds[sample_idx]
 
                     # Gather predicted and target sign/log tensors directly
                     pred_sign_vec = pred_sgn.squeeze(1)[sample_idx]
@@ -473,12 +474,12 @@ def evaluate_dag_model(
 
                     print("\n=== Validation Sample ===")
                     # Log the RNG seed so we can reproduce this sample exactly
-                    print(f"Validation RNG seed: {eval_sample_seed}")
+                    print(f"Sample RNG seed: {sample_seed}")
                     print(f"Text: {sample_text}")
                     print(f"Tokens: {len(sample_tokens)}")
-                    print("Target initial values:")
+                    print("Target initial values (rounded to 4 decimal places):")
                     print([round(v, 4) for v in tgt_real_vals])
-                    print("Predicted initial values:")
+                    print("Predicted initial values (rounded to 4 decimal places):")
                     print([round(v, 4) for v in pred_real_vals])
 
                     # Decode ground-truth operations for this sample
@@ -939,7 +940,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
             optimizer.zero_grad(set_to_none=True)
 
             # Get a batch
-            texts, structures = next(train_loader)
+            texts, structures, _ = next(train_loader)
 
             # Move targets to device
             target_sgn = structures["initial_sgn"].to(device)

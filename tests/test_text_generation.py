@@ -5,8 +5,10 @@ from data.dagset.streaming import generate_single_dag_example
 from models.dag_model import OP_NAMES
 
 
-def test_seed_8073():
-    example = generate_single_dag_example(depth=4, conversion_probability=0.3)
+def test_seed_6341():
+    example = generate_single_dag_example(
+        depth=4, conversion_probability=0.3, seed=6341
+    )
     text = example.text
     exp_initial_values = example.initial_values
     print(text)
