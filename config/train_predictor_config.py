@@ -5,12 +5,12 @@
 name = "predictor_pretrain"
 
 # Training intervals
-eval_interval = 500  # We don't need to do this very often because train is seeing unseen data as well.
+eval_interval = 100  # We don't need to do this very often because train is seeing unseen data as well.
 log_interval = 1  # Log every iteration for better monitoring
 eval_iters = 10  # Reduced from 5 - each eval iter is much more informative
 eval_only = False
 always_save_checkpoint = False
-clear_previous_checkpoints = False  # Save space on RunPod
+clear_previous_checkpoints = True  # Save space on RunPod
 
 # Model initialization
 init_from = "scratch"
