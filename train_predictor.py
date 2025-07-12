@@ -304,9 +304,12 @@ def compute_dag_structure_loss(
       • All component losses use .mean(); no length-dependent scaling.
     """
     # ---------- Sign loss (BCE on ±1 → {0,1}) ----------
-    sign_target = (target_sgn > 0).float()
-    sign_pred = (pred_sgn + 1.0) * 0.5
-    sign_loss = F.binary_cross_entropy(sign_pred, sign_target, reduction="none").mean()
+    with torch.cuda.amp.autocast(enabled=False):
+        sign_target = (target_sgn > 0).float().to(torch.float32)
+        sign_pred = ((pred_sgn + 1.0) * 0.5).to(torch.float32)
+        sign_loss = F.binary_cross_entropy(
+            sign_pred, sign_target, reduction="none"
+        ).mean()
 
     # ---------- Log-magnitude loss (log-cosh, normalised) ----------
     diff = (pred_log - target_log) / LOG_LIM
