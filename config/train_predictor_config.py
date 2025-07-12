@@ -44,7 +44,7 @@ dag_depth = max_dag_depth  # MUST match max_dag_depth above
 
 # Optimization (tuned for longer training)
 learning_rate = 5e-4  # Based on when performance started to degrade
-max_iters = 50_000
+max_iters = 5000
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
@@ -64,7 +64,7 @@ check_nans = False  # Check for NaNs in cloud training
 
 # Loss weights (balanced for full training)
 sign_loss_weight = 1.0
-log_loss_weight = 10.0
+log_loss_weight = 1.0
 op_loss_weight = 1.0
 
 # Random seeds

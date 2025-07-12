@@ -517,13 +517,14 @@ class TestLossFunctions(unittest.TestCase):
         depth = self.cfg.dag_depth
         n_ops = 5
 
-        # Create identical predictions and targets
-        target_sgn = torch.randn(B, T, num_nodes)
+        target_sgn = torch.randint(0, 2, (B, T, num_nodes)).float() * 2 - 1  # ±1
         target_log = torch.abs(torch.randn(B, T, num_nodes))
+
+        # Operation targets: one-hot on the first op for determinism
         target_ops = torch.zeros(B, T, depth, n_ops)
         target_ops[:, :, :, 0] = 1
 
-        # Perfect predictions = targets
+        # Perfect predictions equal the targets
         pred_sgn = target_sgn.clone()
         pred_log = target_log.clone()
         pred_ops = target_ops.clone()

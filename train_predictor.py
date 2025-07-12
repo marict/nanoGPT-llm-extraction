@@ -33,7 +33,7 @@ import runpod_service
 import wandb
 from checkpoint_manager import CheckpointManager
 from data.dagset.streaming import create_dag_structure_dataloaders
-from models.dag_model import GPT, OP_NAMES
+from models.dag_model import GPT, LOG_LIM, OP_NAMES
 from models.predictor_only_model import PredictorOnlyModel
 from python_version_check import check_python_version
 from training_utils import (CHECKPOINT_DIR, BaseConfig, apply_overrides,
@@ -295,61 +295,42 @@ def compute_dag_structure_loss(
     target_log: torch.Tensor,
     target_ops: torch.Tensor,
     cfg: DAGTrainConfig,
-) -> Dict[str, torch.Tensor]:
-    """Compute loss for DAG structure prediction.
+) -> dict[str, torch.Tensor]:
+    """Compute DAG structure loss with robust, scale-balanced terms.
 
-    Args:
-        pred_sgn: (B, T, num_nodes) predicted signs
-        pred_log: (B, T, num_nodes) predicted log magnitudes
-        pred_ops: (B, T, depth, n_ops) predicted operation probabilities
-        target_sgn: (B, T, num_nodes) target signs
-        target_log: (B, T, num_nodes) target log magnitudes
-        target_ops: (B, T, depth, n_ops) target operation probabilities (one-hot)
-        cfg: Training configuration
-
-    Returns:
-        Dictionary with loss components
+    Changes:
+      • Sign loss → binary-cross-entropy on {0,1}.
+      • Log-magnitude loss → log-cosh on centred values, averaged over all elements.
+      • All component losses use .mean(); no length-dependent scaling.
     """
+    # ---------- Sign loss (BCE on ±1 → {0,1}) ----------
+    sign_target = (target_sgn > 0).float()
+    sign_pred = (pred_sgn + 1.0) * 0.5
+    sign_loss = F.binary_cross_entropy(sign_pred, sign_target, reduction="none").mean()
 
-    B, T = pred_sgn.shape[:2]
+    # ---------- Log-magnitude loss (log-cosh, normalised) ----------
+    diff = (pred_log - target_log) / LOG_LIM
+    log_loss = torch.log(torch.cosh(diff + 1e-12)).mean()
 
-    # Sign loss (MSE)
-    sign_loss = F.mse_loss(pred_sgn, target_sgn, reduction="none")
+    # ---------- Operation loss (NLL on one-hot targets) ----------
+    b, t, d, n_ops = pred_ops.shape
+    pred_ops_flat = pred_ops.view(-1, n_ops)  # (B*T*depth, n_ops)
+    target_indices = target_ops.view(-1, n_ops).argmax(dim=-1)
+    op_loss = F.nll_loss(torch.log(pred_ops_flat + 1e-8), target_indices).mean()
 
-    # Log magnitude loss (MSE)
-    log_loss = F.mse_loss(pred_log, target_log, reduction="none")
-
-    # Operation loss (negative log-likelihood since pred_ops are probabilities, not logits)
-    pred_ops_flat = pred_ops.reshape(-1, pred_ops.size(-1))  # (B*T*depth, n_ops)
-    target_ops_flat = target_ops.reshape(-1, target_ops.size(-1))  # (B*T*depth, n_ops)
-    target_op_indices = target_ops_flat.argmax(dim=-1)  # (B*T*depth,)
-
-    # Use nll_loss since pred_ops are probabilities (need log probabilities)
-    log_pred_ops = torch.log(
-        pred_ops_flat + 1e-8
-    )  # Add small epsilon for numerical stability
-    op_loss_flat = F.nll_loss(log_pred_ops, target_op_indices, reduction="none")
-    op_loss = op_loss_flat.reshape(B, T, -1)  # (B, T, depth)
-
-    sign_loss = sign_loss.sum() / B
-    log_loss = log_loss.sum() / B
-    op_loss = op_loss.sum() / B
-
-    # Weighted total loss - ONLY from the main predictions (signs, magnitudes, operations)
+    # ---------- Weighted total ----------
     total_loss = (
         cfg.sign_loss_weight * sign_loss
         + cfg.log_loss_weight * log_loss
         + cfg.op_loss_weight * op_loss
     )
 
-    loss_dict = {
+    return {
         "total_loss": total_loss,
         "sign_loss": sign_loss,
         "log_loss": log_loss,
         "op_loss": op_loss,
     }
-
-    return loss_dict
 
 
 def evaluate_dag_model(
