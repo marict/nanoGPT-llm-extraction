@@ -12,7 +12,7 @@ import torch
 import torch.nn.functional as F
 from tiktoken import get_encoding
 
-from models.dag_model import LOG_LIM, OP_NAMES
+from models.dag_model import OP_NAMES
 
 __all__ = [
     "tokenize_texts",
@@ -135,17 +135,14 @@ def digits_to_magnitude(
     digits: torch.Tensor,
     max_digits: int,
     max_decimal_places: int,
-    is_prob: bool = True,
 ) -> torch.Tensor:
     """Convert a digit tensor to absolute magnitude.
 
     Args:
-        digits: (..., D, 10) tensor. If *is_prob* is True the last dim contains
-            probabilities; otherwise it is assumed to be one-hot / logits already
-            converted to probabilities.
+        digits: (..., D, 10) tensor where the last dimension contains digit
+            probabilities (or one-hot values) for each decimal place.
         max_digits: integer digits (D1).
         max_decimal_places: fractional digits (D2).
-        is_prob: whether *digits* sums to 1 along last axis.
 
     Returns:
         magnitude: tensor with shape digits.shape[:-2]
@@ -266,7 +263,6 @@ def evaluate_dag_model(
                     tgt_digits.squeeze(1),
                     cfg.max_digits,
                     cfg.max_decimal_places,
-                    is_prob=False,
                 )
                 log_mape = ((pred_mag - tgt_mag).abs() / tgt_mag.clamp_min(1e-8)).mean()
 
@@ -298,7 +294,6 @@ def evaluate_dag_model(
                         tgt_digits_vec,
                         cfg.max_digits,
                         cfg.max_decimal_places,
-                        is_prob=False,
                     )
 
                     pred_real_vals = (

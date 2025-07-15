@@ -83,14 +83,6 @@ def parse_args() -> argparse.ArgumentParser:  # type: ignore[override]
     return parser
 
 
-# Duplicate get_lr removed – we rely on the imported `training_utils.get_lr`.
-
-
-# The local implementations of ``compute_dag_structure_loss`` and
-# ``evaluate_dag_model`` have been moved to *predictor_utils* (imported above).
-# The auxiliary ``_get_dag_predictions`` helper was unused and has been dropped.
-
-
 def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> None:
     """Run DAG predictor training loop."""
     # Setup
@@ -108,12 +100,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         device = f"cuda:{ddp_local_rank}"
         torch.cuda.set_device(device)
         master_process = ddp_rank == 0
-        seed_offset = ddp_rank
         assert cfg.gradient_accumulation_steps % ddp_world_size == 0
         cfg.gradient_accumulation_steps //= ddp_world_size
     else:
         master_process = True
-        seed_offset = 0
         ddp_world_size = 1
     ddp_start = time.time()
     print(
@@ -556,7 +546,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         target_digits,
                         cfg.max_digits,
                         cfg.max_decimal_places,
-                        is_prob=False,
                     )
                     log_mape = (
                         (pred_mag - target_mag).abs() / target_mag.clamp_min(1e-8)

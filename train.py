@@ -18,7 +18,6 @@ from typing import Dict, List, Tuple
 import numpy as np
 import tiktoken
 import torch
-from torch import Tensor
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -28,7 +27,7 @@ from checkpoint_manager import CheckpointManager
 from dag_logger import DAGLogger
 from data import prepare_dataset
 from evaluation import estimate_loss, evaluate_math
-from models.dag_model import GPT, OP_NAMES, GPTConfig
+from models.dag_model import GPT, GPTConfig
 from python_version_check import check_python_version
 from training_utils import (CHECKPOINT_DIR, BaseConfig, _check_for_nonfinite,
                             apply_overrides, generate_run_name, get_lr,
@@ -115,11 +114,6 @@ class TrainConfig(BaseConfig):
 
 
 # --------------------------------------------------------------------------- #
-# Training helpers
-# --------------------------------------------------------------------------- #
-
-
-# --------------------------------------------------------------------------- #
 # Core training routine
 # --------------------------------------------------------------------------- #
 def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
@@ -141,20 +135,15 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
         device = f"cuda:{ddp_local_rank}"
         torch.cuda.set_device(device)
         master_process = ddp_rank == 0
-        seed_offset = ddp_rank
         assert cfg.gradient_accumulation_steps % ddp_world_size == 0
         cfg.gradient_accumulation_steps //= ddp_world_size
     else:
         master_process = True
-        seed_offset = 0
         ddp_world_size = 1
     print(
         f"[{time.time() - setup_start:.2f}s] DDP setup completed in {time.time() - ddp_start:.2f}s"
     )
 
-    # --------------------------------------------------------------------- #
-    # Initialize checkpoint manager and clean previous checkpoints if requested
-    # --------------------------------------------------------------------- #
     checkpoint_manager = CheckpointManager("regular")
     if cfg.clear_previous_checkpoints:
         checkpoint_manager.clean_previous_checkpoints(cfg.name)
@@ -306,7 +295,6 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
             data_dir = Path("data") / cfg.dataset
 
     print(f"[{time.time() - setup_start:.2f}s] Loading meta")
-    meta_path = data_dir / "meta.pkl"
     meta_dtype = np.uint16
     vocab_size = None
     if master_process:
@@ -589,8 +577,6 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                             "iter": iter_num,
                             "train/loss": losses["train"],
                             "val/loss": losses["val"],
-                            # Log the *actual* learning rate in the optimizer to ensure we record
-                            # the value that was truly applied this step.
                             "lr": optimizer.param_groups[0]["lr"],
                             "mfu": running_mfu * 100,
                             **eval_extra,

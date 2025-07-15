@@ -78,7 +78,6 @@ class TestDigitPrediction(unittest.TestCase):
             digit_probs,
             max_digits=max_digits,
             max_decimal_places=max_decimals,
-            is_prob=True,
         )  # (B,T,N)
 
         # Compute magnitude from log prediction: abs = 10 ** log10
