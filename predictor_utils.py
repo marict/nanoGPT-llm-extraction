@@ -12,7 +12,7 @@ import torch
 import torch.nn.functional as F
 from tiktoken import get_encoding
 
-from models.dag_model import LOG_LIM, OP_NAMES
+from models.dag_model import LOG_LIM
 
 __all__ = [
     "tokenize_texts",

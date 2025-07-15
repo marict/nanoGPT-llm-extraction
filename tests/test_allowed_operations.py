@@ -1,5 +1,4 @@
 import pytest
-import torch
 
 from data.dagset.streaming import DAGStructureDataset, generate_random_dag_plan
 from models.dag_model import OP_NAMES

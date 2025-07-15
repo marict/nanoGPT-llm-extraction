@@ -13,7 +13,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import numpy as np
 import torch
 
 from checkpoint_manager import CheckpointManager
