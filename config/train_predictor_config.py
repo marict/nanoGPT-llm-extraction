@@ -66,7 +66,7 @@ check_nans = False  # Check for NaNs in cloud training
 sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
-op_names = ["add", "subtract", "identity"]
+op_names = ["add", "identity"]
 
 # Random seeds
 seed = 42
