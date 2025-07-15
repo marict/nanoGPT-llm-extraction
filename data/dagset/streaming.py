@@ -611,6 +611,7 @@ class DAGStructureDataset:
             num_initial_values if num_initial_values is not None else max_depth + 1
         )
         self.seed = seed
+        self.num_generated = 0
         self.tokenizer = tokenizer
         self.max_seq_length = max_seq_length
         self.english_conversion_probability = english_conversion_probability
@@ -641,13 +642,14 @@ class DAGStructureDataset:
         example = generate_single_dag_example(
             depth=depth,
             num_initial_values=self.num_initial_values,
-            seed=seed,
+            seed=seed + self.num_generated,
             conversion_probability=self.english_conversion_probability,
             max_digits=self.max_digits,
             max_decimal_places=self.max_decimal_places,
             allowed_operations=self.allowed_operations,
         )
 
+        self.num_generated += 1
         # Extract text
         text = example.text
 

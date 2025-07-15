@@ -5,8 +5,10 @@ Extracted from *train_predictor.py* to avoid code duplication and shrink the mai
 training script by over a hundred lines.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+# Import operation names for default value
+from models.dag_model import OP_NAMES
 from training_utils import BaseConfig
 
 
@@ -64,6 +66,10 @@ class DAGTrainConfig(BaseConfig):
 
     # Random seeds
     seed: int = 42
+
+    # Allowed operation names for DAG execution/prediction. This lets us train
+    # predictors restricted to a subset of arithmetic ops (e.g. only add, subtract, identity).
+    op_names: list[str] = field(default_factory=lambda: OP_NAMES.copy())
 
     # Backbone options
     full_backbone: bool = False

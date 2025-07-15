@@ -36,7 +36,7 @@ train_examples_per_batch = 100
 val_examples_per_batch = 20
 
 # English conversion settings
-english_conversion_rate = 0.3  # Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
+english_conversion_rate = 0  # Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
 
 # Data generation settings
 
@@ -82,5 +82,6 @@ sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
 
+op_names = ["add", "subtract", "identity"]
 # Random seeds
 seed = 42

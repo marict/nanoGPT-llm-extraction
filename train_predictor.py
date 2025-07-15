@@ -6,7 +6,6 @@ import argparse
 import os
 import random
 import time
-from ast import literal_eval
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -138,7 +137,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     name=generate_run_name(cfg),
                     config=cfg.__dict__,
                 )
-            # print(f"[{time.time() - setup_start:.2f}s] W&B URL: {run.url}")
         except Exception as e:
             print(
                 f"[{time.time() - setup_start:.2f}s] Error: Failed to initialize wandb: {e}"
@@ -262,7 +260,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     # --------------------------------------------------------------------- #
 
     raw_model = model.module if ddp else model
-    allowed_operations = OP_NAMES
+    # Restrict dataset to the subset of ops requested by the config (defaults to all ops)
+    allowed_operations = getattr(cfg, "op_names", OP_NAMES)
 
     train_loader, val_loader = create_dag_structure_dataloaders(
         train_batch_size=cfg.batch_size,
@@ -310,7 +309,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     train_batch_size=cfg.batch_size,
                     val_batch_size=cfg.batch_size,
                     max_depth=cfg.dag_depth,
-                    seed=seed,
+                    seed=seed + iter_num,
                     english_conversion_rate=cfg.english_conversion_rate,
                     max_digits=cfg.max_digits,
                     max_decimal_places=cfg.max_decimal_places,

@@ -212,13 +212,28 @@ def evaluate_dag_model(
                     pred_sgn, _, pred_ops = model(input_tokens)
 
                 pred_sgn = pred_sgn.mean(dim=1)
-                digit_logits = (
-                    model.dag.plan_predictor.digit_logits
-                    if hasattr(model.dag.plan_predictor, "digit_logits")
-                    else None
-                )
+
+                # ------------------------------------------------------------------
+                # Retrieve digit logits depending on model type
+                # ------------------------------------------------------------------
+                if hasattr(model, "dag"):
+                    # GPT backbone with DAG augmentation
+                    digit_logits = (
+                        model.dag.plan_predictor.digit_logits
+                        if hasattr(model.dag.plan_predictor, "digit_logits")
+                        else None
+                    )
+                else:
+                    # Stand-alone predictor model
+                    digit_logits = (
+                        model.dag_predictor.digit_logits
+                        if hasattr(model.dag_predictor, "digit_logits")
+                        else None
+                    )
+
                 if digit_logits is None:
                     raise RuntimeError("digit_logits not found for evaluation")
+
                 digit_logits = digit_logits.mean(dim=1)  # (B,N,D,10)
                 pred_ops = pred_ops.mean(dim=1)
 
