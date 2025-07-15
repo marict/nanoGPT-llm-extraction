@@ -3,24 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import math
 import os
 import random
-import random as _eval_random
-import runpy
-import string
 import time
 from ast import literal_eval
 from contextlib import nullcontext
-# no local dataclass definitions needed – imported from predictor_config
 from pathlib import Path
-from typing import Dict, List
 
 import torch
-import torch as _torch
-import torch.nn as nn
 import torch.nn.functional as F
-from tiktoken import get_encoding
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -28,19 +19,18 @@ import runpod_service
 import wandb
 from checkpoint_manager import CheckpointManager
 from data.dagset.streaming import create_dag_structure_dataloaders
-from models.dag_model import GPT, LOG_LIM, OP_NAMES
+from models.dag_model import GPT, OP_NAMES, DAGPlanPredictor
 from models.predictor_only_model import PredictorOnlyModel
 from predictor_config import DAGTrainConfig
 from predictor_utils import (compute_dag_structure_loss, evaluate_dag_model,
                              tokenize_texts)
 from python_version_check import check_python_version
-from training_utils import (CHECKPOINT_DIR, BaseConfig, apply_overrides,
-                            generate_run_name, get_lr, load_config_file,
-                            parse_args, update_config)
+from training_utils import (CHECKPOINT_DIR, apply_overrides, generate_run_name,
+                            get_lr, load_config_file, parse_args,
+                            update_config)
+
 
 # Local helper utilities
-
-
 def _empty_metrics() -> dict[str, float]:
     """Return a zero-filled metrics accumulator used during training."""
     return {
@@ -73,26 +63,6 @@ except ModuleNotFoundError:
 CHECKPOINT_DIR = (
     "/runpod-volume/checkpoints" if os.path.exists("/runpod-volume") else "checkpoints"
 )
-
-
-# The original `tokenize_texts` implementation has been moved to
-# `predictor_utils.tokenize_texts` to avoid code duplication.
-
-
-# Safe checkpoint saving (logic unchanged)
-
-
-# DAGTrainConfig is now defined in `predictor_config.py` – importing keeps the
-# original public interface intact while significantly shrinking this file.
-
-
-# Duplicate `get_lr` implementation removed – we use the one provided by
-# `training_utils.get_lr`.
-
-
-# The local implementations of ``compute_dag_structure_loss`` and
-# ``evaluate_dag_model`` have been moved to *predictor_utils* (imported above).
-# The auxiliary ``_get_dag_predictions`` helper was unused and has been dropped.
 
 
 def parse_args() -> argparse.ArgumentParser:  # type: ignore[override]
@@ -220,18 +190,9 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     )
 
     # --------------------------------------------------------------------- #
-    # Data loading
+    # Model-aware Data loading (will be created after model is initialized)
     # --------------------------------------------------------------------- #
-
-    train_loader, val_loader = create_dag_structure_dataloaders(
-        train_batch_size=cfg.batch_size,
-        val_batch_size=cfg.batch_size,
-        max_depth=cfg.dag_depth,  # All examples have exactly this depth to match the model
-        seed=cfg.seed,
-        english_conversion_rate=cfg.english_conversion_rate,
-        max_digits=cfg.max_digits,
-        max_decimal_places=cfg.max_decimal_places,
-    )
+    train_loader = val_loader = None  # placeholders; real loaders created later
 
     # --------------------------------------------------------------------- #
     # Model creation and checkpoint loading
@@ -307,12 +268,29 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         model = DDP(model, device_ids=[int(device.split(":")[-1])])
 
     # --------------------------------------------------------------------- #
+    # Create DataLoaders that respect the model's available operations
+    # --------------------------------------------------------------------- #
+
+    raw_model = model.module if ddp else model
+    allowed_operations = OP_NAMES
+
+    train_loader, val_loader = create_dag_structure_dataloaders(
+        train_batch_size=cfg.batch_size,
+        val_batch_size=cfg.batch_size,
+        max_depth=cfg.dag_depth,
+        seed=cfg.seed,
+        english_conversion_rate=cfg.english_conversion_rate,
+        max_digits=cfg.max_digits,
+        max_decimal_places=cfg.max_decimal_places,
+        allowed_operations=allowed_operations,
+    )
+
+    # --------------------------------------------------------------------- #
     # Training loop
     # --------------------------------------------------------------------- #
 
     t0 = time.time()
     raw_model = model.module if ddp else model
-    train_start = time.time()
 
     # Initialize loss accumulator for logging
     loss_accum = _empty_metrics()
@@ -338,16 +316,15 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 else:
                     seed = cfg.seed
 
-                _train_loader_unused, val_loader_eval = (
-                    create_dag_structure_dataloaders(
-                        train_batch_size=cfg.batch_size,
-                        val_batch_size=cfg.batch_size,
-                        max_depth=cfg.dag_depth,
-                        seed=seed,
-                        english_conversion_rate=cfg.english_conversion_rate,
-                        max_digits=cfg.max_digits,
-                        max_decimal_places=cfg.max_decimal_places,
-                    )
+                _, val_loader_eval = create_dag_structure_dataloaders(
+                    train_batch_size=cfg.batch_size,
+                    val_batch_size=cfg.batch_size,
+                    max_depth=cfg.dag_depth,
+                    seed=seed,
+                    english_conversion_rate=cfg.english_conversion_rate,
+                    max_digits=cfg.max_digits,
+                    max_decimal_places=cfg.max_decimal_places,
+                    allowed_operations=allowed_operations,
                 )
 
                 model.eval()

@@ -339,6 +339,8 @@ OP_FUNCS = [
 ]
 OP_NAMES = ["add", "subtract", "multiply", "divide", "identity"]
 
+assert len(OP_FUNCS) == len(OP_NAMES), "OP_FUNCS and OP_NAMES must have the same length"
+
 
 def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
     if logits.dtype == torch.float16:

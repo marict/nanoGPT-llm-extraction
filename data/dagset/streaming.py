@@ -253,6 +253,7 @@ def generate_random_dag_plan(
     seed: int = 42,
     max_digits: int = 4,  # Maximum number of integer digits (1=1-digit, 2=2-digit, etc.)
     max_decimal_places: int = 6,
+    allowed_operations: list[str] | None = None,
 ) -> tuple[list[float], list[str]]:
     rng = random.Random(seed)
     # Generate random initial values with uniform digit count distribution
@@ -263,7 +264,22 @@ def generate_random_dag_plan(
         )
         for i in range(num_initial_values)
     ]
-    operations = [rng.choice(OP_NAMES) for _ in range(depth)]
+
+    # Determine the set of operations that can be sampled
+    if allowed_operations is None:
+        op_choices = OP_NAMES
+    else:
+        # Check for invalid operations and raise an informative error
+        invalid_ops = [op for op in allowed_operations if op not in OP_NAMES]
+        if invalid_ops:
+            raise ValueError(
+                f"Invalid operations provided: {invalid_ops}. Available operations: {OP_NAMES}"
+            )
+
+        # All provided operations are valid; use them
+        op_choices = list(allowed_operations)
+
+    operations = [rng.choice(op_choices) for _ in range(depth)]
 
     # Iterate operations from right-to-left (k indexes that order)
     # and replace multiply/divide operations with identity when right-hand operand is approximately 1.0
@@ -465,6 +481,7 @@ def generate_single_dag_example(
     conversion_probability: float = 0.3,
     max_digits: int = 4,
     max_decimal_places: int = 6,
+    allowed_operations: list[str] | None = None,
 ) -> DAGExample:
     """Generate a single DAG computation example as a simple math expression."""
     # Determine number of initial values to match DAG predictor expectations
@@ -473,7 +490,12 @@ def generate_single_dag_example(
         num_initial_values = depth + 1
 
     initial_values, operations = generate_random_dag_plan(
-        depth, num_initial_values, seed, max_digits, max_decimal_places
+        depth,
+        num_initial_values,
+        seed,
+        max_digits,
+        max_decimal_places,
+        allowed_operations=allowed_operations,
     )
 
     initial_values, operations = pad_plan(initial_values, operations)
@@ -518,6 +540,7 @@ class DAGStructureDataset:
         english_conversion_probability: float = 0.3,
         max_digits: int = 4,
         max_decimal_places: int = 6,
+        allowed_operations: list[str] | None = None,
     ):
         """Initialize the DAG structure dataset."""
         self.max_depth = max_depth
@@ -531,6 +554,7 @@ class DAGStructureDataset:
         self.english_conversion_probability = english_conversion_probability
         self.max_digits = max_digits
         self.max_decimal_places = max_decimal_places
+        self.allowed_operations = allowed_operations
 
         # Initialize tokenizer
         self.enc = get_encoding(tokenizer)
@@ -559,6 +583,7 @@ class DAGStructureDataset:
             conversion_probability=self.english_conversion_probability,
             max_digits=self.max_digits,
             max_decimal_places=self.max_decimal_places,
+            allowed_operations=self.allowed_operations,
         )
 
         # Extract text
@@ -705,6 +730,7 @@ def create_dag_structure_dataloaders(
     english_conversion_rate: float = 0.3,
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = 6,  # Auto-derived from max_digits for uniform string distribution
+    allowed_operations: list[str] | None = None,
 ) -> Tuple[Iterator, Iterator]:
     """Create train/val DAG structure dataloaders for predictor training.
 
@@ -729,6 +755,7 @@ def create_dag_structure_dataloaders(
         english_conversion_probability=english_conversion_rate,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
+        allowed_operations=allowed_operations,
     )
 
     val_dataset = DAGStructureDataset(
@@ -737,6 +764,7 @@ def create_dag_structure_dataloaders(
         english_conversion_probability=english_conversion_rate,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
+        allowed_operations=allowed_operations,
     )
 
     # Create dataloaders
