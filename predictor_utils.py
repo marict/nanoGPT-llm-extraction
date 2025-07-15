@@ -79,12 +79,29 @@ def compute_dag_structure_loss(
             sign_pred, sign_target, reduction="none"
         ).mean()
 
-    # Digit prediction (cross entropy)
+    # Digit prediction (cross entropy over 10-way classification per digit slot)
+    # ``pred_digits`` can be either raw logits **or** probabilities depending on
+    # the caller (training code passes logits, some tests pass one-hot probs).
+    # We convert to log-probabilities in a way that supports both cases.
     B, T, N, D, _ = pred_digits.shape
     with torch.amp.autocast(device_type=device_type, enabled=False):
         pred_flat = pred_digits.view(-1, 10).to(torch.float32)  # (B*T*N*D, 10)
-        target_idx = target_digits.view(-1, 10).argmax(dim=-1)
-        digit_loss = F.cross_entropy(pred_flat, target_idx)
+        if pred_flat.min() < 0 or pred_flat.max() > 1:
+            # Likely raw logits – apply log_softmax
+            log_probs = F.log_softmax(pred_flat, dim=-1)
+        else:
+            # Already probabilities (or one-hot). Clamp for numerical stability
+            log_probs = torch.log(pred_flat.clamp(min=1e-8))
+
+        target_flat = target_digits.view(-1, 10)
+        target_idx = target_flat.argmax(dim=-1)
+
+        # Mask out positions where the target has no valid digit information (all zeros)
+        valid_mask = target_flat.sum(dim=-1) > 0  # (B*T*N*D)
+        if valid_mask.any():
+            digit_loss = F.nll_loss(log_probs[valid_mask], target_idx[valid_mask])
+        else:
+            digit_loss = torch.tensor(0.0, device=pred_sgn.device)
 
     # Operation (NLL over one-hot targets)
     # Convert probabilities to float32 before taking log to prevent log(0) -> -inf in FP16 when probs are tiny.

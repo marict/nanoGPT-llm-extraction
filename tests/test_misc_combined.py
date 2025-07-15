@@ -4,9 +4,9 @@ import re
 
 import runpod_service as rp
 from data.dagset.streaming import generate_single_dag_example
-from models.dag_model import TEST_OPS_NAMES
+from models.dag_model import OP_NAMES
 
-N_OPS = len(TEST_OPS_NAMES)
+N_OPS = len(OP_NAMES)
 from run_math_eval import _extract_number
 
 
@@ -19,7 +19,7 @@ def test_text_generation_rounding_subset():
     """
     for _ in range(100):
         example = generate_single_dag_example(
-            depth=3, conversion_probability=0, allowed_operations=TEST_OPS_NAMES
+            depth=3, conversion_probability=0, allowed_operations=OP_NAMES
         )
         text = example.text
         expected_values = example.initial_values

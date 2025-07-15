@@ -17,10 +17,10 @@ import pytest
 import torch
 
 from checkpoint_manager import CheckpointManager
-from models.dag_model import GPT, TEST_OPS_NAMES, GPTConfig
+from models.dag_model import GPT, OP_NAMES, GPTConfig
 from models.predictor_only_model import PredictorOnlyConfig
 
-N_OPS = len(TEST_OPS_NAMES)
+N_OPS = len(OP_NAMES)
 from train_predictor import (DAGTrainConfig, PredictorOnlyModel,
                              apply_overrides, compute_dag_structure_loss,
                              get_lr, load_config_file, tokenize_texts,

@@ -1,13 +1,13 @@
 import pytest
 
 from data.dagset.streaming import DAGStructureDataset, generate_random_dag_plan
-from models.dag_model import TEST_OPS_NAMES
+from models.dag_model import OP_NAMES
 
 
 def test_generate_random_dag_plan_respects_allowed_ops():
     """All sampled operations must come from the user-specified subset."""
     # Use only operations supported by the current implementation
-    allowed_subset = TEST_OPS_NAMES  # always valid
+    allowed_subset = OP_NAMES  # always valid
     depth = 10
     init_vals, ops = generate_random_dag_plan(
         depth=depth,
@@ -31,7 +31,7 @@ def test_generate_random_dag_plan_invalid_ops_raises():
 
 def test_dataset_generation_respects_allowed_ops():
     """DAGStructureDataset should only emit operations from the allowed set."""
-    allowed_subset = TEST_OPS_NAMES  # subset guaranteed to be valid
+    allowed_subset = OP_NAMES  # subset guaranteed to be valid
     depth = 3
     dataset = DAGStructureDataset(
         max_depth=depth,
@@ -44,6 +44,6 @@ def test_dataset_generation_respects_allowed_ops():
 
     op_one_hot = structure["operation_probs"]  # shape: (depth, n_ops)
     picked_indices = op_one_hot.argmax(dim=-1)
-    allowed_indices = [TEST_OPS_NAMES.index(op) for op in allowed_subset]
+    allowed_indices = [OP_NAMES.index(op) for op in allowed_subset]
 
     assert set(picked_indices.tolist()).issubset(set(allowed_indices))

@@ -3,11 +3,11 @@ import unittest
 import pytest
 import torch
 
-from models.dag_model import TEST_OPS_NAMES
+from models.dag_model import OP_NAMES
 from predictor_config import DAGTrainConfig
 from predictor_utils import compute_dag_structure_loss
 
-N_OPS = len(TEST_OPS_NAMES)
+N_OPS = len(OP_NAMES)
 
 
 class TestLossRegressions(unittest.TestCase):

@@ -21,7 +21,7 @@ from tiktoken import get_encoding
 sys.path.append(str(Path(__file__).parent.parent))
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from models.dag_model import OP_NAMES
+from models.dag_model import LOG_LIM, OP_NAMES
 
 
 def convert_number_to_words(number, max_decimal_places: int = 6) -> str:
@@ -192,6 +192,7 @@ class DAGExample:
     initial_values: list[float]  # for logging
     signs: torch.Tensor  # (D+1)
     digits: torch.Tensor  # (D+1, digits_total, 10)
+    log_magnitudes: torch.Tensor  # (D+1) natural-log magnitudes (for legacy tests)
     operations: torch.Tensor  # (D, num_ops)
     seed: int
 
@@ -449,17 +450,35 @@ def float_to_digit_onehot(
     left-padded with zeros and the fractional part is right-padded with zeros so that their total length
     equals *max_digits + max_decimal_places*.
     """
-    import math as _math
 
     # Clip magnitude so that it fits in the available digits
     limit = 10**max_digits - 10 ** (-max_decimal_places)
     abs_val = min(abs(value), limit)
 
     # Build fixed-width string representation without sign and without decimal point
-    fmt_str = f"{{:0{max_digits}.{max_decimal_places}f}}"  # e.g. 0001.2300
-    s = fmt_str.format(abs_val)
+    # We first format with the desired number of decimal places, then pad the integer
+    # part with leading zeros to exactly *max_digits* characters. Python's format
+    # specification does not support fixed-width integer padding when combined
+    # with a fractional component, so we handle the padding manually.
+
+    s = f"{abs_val:.{max_decimal_places}f}"  # e.g. 1.2300 (variable int width)
     int_part, frac_part = s.split(".")
-    s_digits = int_part + frac_part  # concatenated string of exactly D digits
+
+    # Left-pad the integer part so that it always has *max_digits* characters.
+    # This guarantees the total digit count equals D = max_digits + max_decimal_places.
+    if len(int_part) > max_digits:
+        # This should not happen thanks to the earlier clipping, but guard anyway.
+        int_part = int_part[-max_digits:]
+    else:
+        int_part = int_part.zfill(max_digits)
+
+    # Ensure the fractional part has exactly *max_decimal_places* digits
+    if len(frac_part) < max_decimal_places:
+        frac_part = frac_part.ljust(max_decimal_places, "0")
+    elif len(frac_part) > max_decimal_places:
+        frac_part = frac_part[:max_decimal_places]
+
+    s_digits = int_part + frac_part
 
     D = max_digits + max_decimal_places
     assert len(s_digits) == D, f"Expected {D} digits, got {len(s_digits)}"
@@ -550,12 +569,18 @@ def generate_single_dag_example(
         max_decimal_places=max_decimal_places,
     )
 
+    # Compute log magnitudes (natural log) for legacy compatibility
+    log_magnitudes = torch.tensor(
+        [math.log(abs(v) if v != 0 else 1e-6) for v in initial_values]
+    )
+
     return DAGExample(
         text=expression,
         depth=depth,
         initial_values=initial_values,
         signs=signs,
         digits=digits_tensor,
+        log_magnitudes=log_magnitudes,
         operations=operations_tensor,
         seed=seed,
     )
@@ -647,25 +672,34 @@ class DAGStructureDataset:
         initial_sgn = torch.zeros(num_scratch_nodes)
         # digits tensor shape (num_nodes, D, 10)
         digits_template = torch.zeros_like(example.digits)
+        # log-magnitude tensor (consistent with historical interface)
+        initial_log = torch.zeros(num_scratch_nodes)
 
-        # Fill initial values from the example's sign and digit tensors
+        # Fill tensors from the example up to the available nodes
         signs_tensor = example.signs
         digits_tensor = example.digits
-
-        # Copy values up to num_scratch_nodes
         copy_len = min(len(signs_tensor), num_scratch_nodes)
+
         initial_sgn[:copy_len] = signs_tensor[:copy_len]
         digits_template[:copy_len] = digits_tensor[:copy_len]
+
+        # Compute log magnitudes (natural log) from the original initial values
+        for i in range(copy_len):
+            log_val = example.log_magnitudes[i]
+            # Clip to LOG_LIM for safety
+            log_val = max(min(log_val.item(), LOG_LIM), -LOG_LIM)
+            initial_log[i] = log_val
 
         # Use the example's operation tensor (already one-hot encoded)
         operation_probs = example.operations
 
         return {
             "initial_sgn": initial_sgn,
+            "initial_log": initial_log,
             "initial_digits": digits_template,
             "operation_probs": operation_probs,
             "depth": torch.tensor(depth, dtype=torch.long),
-            "operations": example.operations,  # Include the raw operations list
+            "operations": example.operations,  # raw list (for debugging)
         }
 
     def generate_batch(
@@ -716,6 +750,7 @@ class DAGStructureDataset:
 
         # Initialize batched tensors
         batched_initial_sgn = torch.zeros(batch_size, max_nodes)
+        batched_initial_log = torch.zeros(batch_size, max_nodes)
         D_total = self.max_digits + self.max_decimal_places
         batched_initial_digits = torch.zeros(batch_size, max_nodes, D_total, 10)
         batched_operation_probs = torch.zeros(batch_size, max_depth, len(OP_NAMES))
@@ -728,6 +763,7 @@ class DAGStructureDataset:
 
             # Copy initial values
             batched_initial_sgn[i, :nodes] = structure["initial_sgn"][:nodes]
+            batched_initial_log[i, :nodes] = structure["initial_log"][:nodes]
             batched_initial_digits[i, :nodes] = structure["initial_digits"][:nodes]
 
             # Copy operation probabilities
@@ -738,6 +774,7 @@ class DAGStructureDataset:
 
         return {
             "initial_sgn": batched_initial_sgn,
+            "initial_log": batched_initial_log,
             "initial_digits": batched_initial_digits,
             "operation_probs": batched_operation_probs,
             "depths": batched_depths,

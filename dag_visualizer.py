@@ -67,8 +67,8 @@ class DAGVisualizer:
         self.config = config
         self.dag_depth = config.dag_depth
         self.num_scratch_nodes = config.dag_depth + 1
-        self.op_names = OP_NAMES
-        self.n_ops = len(OP_FUNCS)
+        self.op_names = config.op_names
+        self.n_ops = len(self.op_names)
 
         # Color schemes
         self.operation_colors = {

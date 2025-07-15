@@ -18,18 +18,12 @@ np.random.seed(42)
 # import library code
 # --------------------------------------------------------------------- #
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from test_common import (SMALL_CONFIG, TINY_CONFIG, assert_valid_forward_pass,
-                         assert_valid_logging, assert_valid_node_values,
-                         sample_batch_small, sample_batch_tiny,
-                         setup_gradient_tracking_test, small_model,
-                         standard_model, tiny_model)
+from test_common import assert_valid_logging
 
-import models.dag_model as dag_model  # noqa: E402
 from dag_logger import DAGLogger
-from models.dag_model import (GPT, TEST_OPS_NAMES, DAGPlanPredictor,
-                              DifferentiableDAG, GPTConfig)
+from models.dag_model import GPT, OP_NAMES, GPTConfig
 
-N_OPS = len(TEST_OPS_NAMES)
+N_OPS = len(OP_NAMES)
 
 
 # --------------------------------------------------------------------- #

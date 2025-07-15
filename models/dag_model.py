@@ -13,7 +13,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import inspect
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 import torch.nn as nn
@@ -334,21 +334,13 @@ def identity_log_space(
 OP_FUNCS = [
     add_log_space,
     subtract_log_space,
-    identity_log_space,
-]
-OP_NAMES = ["add", "subtract", "identity"]
-
-assert len(OP_FUNCS) == len(OP_NAMES), "OP_FUNCS and OP_NAMES must have the same length"
-
-# For tests, we use the full operation set
-TEST_OPS = [
-    add_log_space,
-    subtract_log_space,
     multiply_log_space,
     divide_log_space,
     identity_log_space,
 ]
-TEST_OPS_NAMES = ["add", "subtract", "multiply", "divide", "identity"]
+OP_NAMES = ["add", "subtract", "multiply", "divide", "identity"]
+
+assert len(OP_FUNCS) == len(OP_NAMES), "OP_FUNCS and OP_NAMES must have the same length"
 
 
 def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
@@ -368,7 +360,9 @@ class DAGPlanPredictor(nn.Module):
         super().__init__()
         self.dag_depth = config.dag_depth
         self.temperature = temperature
-        self.n_ops = len(OP_FUNCS)  # Number of operations
+        # Resolve operations from config (allows subsets)
+        self.op_names = getattr(config, "op_names", OP_NAMES)
+        self.n_ops = len(self.op_names)
         self.num_scratch_nodes = config.dag_depth + 1
         self.n_embd = config.n_embd
 
@@ -774,6 +768,13 @@ class ScalarToEmbed(nn.Module):
         return self.proj(concat)
 
 
+def verify_ops(op_names: list[str]):
+    """Verify that the operations are valid."""
+    for op in op_names:
+        if op not in OP_NAMES:
+            raise ValueError(f"Invalid operation: {op}")
+
+
 # ---------------------------------------------------------------------------
 # DAG computation
 class DifferentiableDAG(nn.Module):
@@ -784,6 +785,8 @@ class DifferentiableDAG(nn.Module):
         super().__init__()
         self.hidden_dim = config.n_embd
         self.dag_depth = config.dag_depth
+        self.op_names = config.op_names
+        self.ops = [OP_FUNCS[OP_NAMES.index(op)] for op in self.op_names]
 
         # Always use dag_depth + 1 initial values for optimal stack-based computation
         self.num_scratch_nodes = config.dag_depth + 1
@@ -866,6 +869,8 @@ class GPTConfig:
         4  # 0 = standard GPT, >0 = DAG-augmented GPT (minimum 1 for ≥2 initial values)
     )
     softmax_temperature: float = 20.0
+    # Operation names the model should predict; defaults to the full set.
+    op_names: list[str] = field(default_factory=lambda: OP_NAMES.copy())
 
 
 # Main GPT model

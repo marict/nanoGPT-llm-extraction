@@ -19,9 +19,9 @@ from data.dagset.streaming import (DAGStructureDataset,
                                    generate_uniform_digit_number,
                                    plan_to_string_expression)
 # Import DAG operations for direct testing
-from models.dag_model import LOG_LIM, TEST_OPS_NAMES
+from models.dag_model import LOG_LIM, OP_NAMES
 
-N_OPS = len(TEST_OPS_NAMES)
+N_OPS = len(OP_NAMES)
 
 
 class TestIdentityFunction(unittest.TestCase):
@@ -222,7 +222,7 @@ class TestIdentityFunction(unittest.TestCase):
             operations_found.update(operations)
 
         # Verify all expected operations can be found
-        expected_ops = set(TEST_OPS_NAMES)
+        expected_ops = set(OP_NAMES)
         missing_ops = expected_ops - operations_found
 
         # We should find most operations, including identity
@@ -263,6 +263,7 @@ class TestDAGStructureDataset(unittest.TestCase):
         expected_keys = {
             "initial_sgn",
             "initial_log",
+            "initial_digits",
             "operation_probs",
             "depth",
             "operations",
@@ -727,7 +728,7 @@ class TestExpressionMatching(unittest.TestCase):
 
                 # Generate random test case
                 initial_values = [rng.uniform(-10, 10) for _ in range(4)]
-                operations = [rng.choice(TEST_OPS_NAMES) for _ in range(3)]
+                operations = [rng.choice(OP_NAMES) for _ in range(3)]
 
                 # Generate expression
                 expression = plan_to_string_expression(
