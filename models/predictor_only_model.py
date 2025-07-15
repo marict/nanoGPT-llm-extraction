@@ -7,12 +7,12 @@ over token embeddings and uses a DAG predictor for structure prediction.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 import torch.nn as nn
 
-from .dag_model import Block, DAGPlanPredictor, LayerNorm
+from .dag_model import OP_NAMES, Block, DAGPlanPredictor, LayerNorm
 
 
 @dataclass
@@ -27,6 +27,9 @@ class PredictorOnlyConfig:
     dag_depth: int = 4
     sequence_length: int = 512
     softmax_temperature: float = 20.0
+
+    # Allowed operation names for DAG execution/prediction. Defaults to the full set.
+    op_names: list[str] = field(default_factory=lambda: OP_NAMES.copy())
 
 
 class PredictorOnlyModel(nn.Module):

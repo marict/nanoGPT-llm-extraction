@@ -617,7 +617,24 @@ class DAGStructureDataset:
         self.english_conversion_probability = english_conversion_probability
         self.max_digits = max_digits
         self.max_decimal_places = max_decimal_places
-        self.allowed_operations = allowed_operations
+        # If a subset of operations is provided, validate and store mapping.
+        if allowed_operations is not None:
+            invalid_ops = [op for op in allowed_operations if op not in OP_NAMES]
+            if invalid_ops:
+                raise ValueError(
+                    f"Invalid operations provided: {invalid_ops}. Available operations: {OP_NAMES}"
+                )
+            self.allowed_operations = list(allowed_operations)
+        else:
+            self.allowed_operations = None  # None implies full OP_NAMES
+
+        # Pre-compute column indices mapping from allowed subset to global OP_NAMES
+        if self.allowed_operations is None:
+            self.allowed_op_indices = list(range(len(OP_NAMES)))
+        else:
+            self.allowed_op_indices = [
+                OP_NAMES.index(op) for op in self.allowed_operations
+            ]
 
         # Initialize tokenizer
         self.enc = get_encoding(tokenizer)
@@ -692,8 +709,16 @@ class DAGStructureDataset:
             log_val = max(min(log_val.item(), LOG_LIM), -LOG_LIM)
             initial_log[i] = log_val
 
-        # Use the example's operation tensor (already one-hot encoded)
-        operation_probs = example.operations
+        # Use the example's operation tensor (full OP_NAMES length) and zero
+        # out disallowed columns when a subset is specified. This keeps tensor
+        # shapes consistent for downstream code.
+        operation_probs = example.operations.clone()
+        if self.allowed_operations is not None:
+            disallowed_idx = [
+                i for i in range(len(OP_NAMES)) if i not in self.allowed_op_indices
+            ]
+            if disallowed_idx:
+                operation_probs[:, disallowed_idx] = 0.0
 
         return {
             "initial_sgn": initial_sgn,

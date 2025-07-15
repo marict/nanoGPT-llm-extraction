@@ -24,7 +24,7 @@ except ModuleNotFoundError:
     _HAVE_ST = False
 
 # Import model classes for initialization
-from models.dag_model import GPT, GPTConfig
+from models.dag_model import GPT, OP_NAMES, GPTConfig
 from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
 
 # Checkpoint directory
@@ -628,6 +628,10 @@ class CheckpointManager:
                 "softmax_temperature": (saved_cfg or {}).get(
                     "softmax_temperature", 20.0
                 ),
+                # Propagate subset or default full list
+                "op_names": (saved_cfg or {}).get(
+                    "op_names", getattr(cfg, "op_names", OP_NAMES.copy())
+                ),
             }
             model_config = GPTConfig(**model_cfg_dict)
             model = GPT(model_config)
@@ -645,6 +649,10 @@ class CheckpointManager:
                 ),
                 "softmax_temperature": (saved_cfg or {}).get(
                     "softmax_temperature", 20.0
+                ),
+                # Propagate subset or default full list
+                "op_names": (saved_cfg or {}).get(
+                    "op_names", getattr(cfg, "op_names", OP_NAMES.copy())
                 ),
             }
             model_config = PredictorOnlyConfig(**model_cfg_dict)

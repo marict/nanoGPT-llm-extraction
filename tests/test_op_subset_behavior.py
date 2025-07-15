@@ -11,9 +11,8 @@ SUBSET_OPS = ["add", "subtract", "identity"]
 def _make_dummy_predictor(depth: int = 2, n_embd: int = 32, n_head: int = 2):
     """Utility: build a tiny stand-alone predictor that only predicts SUBSET_OPS."""
 
-    # Re-use the existing config dataclass and inject op_names dynamically.
     cfg = PredictorOnlyConfig(
-        vocab_size=50,  # tiny vocab for speed
+        vocab_size=50,
         n_embd=n_embd,
         n_head=n_head,
         dropout=0.0,
@@ -21,9 +20,8 @@ def _make_dummy_predictor(depth: int = 2, n_embd: int = 32, n_head: int = 2):
         dag_depth=depth,
         sequence_length=16,
         softmax_temperature=5.0,
+        op_names=SUBSET_OPS,
     )
-    # Manually attach the op_names attribute expected by DAGPlanPredictor
-    cfg.op_names = SUBSET_OPS  # type: ignore[attr-defined]
 
     return PredictorOnlyModel(cfg)
 
@@ -40,10 +38,16 @@ def test_predictor_only_predicts_subset_ops():
     with torch.no_grad():
         _, _, op_probs = model(input_ids)  # (B, T, depth, len(SUBSET_OPS))
 
-    # Last dimension must match the subset size
-    assert op_probs.shape[-1] == len(
-        SUBSET_OPS
-    ), "Predictor produced logits for operations outside the configured subset."
+    # Predictor should emit full OP_NAMES dimension but with zero probability mass
+    assert op_probs.shape[-1] == len(OP_NAMES)
+
+    disallowed_indices = {
+        idx for idx in range(len(OP_NAMES)) if OP_NAMES[idx] not in SUBSET_OPS
+    }
+    probs_sum_disallowed = op_probs[..., list(disallowed_indices)].sum()
+    assert (
+        probs_sum_disallowed.item() < 1e-5
+    ), "Predictor assigned probability mass to operations outside the configured subset."
 
 
 def test_generate_random_dag_plan_subset():

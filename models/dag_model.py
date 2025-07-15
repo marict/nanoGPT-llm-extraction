@@ -508,9 +508,29 @@ class DAGPlanPredictor(nn.Module):
         # Clamp logits before softmax for numerical stability
         operation_logits = safe_clamp(operation_logits)
 
-        # Standard softmax with temperature scaling
+        # Standard softmax with temperature scaling (subset size for stability)
         scale = math.sqrt(self.n_ops)
-        operation_probs = F.softmax(operation_logits * scale / self.temperature, dim=-1)
+        operation_probs_subset = F.softmax(
+            operation_logits * scale / self.temperature, dim=-1
+        )  # (B,T,depth,subset)
+
+        # ------------------------------------------------------------------
+        # Map subset probabilities back to full OP_NAMES length so that all
+        # downstream code (loss functions, metrics, etc.) can assume a fixed
+        # size independent of configured subset.
+        # ------------------------------------------------------------------
+        if self.n_ops == len(OP_NAMES):
+            # No subset → return directly to avoid extra alloc
+            operation_probs = operation_probs_subset
+        else:
+            full_ops = operation_logits.new_zeros(B, T, self.dag_depth, len(OP_NAMES))
+            idx = torch.tensor(
+                [OP_NAMES.index(op) for op in self.op_names],
+                device=operation_logits.device,
+            )
+            # Scatter along last dim
+            full_ops.index_copy_(-1, idx, operation_probs_subset)
+            operation_probs = full_ops
 
         # Retain grad for logging.
         if initial_sgn.requires_grad and initial_sgn.grad_fn is not None:
