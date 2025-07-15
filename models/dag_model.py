@@ -330,14 +330,20 @@ def identity_log_space(
     return sx, lx
 
 
+# OP_FUNCS = [
+#     add_log_space,
+#     subtract_log_space,
+#     multiply_log_space,
+#     divide_log_space,
+#     identity_log_space,
+# ]
+# OP_NAMES = ["add", "subtract", "multiply", "divide", "identity"]
+
 OP_FUNCS = [
     add_log_space,
-    subtract_log_space,
-    multiply_log_space,
-    divide_log_space,
     identity_log_space,
 ]
-OP_NAMES = ["add", "subtract", "multiply", "divide", "identity"]
+OP_NAMES = ["add", "identity"]
 
 assert len(OP_FUNCS) == len(OP_NAMES), "OP_FUNCS and OP_NAMES must have the same length"
 
