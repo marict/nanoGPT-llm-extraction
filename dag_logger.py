@@ -130,7 +130,6 @@ class DAGLogger:
         mixed_hidden = model.last_mixed_hidden
         final_values = model.final_values
         last_gate = model.last_gate
-        mag_logits = getattr(model.dag.plan_predictor, "mag_logits", None)
 
         if original_hidden is None:
             raise RuntimeError("model should contain original_hidden")
@@ -148,11 +147,6 @@ class DAGLogger:
         fused_norm = mixed_hidden[:, -1].norm(dim=-1).mean().detach().item()
         final_values_norm = final_values.norm(dim=-1).mean().detach().item()
         last_gate_norm = last_gate.norm(dim=-1).mean().detach().item()
-        mag_logits_norm = (
-            mag_logits.norm(dim=-1).mean().detach().item()
-            if mag_logits is not None
-            else 0.0
-        )
 
         norm_values = {
             "original_hidden": hidden_norm,
@@ -161,7 +155,6 @@ class DAGLogger:
             "dag_to_orig_ratio": dag_norm / (hidden_norm + 1e-8),
             "final_values": final_values_norm,
             "last_gate": last_gate_norm,
-            "mag_logits": mag_logits_norm,
         }
         self.logging_data["norm_values"] = norm_values
 

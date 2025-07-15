@@ -408,7 +408,6 @@ class DAGPlanPredictor(nn.Module):
 
         # Store last predictions for logging
         self.last_operation_probs: torch.Tensor | None = None
-        self.mag_logits: torch.Tensor | None = None  # for logging
 
     def forward(self, original_hidden: torch.Tensor):
         """
@@ -423,7 +422,6 @@ class DAGPlanPredictor(nn.Module):
         """
         # Clear previously cached tensors
         self.last_operation_probs = None
-        self.mag_logits = None
 
         B, T, H = original_hidden.shape
 
@@ -476,7 +474,6 @@ class DAGPlanPredictor(nn.Module):
 
         # Store for logging / compatibility
         self.digit_logits = digit_logits
-        self.mag_logits = None  # deprecated
 
         # Compute probabilities and expected digits
         digit_probs = F.softmax(digit_logits, dim=-1)
@@ -649,109 +646,6 @@ def execute_stack(
     return buffer_sgn[..., 0], buffer_log[..., 0]
 
 
-def stack_based_execution(
-    initial_values_sgn: torch.Tensor,
-    initial_values_log: torch.Tensor,
-    ops: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Execute stack-based DAG computation.
-
-    Args:
-        initial_values_sgn: (B, T, num_initial) - initial stack signs
-        initial_values_log: (B, T, num_initial) - initial stack log magnitudes
-        ops: (B, T, depth, n_ops) - operation probabilities for each step (processed right-to-left)
-
-    Returns:
-        final_sgn: (B, T) - final sign
-        final_log: (B, T) - final log magnitude
-    """
-    # Use the buffered implementation for better performance
-    return execute_stack(initial_values_sgn, initial_values_log, ops)
-
-
-def stack_based_execution_original(
-    initial_values_sgn: torch.Tensor,
-    initial_values_log: torch.Tensor,
-    ops: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Original stack-based execution (kept for testing/fallback).
-
-    Args:
-        initial_values_sgn: (B, T, num_initial) - initial stack signs
-        initial_values_log: (B, T, num_initial) - initial stack log magnitudes
-        ops: (B, T, depth, n_ops) - operation probabilities for each step (processed right-to-left)
-
-    Returns:
-        final_sgn: (B, T) - final sign
-        final_log: (B, T) - final log magnitude
-    """
-    B, T, num_initial = initial_values_sgn.shape
-    depth = ops.shape[2]
-
-    # Note: Configuration validation moved to DifferentiableDAG.__init__
-
-    # Keep track of current values at each position
-    # We'll build new tensors at each step to avoid in-place modifications
-    current_sgn = initial_values_sgn  # (B, T, num_initial)
-    current_log = initial_values_log  # (B, T, num_initial)
-
-    stack_size = num_initial
-
-    for step in range(depth):
-        # Runtime check: ensure we have at least 2 elements to operate on
-        if stack_size < 2:
-            raise RuntimeError(
-                f"Stack underflow at step {step}: only {stack_size} elements remaining, need at least 2"
-            )
-
-        # Pop top two elements (take last two in stack)
-        top_sgn = current_sgn[..., stack_size - 1]  # (B, T)
-        second_sgn = current_sgn[..., stack_size - 2]  # (B, T)
-        top_log = current_log[..., stack_size - 1]  # (B, T)
-        second_log = current_log[..., stack_size - 2]  # (B, T)
-
-        # Apply operation (process operations right-to-left like a stack)
-        result_sgn, result_log = apply_op(
-            second_sgn, second_log, top_sgn, top_log, ops[:, :, depth - 1 - step]
-        )
-
-        # Apply RMS rescaling to keep magnitudes bounded
-        prev_logs_slice = current_log[..., : stack_size - 1]  # (B, T, stack_size-1)
-        result_log = _rms_rescale(prev_logs_slice, result_log)
-
-        # Create new tensors for the updated stack
-        # Keep the elements before the second-to-top position, update the second-to-top with result
-        if stack_size > 2:
-            # Keep elements [0, ..., stack_size-3], then result at stack_size-2
-            new_sgn = torch.cat(
-                [
-                    current_sgn[..., : stack_size - 2],  # Elements before second-to-top
-                    result_sgn.unsqueeze(-1),  # New result
-                ],
-                dim=-1,
-            )
-            new_log = torch.cat(
-                [
-                    current_log[..., : stack_size - 2],  # Elements before second-to-top
-                    result_log.unsqueeze(-1),  # New result
-                ],
-                dim=-1,
-            )
-        else:
-            # Only two elements, result becomes the only element
-            new_sgn = result_sgn.unsqueeze(-1)
-            new_log = result_log.unsqueeze(-1)
-
-        current_sgn = new_sgn
-        current_log = new_log
-        stack_size -= 1
-
-    # Return final result (should be at position 0)
-    return current_sgn[..., 0], current_log[..., 0]
-
-
 class ScalarToEmbed(nn.Module):
     """Map sign & log magnitude to embedding using Fourier bases."""
 
@@ -830,9 +724,7 @@ class DifferentiableDAG(nn.Module):
             _debug_check("initial_values", initial_sgn, initial_log)
 
         # Execute stack-based computation
-        final_sgn, final_log = stack_based_execution(
-            initial_sgn, initial_log, operation_probs
-        )
+        final_sgn, final_log = execute_stack(initial_sgn, initial_log, operation_probs)
 
         if ENABLE_DEBUG_NAN_CHECKS:
             _debug_check("final_values", final_sgn, final_log)

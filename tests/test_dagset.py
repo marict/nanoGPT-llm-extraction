@@ -524,7 +524,7 @@ class TestDAGStructureDataset(unittest.TestCase):
 
     def test_integration_with_dag_model_components(self):
         """Test integration with actual DAG model components."""
-        from models.dag_model import stack_based_execution
+        from models.dag_model import execute_stack
 
         dataset = DAGStructureDataset(max_depth=3, seed=42)
 
@@ -545,7 +545,7 @@ class TestDAGStructureDataset(unittest.TestCase):
 
         # Test that stack_based_execution works with our tensors
         try:
-            final_sgn, final_log = stack_based_execution(
+            final_sgn, final_log = execute_stack(
                 initial_sgn, initial_log, operation_probs
             )
 
