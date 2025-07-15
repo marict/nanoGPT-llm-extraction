@@ -12,7 +12,7 @@ import torch
 import torch.nn.functional as F
 from tiktoken import get_encoding
 
-from models.dag_model import LOG_LIM
+from models.dag_model import LOG_LIM, OP_NAMES
 
 __all__ = [
     "tokenize_texts",
@@ -269,6 +269,65 @@ def evaluate_dag_model(
                     is_prob=False,
                 )
                 log_mape = ((pred_mag - tgt_mag).abs() / tgt_mag.clamp_min(1e-8)).mean()
+
+                # -------------------------------------------------------------- #
+                # Console debug: print one random sample from the first batch
+                # -------------------------------------------------------------- #
+                if i == 0:
+                    batch_size = tgt_sgn.size(0)
+                    sample_idx = _eval_random.randrange(batch_size)
+                    sample_text = texts[sample_idx]
+                    sample_seed = seeds[sample_idx]
+
+                    # Sign vectors (N,) and digit logits (N,D,10)
+                    pred_sign_vec = pred_sgn.squeeze(1)[sample_idx]
+                    tgt_sign_vec = tgt_sgn[sample_idx]
+
+                    pred_digits_vec = digit_logits.squeeze(1)[sample_idx].softmax(
+                        dim=-1
+                    )
+                    tgt_digits_vec = tgt_digits[sample_idx]
+
+                    # Convert digit distributions to magnitudes
+                    pred_mag_vec = digits_to_magnitude(
+                        pred_digits_vec,
+                        cfg.max_digits,
+                        cfg.max_decimal_places,
+                    )
+                    tgt_mag_vec = digits_to_magnitude(
+                        tgt_digits_vec,
+                        cfg.max_digits,
+                        cfg.max_decimal_places,
+                        is_prob=False,
+                    )
+
+                    pred_real_vals = (
+                        (torch.sign(pred_sign_vec) * pred_mag_vec).cpu().tolist()
+                    )
+                    tgt_real_vals = (
+                        (torch.sign(tgt_sign_vec) * tgt_mag_vec).cpu().tolist()
+                    )
+
+                    # Decode operations
+                    tgt_ops_row = tgt_ops[sample_idx]  # (depth, n_ops)
+                    pred_ops_row = pred_ops.squeeze(1)[sample_idx]
+                    tgt_op_indices = tgt_ops_row.argmax(dim=-1).cpu().tolist()
+                    pred_op_indices = pred_ops_row.argmax(dim=-1).cpu().tolist()
+                    tgt_op_names = [OP_NAMES[idx] for idx in tgt_op_indices]
+                    pred_op_names = [OP_NAMES[idx] for idx in pred_op_indices]
+
+                    print("\n=== Validation Sample ===")
+                    print(f"Sample RNG seed: {sample_seed}")
+                    print(f"Text: {sample_text}")
+                    print("Target initial values (rounded to 4 dp):")
+                    print([round(v, 4) for v in tgt_real_vals])
+                    print("Predicted initial values (rounded to 4 dp):")
+                    print([round(v, 4) for v in pred_real_vals])
+                    print("Operations (ground truth):")
+                    print(tgt_op_names)
+                    print("Operations (predicted):")
+                    print(pred_op_names)
+                    print("==========================\n")
 
             # Aggregate
             for k, v in losses.items():
