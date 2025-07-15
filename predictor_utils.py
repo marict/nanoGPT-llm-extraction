@@ -85,7 +85,8 @@ def compute_dag_structure_loss(
     # We convert to log-probabilities in a way that supports both cases.
     B, T, N, D, _ = pred_digits.shape
     with torch.amp.autocast(device_type=device_type, enabled=False):
-        pred_flat = pred_digits.view(-1, 10).to(torch.float32)  # (B*T*N*D, 10)
+        # Use reshape to handle potential non-contiguous tensors (view can fail)
+        pred_flat = pred_digits.reshape(-1, 10).to(torch.float32)  # (B*T*N*D, 10)
         if pred_flat.min() < 0 or pred_flat.max() > 1:
             # Likely raw logits – apply log_softmax
             log_probs = F.log_softmax(pred_flat, dim=-1)
@@ -93,7 +94,7 @@ def compute_dag_structure_loss(
             # Already probabilities (or one-hot). Clamp for numerical stability
             log_probs = torch.log(pred_flat.clamp(min=1e-8))
 
-        target_flat = target_digits.view(-1, 10)
+        target_flat = target_digits.reshape(-1, 10)
         target_idx = target_flat.argmax(dim=-1)
 
         # Mask out positions where the target has no valid digit information (all zeros)

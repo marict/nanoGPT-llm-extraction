@@ -331,7 +331,16 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 eval_losses = evaluate_dag_model(
                     raw_model, val_loader_eval, device, ctx, cfg, cfg.eval_iters, seed
                 )
-                # evaluation progress message removed
+                if master_process:
+                    eval_msg = (
+                        f"[val] iter {iter_num}: total_loss {eval_losses['total_loss']:.4f}, "
+                        f"sign_loss {eval_losses['sign_loss']:.4f}, digit_loss {eval_losses['digit_loss']:.4f}, "
+                        f"op_loss {eval_losses['op_loss']:.4f}, op_acc {eval_losses['op_accuracy']:.4f}, "
+                        f"full_op_match {eval_losses['full_dag_op_match']:.4f}, "
+                        f"sign_acc {eval_losses['sign_accuracy']:.4f}, "
+                        f"log_mape {eval_losses['log_magnitude_mape']:.4f}"
+                    )
+                    print(eval_msg)
 
                 # Log validation metrics to wandb
                 if run is not None:
@@ -602,6 +611,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
                 log_msg += f", time {dt*1000:.2f}ms"
                 # realtime training log emitted via wandb
+                if master_process:
+                    print(log_msg)
 
                 # Log to wandb
                 if run is not None:
