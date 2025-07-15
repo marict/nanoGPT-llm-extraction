@@ -13,11 +13,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 import torch
 
 from checkpoint_manager import CheckpointManager
-from models.dag_model import GPT, GPTConfig
+from models.dag_model import GPT, TEST_OPS_NAMES, GPTConfig
 from models.predictor_only_model import PredictorOnlyConfig
+
+N_OPS = len(TEST_OPS_NAMES)
 from train_predictor import (DAGTrainConfig, PredictorOnlyModel,
                              apply_overrides, compute_dag_structure_loss,
                              get_lr, load_config_file, tokenize_texts,
@@ -35,7 +38,7 @@ class TestDAGTrainConfig(unittest.TestCase):
         self.assertEqual(cfg.n_embd, 768)
         self.assertEqual(cfg.learning_rate, 3e-4)
         self.assertEqual(cfg.sign_loss_weight, 1.0)
-        self.assertEqual(cfg.log_loss_weight, 1.0)
+        self.assertEqual(cfg.digit_loss_weight, 1.0)
         self.assertEqual(cfg.op_loss_weight, 1.0)
 
     def test_config_attributes(self):
@@ -51,7 +54,7 @@ class TestDAGTrainConfig(unittest.TestCase):
             "learning_rate",
             "max_iters",
             "sign_loss_weight",
-            "log_loss_weight",
+            "digit_loss_weight",
             "op_loss_weight",
             "max_dag_depth",
             "train_examples_per_batch",
@@ -179,7 +182,8 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
             self.assertEqual(pred_sgn.shape, (batch_size, seq_len, expected_nodes))
             self.assertEqual(pred_log.shape, (batch_size, seq_len, expected_nodes))
             self.assertEqual(
-                pred_ops.shape, (batch_size, seq_len, self.config.dag_depth, 5)
+                pred_ops.shape,
+                (batch_size, seq_len, self.config.dag_depth, N_OPS),
             )
 
     def test_forward_pass_values(self):
@@ -239,7 +243,8 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
                         pred_log.shape, (batch_size, seq_len, expected_nodes)
                     )
                     self.assertEqual(
-                        pred_ops.shape, (batch_size, seq_len, self.config.dag_depth, 5)
+                        pred_ops.shape,
+                        (batch_size, seq_len, self.config.dag_depth, N_OPS),
                     )
 
     def test_gradient_flow(self):
@@ -286,7 +291,8 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
         self.assertEqual(pred_sgn.shape, (batch_size, seq_len, expected_nodes))
         self.assertEqual(pred_log.shape, (batch_size, seq_len, expected_nodes))
         self.assertEqual(
-            pred_ops.shape, (batch_size, seq_len, self.config.dag_depth, 5)
+            pred_ops.shape,
+            (batch_size, seq_len, self.config.dag_depth, N_OPS),
         )
 
         # Verify outputs are finite (not NaN or Inf)
@@ -391,7 +397,7 @@ class TestLossFunctions(unittest.TestCase):
         self.cfg = DAGTrainConfig()
         self.cfg.dag_depth = 2
         self.cfg.sign_loss_weight = 1.0
-        self.cfg.log_loss_weight = 1.0
+        self.cfg.digit_loss_weight = 1.0
         self.cfg.op_loss_weight = 1.0
 
     def test_compute_dag_structure_loss_shapes(self):
@@ -399,30 +405,33 @@ class TestLossFunctions(unittest.TestCase):
         B, T = 2, 8
         num_nodes = self.cfg.dag_depth + 1
         depth = self.cfg.dag_depth
-        n_ops = 5
+        n_ops = N_OPS
 
         # Create test tensors
         pred_sgn = torch.tanh(torch.randn(B, T, num_nodes))
-        pred_log = torch.abs(torch.randn(B, T, num_nodes))
+        D_total = self.cfg.max_digits + (self.cfg.max_decimal_places or 6)
+        pred_digits = torch.softmax(torch.randn(B, T, num_nodes, D_total, 10), dim=-1)
         pred_ops = torch.softmax(torch.randn(B, T, depth, n_ops), dim=-1)
 
         target_sgn = torch.randn(B, T, num_nodes)
-        target_log = torch.abs(torch.randn(B, T, num_nodes))
+        target_digits = torch.nn.functional.one_hot(
+            torch.randint(0, 10, (B, T, num_nodes, D_total)), num_classes=10
+        ).float()
         target_ops = torch.zeros(B, T, depth, n_ops)
-        target_ops[:, :, :, 0] = 1  # One-hot
+        target_ops[:, :, :, 0] = 1
 
         losses = compute_dag_structure_loss(
             pred_sgn,
-            pred_log,
+            pred_digits,
             pred_ops,
             target_sgn,
-            target_log,
+            target_digits,
             target_ops,
             self.cfg,
         )
 
         # Check return format
-        expected_keys = {"total_loss", "sign_loss", "log_loss", "op_loss"}
+        expected_keys = {"total_loss", "sign_loss", "digit_loss", "op_loss"}
         self.assertEqual(set(losses.keys()), expected_keys)
 
         # Check loss values are reasonable
@@ -436,31 +445,34 @@ class TestLossFunctions(unittest.TestCase):
         B, T = 2, 8
         num_nodes = self.cfg.dag_depth + 1
         depth = self.cfg.dag_depth
-        n_ops = 5
+        n_ops = N_OPS
         H = self.cfg.n_embd
 
         # Create test tensors
         pred_sgn = torch.tanh(torch.randn(B, T, num_nodes))
-        pred_log = torch.abs(torch.randn(B, T, num_nodes))
+        D_total = self.cfg.max_digits + (self.cfg.max_decimal_places or 6)
+        pred_digits = torch.softmax(torch.randn(B, T, num_nodes, D_total, 10), dim=-1)
         pred_ops = torch.softmax(torch.randn(B, T, depth, n_ops), dim=-1)
 
         target_sgn = torch.randn(B, T, num_nodes)
-        target_log = torch.abs(torch.randn(B, T, num_nodes))
+        target_digits = torch.nn.functional.one_hot(
+            torch.randint(0, 10, (B, T, num_nodes, D_total)), num_classes=10
+        ).float()
         target_ops = torch.zeros(B, T, depth, n_ops)
         target_ops[:, :, :, 0] = 1
 
         losses = compute_dag_structure_loss(
             pred_sgn,
-            pred_log,
+            pred_digits,
             pred_ops,
             target_sgn,
-            target_log,
+            target_digits,
             target_ops,
             self.cfg,
         )
 
         # Should have the basic loss components
-        expected_keys = {"total_loss", "sign_loss", "log_loss", "op_loss"}
+        expected_keys = {"total_loss", "sign_loss", "digit_loss", "op_loss"}
 
         self.assertEqual(set(losses.keys()), expected_keys)
 
@@ -475,14 +487,17 @@ class TestLossFunctions(unittest.TestCase):
         B, T = 2, 4
         num_nodes = self.cfg.dag_depth + 1
         depth = self.cfg.dag_depth
-        n_ops = 5
+        n_ops = N_OPS
 
         pred_sgn = torch.tanh(torch.randn(B, T, num_nodes))
-        pred_log = torch.abs(torch.randn(B, T, num_nodes))
+        D_total = self.cfg.max_digits + (self.cfg.max_decimal_places or 6)
+        pred_digits = torch.softmax(torch.randn(B, T, num_nodes, D_total, 10), dim=-1)
         pred_ops = torch.softmax(torch.randn(B, T, depth, n_ops), dim=-1)
 
         target_sgn = torch.randn(B, T, num_nodes)
-        target_log = torch.abs(torch.randn(B, T, num_nodes))
+        target_digits = torch.nn.functional.one_hot(
+            torch.randint(0, 10, (B, T, num_nodes, D_total)), num_classes=10
+        ).float()
         target_ops = torch.zeros(B, T, depth, n_ops)
         target_ops[:, :, :, 0] = 1
 
@@ -490,15 +505,15 @@ class TestLossFunctions(unittest.TestCase):
         cfg_weighted = DAGTrainConfig()
         cfg_weighted.dag_depth = self.cfg.dag_depth
         cfg_weighted.sign_loss_weight = 2.0
-        cfg_weighted.log_loss_weight = 0.5
+        cfg_weighted.digit_loss_weight = 0.5
         cfg_weighted.op_loss_weight = 1.5
 
         losses = compute_dag_structure_loss(
             pred_sgn,
-            pred_log,
+            pred_digits,
             pred_ops,
             target_sgn,
-            target_log,
+            target_digits,
             target_ops,
             cfg_weighted,
         )
@@ -506,7 +521,7 @@ class TestLossFunctions(unittest.TestCase):
         # Verify total loss incorporates weights
         expected_total = (
             cfg_weighted.sign_loss_weight * losses["sign_loss"]
-            + cfg_weighted.log_loss_weight * losses["log_loss"]
+            + cfg_weighted.digit_loss_weight * losses["digit_loss"]
             + cfg_weighted.op_loss_weight * losses["op_loss"]
         )
         self.assertTrue(torch.allclose(losses["total_loss"], expected_total, atol=1e-5))
@@ -516,10 +531,13 @@ class TestLossFunctions(unittest.TestCase):
         B, T = 2, 4
         num_nodes = self.cfg.dag_depth + 1
         depth = self.cfg.dag_depth
-        n_ops = 5
+        n_ops = N_OPS
 
         target_sgn = torch.randint(0, 2, (B, T, num_nodes)).float() * 2 - 1  # ±1
-        target_log = torch.abs(torch.randn(B, T, num_nodes))
+        D_total = self.cfg.max_digits + (self.cfg.max_decimal_places or 6)
+        target_digits = torch.nn.functional.one_hot(
+            torch.randint(0, 10, (B, T, num_nodes, D_total)), num_classes=10
+        ).float()
 
         # Operation targets: one-hot on the first op for determinism
         target_ops = torch.zeros(B, T, depth, n_ops)
@@ -527,22 +545,22 @@ class TestLossFunctions(unittest.TestCase):
 
         # Perfect predictions equal the targets
         pred_sgn = target_sgn.clone()
-        pred_log = target_log.clone()
+        pred_digits = target_digits.clone()
         pred_ops = target_ops.clone()
 
         losses = compute_dag_structure_loss(
             pred_sgn,
-            pred_log,
+            pred_digits,
             pred_ops,
             target_sgn,
-            target_log,
+            target_digits,
             target_ops,
             self.cfg,
         )
 
         # Losses should be very small for perfect predictions
         self.assertLess(losses["sign_loss"].item(), 1e-6)
-        self.assertLess(losses["log_loss"].item(), 1e-6)
+        self.assertLess(losses["digit_loss"].item(), 1e-6)
         self.assertLess(losses["op_loss"].item(), 1e-6)
 
 
@@ -919,7 +937,7 @@ class TestModelSetup(unittest.TestCase):
                 pred_log.shape, (batch_size, cfg.sequence_length, expected_nodes)
             )
             self.assertEqual(
-                pred_ops.shape, (batch_size, cfg.sequence_length, cfg.dag_depth, 5)
+                pred_ops.shape, (batch_size, cfg.sequence_length, cfg.dag_depth, N_OPS)
             )
 
             # Verify outputs are reasonable
@@ -1233,7 +1251,7 @@ class TestFullBackbonePredictor(unittest.TestCase):
         expected_nodes = self.cfg.dag_depth + 1
         self.assertEqual(pred_sgn.shape, (batch, seq_len, expected_nodes))
         self.assertEqual(pred_log.shape, (batch, seq_len, expected_nodes))
-        self.assertEqual(pred_ops.shape, (batch, seq_len, self.cfg.dag_depth, 5))
+        self.assertEqual(pred_ops.shape, (batch, seq_len, self.cfg.dag_depth, N_OPS))
 
         # Basic sanity checks on ranges
         self.assertTrue((pred_sgn >= -1).all() and (pred_sgn <= 1).all())

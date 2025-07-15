@@ -79,7 +79,7 @@ check_nans = False
 
 # Loss weights (can tune these)
 sign_loss_weight = 1.0
-log_loss_weight = 1.0
+digit_loss_weight = 1.0
 op_loss_weight = 1.0
 
 # Random seeds

@@ -26,8 +26,10 @@ from test_common import (SMALL_CONFIG, TINY_CONFIG, assert_valid_forward_pass,
 
 import models.dag_model as dag_model  # noqa: E402
 from dag_logger import DAGLogger
-from models.dag_model import (GPT, OP_NAMES, DAGPlanPredictor,
+from models.dag_model import (GPT, TEST_OPS_NAMES, DAGPlanPredictor,
                               DifferentiableDAG, GPTConfig)
+
+N_OPS = len(TEST_OPS_NAMES)
 
 
 # --------------------------------------------------------------------- #

@@ -18,6 +18,7 @@ __all__ = [
     "tokenize_texts",
     "compute_dag_structure_loss",
     "evaluate_dag_model",
+    "digits_to_magnitude",
 ]
 
 
@@ -50,12 +51,13 @@ def tokenize_texts(texts: List[str], sequence_length: int, device: str) -> torch
 # --------------------------------------------------------------------------- #
 
 
+# Updated function to handle digit distributions instead of log magnitudes
 def compute_dag_structure_loss(
-    pred_sgn: torch.Tensor,
-    pred_log: torch.Tensor,
-    pred_ops: torch.Tensor,
-    target_sgn: torch.Tensor,
-    target_log: torch.Tensor,
+    pred_sgn: torch.Tensor,  # (B,T,N)
+    pred_digits: torch.Tensor,  # (B,T,N,D,10) logits or probs
+    pred_ops: torch.Tensor,  # (B,T,depth,n_ops)
+    target_sgn: torch.Tensor,  # (B,T,N)
+    target_digits: torch.Tensor,  # (B,T,N,D,10) one-hot
     target_ops: torch.Tensor,
     cfg,
 ) -> Dict[str, torch.Tensor]:
@@ -77,11 +79,12 @@ def compute_dag_structure_loss(
             sign_pred, sign_target, reduction="none"
         ).mean()
 
-    # Magnitude (log-cosh on centred log-space values)
-    # Compute in full precision to avoid FP16 overflows/underflows during mixed-precision training.
+    # Digit prediction (cross entropy)
+    B, T, N, D, _ = pred_digits.shape
     with torch.amp.autocast(device_type=device_type, enabled=False):
-        diff = (pred_log.to(torch.float32) - target_log.to(torch.float32)) / LOG_LIM
-        log_loss = torch.log(torch.cosh(diff + 1e-12)).mean()
+        pred_flat = pred_digits.view(-1, 10).to(torch.float32)  # (B*T*N*D, 10)
+        target_idx = target_digits.view(-1, 10).argmax(dim=-1)
+        digit_loss = F.cross_entropy(pred_flat, target_idx)
 
     # Operation (NLL over one-hot targets)
     # Convert probabilities to float32 before taking log to prevent log(0) -> -inf in FP16 when probs are tiny.
@@ -93,16 +96,54 @@ def compute_dag_structure_loss(
 
     total_loss = (
         cfg.sign_loss_weight * sign_loss
-        + cfg.log_loss_weight * log_loss
+        + cfg.digit_loss_weight * digit_loss
         + cfg.op_loss_weight * op_loss
     )
 
     return {
         "total_loss": total_loss,
         "sign_loss": sign_loss,
-        "log_loss": log_loss,
+        "digit_loss": digit_loss,
         "op_loss": op_loss,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Utility helpers for digit tensors
+# --------------------------------------------------------------------------- #
+
+
+def digits_to_magnitude(
+    digits: torch.Tensor,
+    max_digits: int,
+    max_decimal_places: int,
+    is_prob: bool = True,
+) -> torch.Tensor:
+    """Convert a digit tensor to absolute magnitude.
+
+    Args:
+        digits: (..., D, 10) tensor. If *is_prob* is True the last dim contains
+            probabilities; otherwise it is assumed to be one-hot / logits already
+            converted to probabilities.
+        max_digits: integer digits (D1).
+        max_decimal_places: fractional digits (D2).
+        is_prob: whether *digits* sums to 1 along last axis.
+
+    Returns:
+        magnitude: tensor with shape digits.shape[:-2]
+    """
+    device, dtype = digits.device, digits.dtype
+    digits_vals = (digits * torch.arange(10, device=device, dtype=dtype)).sum(
+        -1
+    )  # (..., D)
+
+    int_weights = 10 ** torch.arange(max_digits - 1, -1, -1, device=device, dtype=dtype)
+    frac_weights = 10 ** torch.arange(
+        -1, -max_decimal_places - 1, -1, device=device, dtype=dtype
+    )
+    weights = torch.cat((int_weights, frac_weights))  # (D,)
+    magnitude = (digits_vals * weights).sum(-1)
+    return magnitude
 
 
 # --------------------------------------------------------------------------- #
@@ -123,7 +164,9 @@ def evaluate_dag_model(
     model.eval()
     _eval_random.seed(seed)
 
-    total_losses = {k: 0.0 for k in ("total_loss", "sign_loss", "log_loss", "op_loss")}
+    total_losses = {
+        k: 0.0 for k in ("total_loss", "sign_loss", "digit_loss", "op_loss")
+    }
     total_metrics = {
         "op_accuracy": 0.0,
         "full_dag_op_match": 0.0,
@@ -139,7 +182,7 @@ def evaluate_dag_model(
 
             # Targets → device
             tgt_sgn = structures["initial_sgn"].to(device)
-            tgt_log = structures["initial_log"].to(device)
+            tgt_digits = structures["initial_digits"].to(device)
             tgt_ops = structures["operation_probs"].to(device)
 
             # Inputs
@@ -149,12 +192,19 @@ def evaluate_dag_model(
             with ctx:
                 if cfg.full_backbone and hasattr(model, "dag"):
                     hidden = model.forward_hidden(input_tokens)
-                    pred_sgn, pred_log, pred_ops = model.dag.plan_predictor(hidden)
+                    pred_sgn, _, pred_ops = model.dag.plan_predictor(hidden)
                 else:
-                    pred_sgn, pred_log, pred_ops = model(input_tokens)
+                    pred_sgn, _, pred_ops = model(input_tokens)
 
                 pred_sgn = pred_sgn.mean(dim=1)
-                pred_log = pred_log.mean(dim=1)
+                digit_logits = (
+                    model.dag.plan_predictor.digit_logits
+                    if hasattr(model.dag.plan_predictor, "digit_logits")
+                    else None
+                )
+                if digit_logits is None:
+                    raise RuntimeError("digit_logits not found for evaluation")
+                digit_logits = digit_logits.mean(dim=1)  # (B,N,D,10)
                 pred_ops = pred_ops.mean(dim=1)
 
                 nodes, depth = tgt_sgn.size(1), tgt_ops.size(1)
@@ -166,15 +216,15 @@ def evaluate_dag_model(
 
                 # Sequence dimension for loss function compatibility
                 pred_sgn = pred_sgn.unsqueeze(1)
-                pred_log = pred_log.unsqueeze(1)
+                digit_logits = digit_logits.unsqueeze(1)
                 pred_ops = pred_ops.unsqueeze(1)
 
                 losses = compute_dag_structure_loss(
                     pred_sgn,
-                    pred_log,
+                    digit_logits,
                     pred_ops,
                     tgt_sgn.unsqueeze(1),
-                    tgt_log.unsqueeze(1),
+                    tgt_digits.unsqueeze(1),
                     tgt_ops.unsqueeze(1),
                     cfg,
                 )
@@ -189,8 +239,17 @@ def evaluate_dag_model(
                 sign_correct = torch.sign(pred_sgn.squeeze(1)).eq(torch.sign(tgt_sgn))
                 sign_acc = sign_correct.float().mean()
 
-                pred_mag = pred_log.squeeze(1).exp()
-                tgt_mag = tgt_log.squeeze(1).exp()
+                pred_mag = digits_to_magnitude(
+                    digit_logits.squeeze(1).softmax(dim=-1),
+                    cfg.max_digits,
+                    cfg.max_decimal_places,
+                )
+                tgt_mag = digits_to_magnitude(
+                    tgt_digits.squeeze(1),
+                    cfg.max_digits,
+                    cfg.max_decimal_places,
+                    is_prob=False,
+                )
                 log_mape = ((pred_mag - tgt_mag).abs() / tgt_mag.clamp_min(1e-8)).mean()
 
             # Aggregate

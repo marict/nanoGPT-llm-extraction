@@ -1,9 +1,13 @@
 import unittest
 
+import pytest
 import torch
 
+from models.dag_model import TEST_OPS_NAMES
 from predictor_config import DAGTrainConfig
 from predictor_utils import compute_dag_structure_loss
+
+N_OPS = len(TEST_OPS_NAMES)
 
 
 class TestLossRegressions(unittest.TestCase):
@@ -13,47 +17,51 @@ class TestLossRegressions(unittest.TestCase):
         cfg = DAGTrainConfig()
         cfg.dag_depth = 2
         cfg.sign_loss_weight = 1.0
-        cfg.log_loss_weight = 1.0
+        cfg.digit_loss_weight = 1.0
         cfg.op_loss_weight = 1.0
         return cfg
 
     def test_negative_log_magnitude_support(self):
-        """Perfect prediction with negative log values should yield ~zero log_loss."""
+        """Perfect prediction should yield ~zero digit_loss."""
         cfg = self._make_cfg()
-        B, T, nodes, depth, n_ops = 1, 1, cfg.dag_depth + 1, cfg.dag_depth, 5
+        B, T, nodes, depth, n_ops = 1, 1, cfg.dag_depth + 1, cfg.dag_depth, N_OPS
 
-        # Signs (all +1 for simplicity)
         target_sgn = torch.ones(B, T, nodes)
         pred_sgn = target_sgn.clone()
 
-        # Negative log-magnitudes (simulate |v| < 1)
-        target_log = torch.tensor(
-            [[[-0.1, -1.0, -2.0]]], dtype=torch.float32
-        )  # shape (1,1,3)
-        pred_log = target_log.clone()
+        # Digits tensor – all zeros except one example digit 3
+        D_total = cfg.max_digits + (cfg.max_decimal_places or 6)
+        target_digits = torch.zeros(B, T, nodes, D_total, 10)
+        target_digits[..., 0, 3] = 1.0  # first slot digit 3
+        pred_digits = target_digits.clone()
 
-        # Operations – one-hot on first op ("add")
         target_ops = torch.zeros(B, T, depth, n_ops)
         target_ops[..., 0] = 1.0
         pred_ops = target_ops.clone()
 
         losses = compute_dag_structure_loss(
-            pred_sgn, pred_log, pred_ops, target_sgn, target_log, target_ops, cfg
+            pred_sgn,
+            pred_digits,
+            pred_ops,
+            target_sgn,
+            target_digits,
+            target_ops,
+            cfg,
         )
 
-        # Expect virtually zero magnitude loss (<1e-6) when prediction is perfect
-        self.assertLess(losses["log_loss"].item(), 1e-6)
+        self.assertLess(losses["digit_loss"].item(), 1e-6)
 
     def test_op_loss_zero_probability_stability(self):
         """Loss should remain finite even when some predicted op probabilities are zero."""
         cfg = self._make_cfg()
-        B, T, nodes, depth, n_ops = 1, 1, cfg.dag_depth + 1, cfg.dag_depth, 5
+        B, T, nodes, depth, n_ops = 1, 1, cfg.dag_depth + 1, cfg.dag_depth, N_OPS
 
         # Dummy signs/logs (not used for this test)
         pred_sgn = torch.ones(B, T, nodes)
         target_sgn = pred_sgn.clone()
-        pred_log = torch.zeros(B, T, nodes)
-        target_log = pred_log.clone()
+        D_total = cfg.max_digits + (cfg.max_decimal_places or 6)
+        pred_digits = torch.zeros(B, T, nodes, D_total, 10)
+        target_digits = pred_digits.clone()
 
         # Target op: always "add"
         target_ops = torch.zeros(B, T, depth, n_ops)
@@ -64,7 +72,13 @@ class TestLossRegressions(unittest.TestCase):
         pred_ops[..., 0] = 1.0  # correct op gets prob=1; others zero
 
         losses = compute_dag_structure_loss(
-            pred_sgn, pred_log, pred_ops, target_sgn, target_log, target_ops, cfg
+            pred_sgn,
+            pred_digits,
+            pred_ops,
+            target_sgn,
+            target_digits,
+            target_ops,
+            cfg,
         )
 
         # All returned losses must be finite numbers

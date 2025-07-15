@@ -59,7 +59,7 @@ class DAGTrainConfig(BaseConfig):
 
     # Loss weights
     sign_loss_weight: float = 1.0
-    log_loss_weight: float = 1.0
+    digit_loss_weight: float = 1.0
     op_loss_weight: float = 1.0
 
     # Random seeds

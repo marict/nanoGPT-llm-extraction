@@ -190,9 +190,9 @@ class DAGExample:
     text: str
     depth: int
     initial_values: list[float]  # for logging
-    signs: torch.Tensor  # for training - [D+1] tensor
-    log_magnitudes: torch.Tensor  # for training - [D+1] tensor
-    operations: torch.Tensor  # for training - [D x num_ops] one-hot tensor
+    signs: torch.Tensor  # (D+1)
+    digits: torch.Tensor  # (D+1, digits_total, 10)
+    operations: torch.Tensor  # (D, num_ops)
     seed: int
 
 
@@ -440,9 +440,43 @@ def plan_to_string_expression(
     return result
 
 
+def float_to_digit_onehot(
+    value: float, max_digits: int, max_decimal_places: int
+) -> torch.Tensor:
+    """Convert a float into a one-hot tensor of shape (D, 10) where D = max_digits + max_decimal_places.
+
+    The number is first clipped to the largest representable value to avoid overflow.  The integer part is
+    left-padded with zeros and the fractional part is right-padded with zeros so that their total length
+    equals *max_digits + max_decimal_places*.
+    """
+    import math as _math
+
+    # Clip magnitude so that it fits in the available digits
+    limit = 10**max_digits - 10 ** (-max_decimal_places)
+    abs_val = min(abs(value), limit)
+
+    # Build fixed-width string representation without sign and without decimal point
+    fmt_str = f"{{:0{max_digits}.{max_decimal_places}f}}"  # e.g. 0001.2300
+    s = fmt_str.format(abs_val)
+    int_part, frac_part = s.split(".")
+    s_digits = int_part + frac_part  # concatenated string of exactly D digits
+
+    D = max_digits + max_decimal_places
+    assert len(s_digits) == D, f"Expected {D} digits, got {len(s_digits)}"
+
+    one_hot = torch.zeros(D, 10)
+    for i, ch in enumerate(s_digits):
+        one_hot[i, int(ch)] = 1.0
+    return one_hot
+
+
+# Updated to include digit arguments
 def plan_to_tensors(
     initial_values: list[float],
     operations: list[str],
+    *,
+    max_digits: int,
+    max_decimal_places: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Convert a DAG plan to tensors for training.
 
@@ -453,14 +487,15 @@ def plan_to_tensors(
     Returns:
         Tuple of (signs, log_magnitudes, operations_one_hot)
     """
-    # Convert initial values to signs and log magnitudes
+    # Convert initial values to signs and digit one-hots
     signs = torch.tensor([1.0 if v >= 0.0 else -1.0 for v in initial_values])
 
-    # Handle potential zero values by using a small epsilon to avoid log(0) domain error
-    epsilon = 1e-8
-    log_magnitudes = torch.tensor(
-        [math.log(max(abs(v), epsilon)) for v in initial_values]
-    )
+    digits_onehots: list[torch.Tensor] = []
+    for v in initial_values:
+        one_hot = float_to_digit_onehot(v, max_digits, max_decimal_places)
+        digits_onehots.append(one_hot)
+    # (num_nodes, D, 10)
+    digits_tensor = torch.stack(digits_onehots, dim=0)
 
     # Convert operations to one-hot encoded tensors
     operation_to_index = {op: i for i, op in enumerate(OP_NAMES)}
@@ -471,7 +506,7 @@ def plan_to_tensors(
         op_idx = operation_to_index[op]
         operations_one_hot[i, op_idx] = 1.0
 
-    return signs, log_magnitudes, operations_one_hot
+    return signs, digits_tensor, operations_one_hot
 
 
 def generate_single_dag_example(
@@ -508,9 +543,11 @@ def generate_single_dag_example(
         max_decimal_places=max_decimal_places,
     )
 
-    signs, log_magnitudes, operations = plan_to_tensors(
+    signs, digits_tensor, operations_tensor = plan_to_tensors(
         initial_values=initial_values,
         operations=operations,
+        max_digits=max_digits,
+        max_decimal_places=max_decimal_places,
     )
 
     return DAGExample(
@@ -518,8 +555,8 @@ def generate_single_dag_example(
         depth=depth,
         initial_values=initial_values,
         signs=signs,
-        log_magnitudes=log_magnitudes,
-        operations=operations,
+        digits=digits_tensor,
+        operations=operations_tensor,
         seed=seed,
     )
 
@@ -608,23 +645,24 @@ class DAGStructureDataset:
 
         # Create initial values tensors
         initial_sgn = torch.zeros(num_scratch_nodes)
-        initial_log = torch.zeros(num_scratch_nodes)
+        # digits tensor shape (num_nodes, D, 10)
+        digits_template = torch.zeros_like(example.digits)
 
-        # Fill initial values from the example's sign and log magnitude tensors
+        # Fill initial values from the example's sign and digit tensors
         signs_tensor = example.signs
-        log_mags_tensor = example.log_magnitudes
+        digits_tensor = example.digits
 
         # Copy values up to num_scratch_nodes
         copy_len = min(len(signs_tensor), num_scratch_nodes)
         initial_sgn[:copy_len] = signs_tensor[:copy_len]
-        initial_log[:copy_len] = log_mags_tensor[:copy_len]
+        digits_template[:copy_len] = digits_tensor[:copy_len]
 
         # Use the example's operation tensor (already one-hot encoded)
         operation_probs = example.operations
 
         return {
             "initial_sgn": initial_sgn,
-            "initial_log": initial_log,
+            "initial_digits": digits_template,
             "operation_probs": operation_probs,
             "depth": torch.tensor(depth, dtype=torch.long),
             "operations": example.operations,  # Include the raw operations list
@@ -678,7 +716,8 @@ class DAGStructureDataset:
 
         # Initialize batched tensors
         batched_initial_sgn = torch.zeros(batch_size, max_nodes)
-        batched_initial_log = torch.zeros(batch_size, max_nodes)
+        D_total = self.max_digits + self.max_decimal_places
+        batched_initial_digits = torch.zeros(batch_size, max_nodes, D_total, 10)
         batched_operation_probs = torch.zeros(batch_size, max_depth, len(OP_NAMES))
         batched_depths = torch.zeros(batch_size, dtype=torch.long)
 
@@ -689,7 +728,7 @@ class DAGStructureDataset:
 
             # Copy initial values
             batched_initial_sgn[i, :nodes] = structure["initial_sgn"][:nodes]
-            batched_initial_log[i, :nodes] = structure["initial_log"][:nodes]
+            batched_initial_digits[i, :nodes] = structure["initial_digits"][:nodes]
 
             # Copy operation probabilities
             batched_operation_probs[i, :depth] = structure["operation_probs"][:depth]
@@ -699,7 +738,7 @@ class DAGStructureDataset:
 
         return {
             "initial_sgn": batched_initial_sgn,
-            "initial_log": batched_initial_log,
+            "initial_digits": batched_initial_digits,
             "operation_probs": batched_operation_probs,
             "depths": batched_depths,
         }

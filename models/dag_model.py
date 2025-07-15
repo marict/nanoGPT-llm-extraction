@@ -330,22 +330,25 @@ def identity_log_space(
     return sx, lx
 
 
-# OP_FUNCS = [
-#     add_log_space,
-#     subtract_log_space,
-#     multiply_log_space,
-#     divide_log_space,
-#     identity_log_space,
-# ]
-# OP_NAMES = ["add", "subtract", "multiply", "divide", "identity"]
-
+# For DAG execution, we may use a subset of the operations
 OP_FUNCS = [
     add_log_space,
+    subtract_log_space,
     identity_log_space,
 ]
-OP_NAMES = ["add", "identity"]
+OP_NAMES = ["add", "subtract", "identity"]
 
 assert len(OP_FUNCS) == len(OP_NAMES), "OP_FUNCS and OP_NAMES must have the same length"
+
+# For tests, we use the full operation set
+TEST_OPS = [
+    add_log_space,
+    subtract_log_space,
+    multiply_log_space,
+    divide_log_space,
+    identity_log_space,
+]
+TEST_OPS_NAMES = ["add", "subtract", "multiply", "divide", "identity"]
 
 
 def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
@@ -375,7 +378,14 @@ class DAGPlanPredictor(nn.Module):
 
         # Separate predictors for initial values and operations
         # Initial values predictor: hidden_state -> initial_values
-        initial_values_output_dim = 2 * self.num_scratch_nodes
+        # Digits per number (fixed width)
+        self.max_digits = getattr(config, "max_digits", 4)
+        self.max_decimal_places = getattr(config, "max_decimal_places", 6)
+        self.digits_per_number = self.max_digits + self.max_decimal_places
+
+        initial_values_output_dim = self.num_scratch_nodes * (
+            1 + self.digits_per_number * 10
+        )  # 1 sign + 10-way per digit slot
         self.initial_values_predictor = nn.Sequential(
             nn.Linear(config.n_embd, config.n_embd),
             nn.GELU(),
@@ -459,16 +469,47 @@ class DAGPlanPredictor(nn.Module):
         )  # (B, T, dag_depth * n_ops)
 
         # Process initial values
-        sign_logits = initial_values_raw[..., : self.num_scratch_nodes]
-        mag_logits = initial_values_raw[..., self.num_scratch_nodes :]
+        slice_sign = self.num_scratch_nodes
+        slice_digits = self.num_scratch_nodes * self.digits_per_number * 10
 
-        # Save for logging
-        self.mag_logits = mag_logits
+        sign_logits = initial_values_raw[..., :slice_sign]
+        digit_logits = initial_values_raw[..., slice_sign : slice_sign + slice_digits]
 
-        # Convert to sign and log magnitude format
-        # Sign ∈ [-1,1]; Log-magnitude now allowed to be negative to represent |v|<1.
+        # Reshape digit logits
+        digit_logits = digit_logits.view(
+            B, T, self.num_scratch_nodes, self.digits_per_number, 10
+        )
+
+        # Store for logging / compatibility
+        self.digit_logits = digit_logits
+        self.mag_logits = None  # deprecated
+
+        # Compute probabilities and expected digits
+        digit_probs = F.softmax(digit_logits, dim=-1)
+        digits_values = torch.arange(
+            10, device=digit_probs.device, dtype=digit_probs.dtype
+        )
+        expected_digits = (digit_probs * digits_values).sum(-1)  # (B,T,N,D)
+
+        # Build absolute value per node
+        int_weights = (
+            10 ** torch.arange(self.max_digits - 1, -1, -1, device=digit_probs.device)
+        ).to(
+            digit_probs.dtype
+        )  # (D1,)
+        frac_weights = (
+            10
+            ** torch.arange(
+                -1, -self.max_decimal_places - 1, -1, device=digit_probs.device
+            )
+        ).to(digit_probs.dtype)
+        weights = torch.cat((int_weights, frac_weights))  # (D,)
+        value_abs = (expected_digits * weights).sum(-1)  # (B,T,N)
+        value_abs = value_abs.clamp_min(1e-6)
+
+        # Convert sign
         initial_sgn = torch.tanh(sign_logits)
-        initial_log = torch.tanh(mag_logits) * LOG_LIM
+        initial_log = torch.log(value_abs) / math.log(10.0)
 
         # Process operation logits
         operation_logits = operation_logits_raw.view(B, T, self.dag_depth, self.n_ops)

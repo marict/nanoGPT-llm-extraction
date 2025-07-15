@@ -19,7 +19,9 @@ from data.dagset.streaming import (DAGStructureDataset,
                                    generate_uniform_digit_number,
                                    plan_to_string_expression)
 # Import DAG operations for direct testing
-from models.dag_model import LOG_LIM, OP_NAMES
+from models.dag_model import LOG_LIM, TEST_OPS_NAMES
+
+N_OPS = len(TEST_OPS_NAMES)
 
 
 class TestIdentityFunction(unittest.TestCase):
@@ -174,7 +176,7 @@ class TestIdentityFunction(unittest.TestCase):
                     self.assertGreater(len(text), 0)
                     self.assertEqual(structure["initial_sgn"].shape, (3,))  # depth + 1
                     self.assertEqual(structure["initial_log"].shape, (3,))
-                    self.assertEqual(structure["operation_probs"].shape, (2, 5))
+                    self.assertEqual(structure["operation_probs"].shape, (2, N_OPS))
                     break
 
             if identity_found:
@@ -209,7 +211,6 @@ class TestIdentityFunction(unittest.TestCase):
 
     def test_all_operations_including_identity(self):
         """Test that all operations including identity can be generated."""
-        from models.dag_model import OP_NAMES
 
         operations_found = set()
 
@@ -221,7 +222,7 @@ class TestIdentityFunction(unittest.TestCase):
             operations_found.update(operations)
 
         # Verify all expected operations can be found
-        expected_ops = set(OP_NAMES)
+        expected_ops = set(TEST_OPS_NAMES)
         missing_ops = expected_ops - operations_found
 
         # We should find most operations, including identity
@@ -271,7 +272,9 @@ class TestDAGStructureDataset(unittest.TestCase):
         # Verify tensor shapes
         self.assertEqual(structure["initial_sgn"].shape, (3,))  # depth + 1 = 2 + 1
         self.assertEqual(structure["initial_log"].shape, (3,))
-        self.assertEqual(structure["operation_probs"].shape, (2, 5))  # (depth, n_ops)
+        self.assertEqual(
+            structure["operation_probs"].shape, (2, N_OPS)
+        )  # (depth, n_ops)
         self.assertEqual(structure["depth"].item(), 2)
 
     def test_structure_tensor_format(self):
@@ -285,7 +288,7 @@ class TestDAGStructureDataset(unittest.TestCase):
             num_nodes = test_depth + 1
             self.assertEqual(structure["initial_sgn"].shape, (num_nodes,))
             self.assertEqual(structure["initial_log"].shape, (num_nodes,))
-            self.assertEqual(structure["operation_probs"].shape, (test_depth, 5))
+            self.assertEqual(structure["operation_probs"].shape, (test_depth, N_OPS))
             self.assertEqual(structure["depth"].item(), test_depth)
 
             # Verify initial values are reasonable
@@ -307,7 +310,7 @@ class TestDAGStructureDataset(unittest.TestCase):
                 ones = (step_probs == 1.0).sum().item()
                 zeros = (step_probs == 0.0).sum().item()
                 self.assertEqual(ones, 1)
-                self.assertEqual(zeros, 4)
+                self.assertEqual(zeros, N_OPS - 1)
 
     def test_structure_consistency_with_dag_computation(self):
         """Test that structure tensors are consistent with actual DAG computation."""
@@ -355,7 +358,7 @@ class TestDAGStructureDataset(unittest.TestCase):
         self.assertEqual(structures["initial_sgn"].shape[1], expected_nodes)
         self.assertEqual(structures["initial_log"].shape[1], expected_nodes)
         self.assertEqual(structures["operation_probs"].shape[1], max_depth_in_batch)
-        self.assertEqual(structures["operation_probs"].shape[2], 5)  # n_ops
+        self.assertEqual(structures["operation_probs"].shape[2], N_OPS)  # n_ops
 
         # Verify that shorter examples are properly padded
         for i in range(5):
@@ -466,7 +469,7 @@ class TestDAGStructureDataset(unittest.TestCase):
 
         self.assertEqual(structure["depth"].item(), 1)
         self.assertEqual(structure["initial_sgn"].shape, (2,))  # 1 + 1
-        self.assertEqual(structure["operation_probs"].shape, (1, 5))  # (1, n_ops)
+        self.assertEqual(structure["operation_probs"].shape, (1, N_OPS))  # (1, n_ops)
 
     def test_op_name_to_idx_mapping(self):
         """Test that operation name to index mapping is correct."""
@@ -474,7 +477,7 @@ class TestDAGStructureDataset(unittest.TestCase):
 
         # Verify the mapping exists and is correct
         self.assertIsInstance(dataset.op_name_to_idx, dict)
-        self.assertEqual(len(dataset.op_name_to_idx), 5)  # 5 operations
+        self.assertEqual(len(dataset.op_name_to_idx), N_OPS)  # operations
 
         # Verify all expected operations are mapped
         expected_ops = ["add", "subtract", "multiply", "divide", "identity"]
@@ -482,7 +485,7 @@ class TestDAGStructureDataset(unittest.TestCase):
             self.assertIn(op, dataset.op_name_to_idx)
             self.assertIsInstance(dataset.op_name_to_idx[op], int)
             self.assertGreaterEqual(dataset.op_name_to_idx[op], 0)
-            self.assertLess(dataset.op_name_to_idx[op], 5)
+            self.assertLess(dataset.op_name_to_idx[op], N_OPS)
 
     def test_tensor_dtypes(self):
         """Test that generated tensors have correct dtypes."""
@@ -598,7 +601,9 @@ class TestDAGStructureDataset(unittest.TestCase):
         # Verify shapes match DAGPlanPredictor expectations
         self.assertEqual(struct_sgn.shape, (batch_size, num_nodes))
         self.assertEqual(struct_log.shape, (batch_size, num_nodes))
-        self.assertEqual(struct_ops.shape, (batch_size, config.dag_depth, 5))  # 5 ops
+        self.assertEqual(
+            struct_ops.shape, (batch_size, config.dag_depth, N_OPS)
+        )  # 5 ops
 
         # Test that we can use these as targets for DAGPlanPredictor
         # Create dummy hidden states
@@ -610,7 +615,7 @@ class TestDAGStructureDataset(unittest.TestCase):
         # Verify output shapes match our structure format (when squeezed)
         self.assertEqual(pred_sgn.shape, (batch_size, seq_len, num_nodes))
         self.assertEqual(pred_log.shape, (batch_size, seq_len, num_nodes))
-        self.assertEqual(pred_ops.shape, (batch_size, seq_len, config.dag_depth, 5))
+        self.assertEqual(pred_ops.shape, (batch_size, seq_len, config.dag_depth, N_OPS))
 
         # Verify we can compute losses between predictions and structure targets
         # Add sequence dimension to structure targets for loss computation
@@ -623,7 +628,8 @@ class TestDAGStructureDataset(unittest.TestCase):
             sgn_loss = torch.nn.functional.mse_loss(pred_sgn, target_sgn)
             log_loss = torch.nn.functional.mse_loss(pred_log, target_log)
             ops_loss = torch.nn.functional.cross_entropy(
-                pred_ops.reshape(-1, 5), target_ops.reshape(-1, 5).argmax(dim=-1)
+                pred_ops.reshape(-1, N_OPS),
+                target_ops.reshape(-1, N_OPS).argmax(dim=-1),
             )
 
             # Verify losses are finite
@@ -655,7 +661,7 @@ class TestDAGStructureDataset(unittest.TestCase):
         self.assertEqual(structure["initial_sgn"].shape, torch.Size([3]))  # depth+1
         self.assertEqual(structure["initial_log"].shape, torch.Size([3]))  # depth+1
         self.assertEqual(
-            structure["operation_probs"].shape, torch.Size([2, 5])
+            structure["operation_probs"].shape, torch.Size([2, N_OPS])
         )  # depth x num_ops
 
         # Check that operation probabilities are valid one-hot vectors
@@ -721,7 +727,7 @@ class TestExpressionMatching(unittest.TestCase):
 
                 # Generate random test case
                 initial_values = [rng.uniform(-10, 10) for _ in range(4)]
-                operations = [rng.choice(OP_NAMES) for _ in range(3)]
+                operations = [rng.choice(TEST_OPS_NAMES) for _ in range(3)]
 
                 # Generate expression
                 expression = plan_to_string_expression(

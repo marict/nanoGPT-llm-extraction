@@ -22,8 +22,8 @@ from data.dagset.streaming import create_dag_structure_dataloaders
 from models.dag_model import GPT, OP_NAMES, DAGPlanPredictor
 from models.predictor_only_model import PredictorOnlyModel
 from predictor_config import DAGTrainConfig
-from predictor_utils import (compute_dag_structure_loss, evaluate_dag_model,
-                             tokenize_texts)
+from predictor_utils import (compute_dag_structure_loss, digits_to_magnitude,
+                             evaluate_dag_model, tokenize_texts)
 from python_version_check import check_python_version
 from training_utils import (CHECKPOINT_DIR, apply_overrides, generate_run_name,
                             get_lr, load_config_file, parse_args,
@@ -36,7 +36,7 @@ def _empty_metrics() -> dict[str, float]:
     return {
         "total_loss": 0.0,
         "sign_loss": 0.0,
-        "log_loss": 0.0,
+        "digit_loss": 0.0,
         "op_loss": 0.0,
         "op_accuracy": 0.0,
         "full_dag_op_match": 0.0,
@@ -339,7 +339,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "iter": iter_num,
                         "val/total_loss": eval_losses["total_loss"],
                         "val/sign_loss": eval_losses["sign_loss"],
-                        "val/log_loss": eval_losses["log_loss"],
+                        "val/digit_loss": eval_losses["digit_loss"],
                         "val/op_loss": eval_losses["op_loss"],
                         "val/op_accuracy": eval_losses["op_accuracy"],
                         "val/full_dag_op_match": eval_losses["full_dag_op_match"],
@@ -411,7 +411,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
             # Move targets to device
             target_sgn = structures["initial_sgn"].to(device)
-            target_log = structures["initial_log"].to(device)
+            target_digits = structures["initial_digits"].to(device)
             target_ops = structures["operation_probs"].to(device)
 
             loss_accum = _empty_metrics()
@@ -430,15 +430,27 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
                     if cfg.full_backbone and hasattr(raw_model, "dag"):
                         hidden = raw_model.forward_hidden(input_tokens)
-                        pred_sgn, pred_log, pred_ops = raw_model.dag.plan_predictor(
-                            hidden
-                        )
+                        pred_sgn, _, pred_ops = raw_model.dag.plan_predictor(hidden)
                     else:
-                        pred_sgn, pred_log, pred_ops = raw_model(input_tokens)
+                        pred_sgn, _, pred_ops = raw_model(input_tokens)
 
                     # Average over sequence dimension
                     pred_sgn_avg = pred_sgn.mean(dim=1)  # (B, num_nodes_pred)
-                    pred_log_avg = pred_log.mean(dim=1)  # (B, num_nodes_pred)
+                    if hasattr(raw_model, "dag"):  # GPT backbone with DAG
+                        digit_logits = (
+                            raw_model.dag.plan_predictor.digit_logits
+                            if hasattr(raw_model.dag.plan_predictor, "digit_logits")
+                            else None
+                        )
+                    else:  # PredictorOnlyModel
+                        digit_logits = (
+                            raw_model.dag_predictor.digit_logits
+                            if hasattr(raw_model.dag_predictor, "digit_logits")
+                            else None
+                        )
+                    if digit_logits is None:
+                        raise RuntimeError("digit_logits not set in plan_predictor")
+                    digit_logits_avg = digit_logits.mean(dim=1)  # (B,N,D,10)
                     pred_ops_avg = pred_ops.mean(dim=1)  # (B, depth_pred, n_ops)
 
                     # Ensure target and prediction tensors have compatible shapes
@@ -450,14 +462,22 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     # Handle mismatched node dimensions
                     if pred_nodes != target_nodes:
                         if pred_nodes > target_nodes:
-                            # Truncate predictions
                             pred_sgn_avg = pred_sgn_avg[:, :target_nodes]
-                            pred_log_avg = pred_log_avg[:, :target_nodes]
+                            digit_logits_avg = digit_logits_avg[:, :target_nodes]
                         else:
-                            # Pad predictions with zeros
                             pad_nodes = target_nodes - pred_nodes
                             pred_sgn_avg = F.pad(pred_sgn_avg, (0, pad_nodes))
-                            pred_log_avg = F.pad(pred_log_avg, (0, pad_nodes))
+                            pad_shape = (
+                                0,
+                                0,
+                                0,
+                                0,
+                                0,
+                                pad_nodes,
+                                0,
+                                0,
+                            )  # pad N dimension
+                            digit_logits_avg = F.pad(digit_logits_avg, pad_shape)
 
                     if pred_depth != target_depth:
                         if pred_depth > target_depth:
@@ -470,21 +490,21 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
                     # Add sequence dimension
                     pred_sgn_seq = pred_sgn_avg.unsqueeze(1)
-                    pred_log_seq = pred_log_avg.unsqueeze(1)
+                    digit_logits_seq = digit_logits_avg.unsqueeze(1)
                     pred_ops_seq = pred_ops_avg.unsqueeze(1)
 
                     # Add sequence dimension to targets
                     target_sgn_seq = target_sgn.unsqueeze(1)
-                    target_log_seq = target_log.unsqueeze(1)
+                    target_digits_seq = target_digits.unsqueeze(1)
                     target_ops_seq = target_ops.unsqueeze(1)
 
                     # Compute loss
                     losses = compute_dag_structure_loss(
                         pred_sgn_seq,
-                        pred_log_seq,
+                        digit_logits_seq,
                         pred_ops_seq,
                         target_sgn_seq,
-                        target_log_seq,
+                        target_digits_seq,
                         target_ops_seq,
                         cfg,
                     )
@@ -518,8 +538,17 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         / cfg.gradient_accumulation_steps
                     )
 
-                    pred_mag = pred_log_avg.exp()
-                    target_mag = target_log.exp()
+                    pred_mag = digits_to_magnitude(
+                        digit_logits_avg.softmax(dim=-1),
+                        cfg.max_digits,
+                        cfg.max_decimal_places,
+                    )
+                    target_mag = digits_to_magnitude(
+                        target_digits,
+                        cfg.max_digits,
+                        cfg.max_decimal_places,
+                        is_prob=False,
+                    )
                     log_mape = (
                         (pred_mag - target_mag).abs() / target_mag.clamp_min(1e-8)
                     ).mean()
@@ -547,7 +576,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 log_msg = (
                     f"iter {iter_num}: loss {loss_accum['total_loss']:.4f}, "
                     f"sign {loss_accum['sign_loss']:.4f}, "
-                    f"log {loss_accum['log_loss']:.4f}, "
+                    f"digit {loss_accum['digit_loss']:.4f}, "
                     f"op {loss_accum['op_loss']:.4f}"
                     f", op_acc {loss_accum['op_accuracy']:.4f}, "
                     f"full_op_match {loss_accum['full_dag_op_match']:.4f}, "
@@ -560,7 +589,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     k
                     for k in loss_accum.keys()
                     if k.endswith("_loss")
-                    and k not in ["total_loss", "sign_loss", "log_loss", "op_loss"]
+                    and k not in ["total_loss", "sign_loss", "digit_loss", "op_loss"]
                 ]
                 if internal_loss_keys:
                     internal_msg = ", ".join(
@@ -584,7 +613,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "iter": iter_num,
                         "train/total_loss": loss_accum["total_loss"],
                         "train/sign_loss": loss_accum["sign_loss"],
-                        "train/log_loss": loss_accum["log_loss"],
+                        "train/digit_loss": loss_accum["digit_loss"],
                         "train/op_loss": loss_accum["op_loss"],
                         "lr": current_lr,
                         "train/op_accuracy": loss_accum["op_accuracy"],
