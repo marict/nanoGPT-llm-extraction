@@ -199,8 +199,10 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
             self.assertTrue((pred_sgn >= -1).all())
             self.assertTrue((pred_sgn <= 1).all())
 
-            # Log magnitudes should be non-negative
-            self.assertTrue((pred_log >= 0).all())
+            # Log magnitudes should lie within the clipping range [-LOG_LIM, LOG_LIM]
+            from models.dag_model import LOG_LIM
+
+            self.assertTrue(((pred_log >= -LOG_LIM) & (pred_log <= LOG_LIM)).all())
 
             # Operation probabilities should sum to 1 and be non-negative
             self.assertTrue((pred_ops >= 0).all())
@@ -925,9 +927,11 @@ class TestModelSetup(unittest.TestCase):
             self.assertTrue(torch.isfinite(pred_sgn).all())
             self.assertTrue(torch.isfinite(pred_log).all())
             self.assertTrue(torch.isfinite(pred_ops).all())
+            from models.dag_model import LOG_LIM
+
             self.assertTrue(
-                (pred_log >= 0).all()
-            )  # Log magnitudes should be non-negative
+                ((pred_log >= -LOG_LIM) & (pred_log <= LOG_LIM)).all()
+            )  # Log magnitudes should be within valid range
 
 
 class TestCheckpointManagement(unittest.TestCase):

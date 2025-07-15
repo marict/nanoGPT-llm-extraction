@@ -64,8 +64,13 @@ def compute_dag_structure_loss(
     The formulation is identical to the previous implementation: BCE for sign,
     log-cosh for magnitude, and NLL for the operation category.
     """
+    # Determine device type once for proper autocast context switching
+    device_type = pred_sgn.device.type if isinstance(pred_sgn, torch.Tensor) else "cuda"
+
     # Sign (BCE on ±1 → {0,1})
-    with torch.cuda.amp.autocast(enabled=False):
+    # Disable autocast to ensure computations are carried out in full precision
+    # regardless of any surrounding mixed-precision context.
+    with torch.amp.autocast(device_type=device_type, enabled=False):
         sign_target = (target_sgn > 0).float().to(torch.float32)
         sign_pred = ((pred_sgn + 1.0) * 0.5).to(torch.float32)
         sign_loss = F.binary_cross_entropy(
@@ -73,14 +78,18 @@ def compute_dag_structure_loss(
         ).mean()
 
     # Magnitude (log-cosh on centred log-space values)
-    diff = (pred_log - target_log) / LOG_LIM
-    log_loss = torch.log(torch.cosh(diff + 1e-12)).mean()
+    # Compute in full precision to avoid FP16 overflows/underflows during mixed-precision training.
+    with torch.amp.autocast(device_type=device_type, enabled=False):
+        diff = (pred_log.to(torch.float32) - target_log.to(torch.float32)) / LOG_LIM
+        log_loss = torch.log(torch.cosh(diff + 1e-12)).mean()
 
     # Operation (NLL over one-hot targets)
+    # Convert probabilities to float32 before taking log to prevent log(0) -> -inf in FP16 when probs are tiny.
     b, t, d, n_ops = pred_ops.shape
-    pred_ops_flat = pred_ops.view(-1, n_ops)
-    target_idx = target_ops.view(-1, n_ops).argmax(dim=-1)
-    op_loss = F.nll_loss(torch.log(pred_ops_flat + 1e-8), target_idx).mean()
+    with torch.amp.autocast(device_type=device_type, enabled=False):
+        pred_ops_flat = pred_ops.view(-1, n_ops).to(torch.float32)
+        target_idx = target_ops.view(-1, n_ops).argmax(dim=-1)
+        op_loss = F.nll_loss(torch.log(pred_ops_flat + 1e-8), target_idx).mean()
 
     total_loss = (
         cfg.sign_loss_weight * sign_loss

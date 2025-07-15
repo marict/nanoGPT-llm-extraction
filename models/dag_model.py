@@ -460,8 +460,9 @@ class DAGPlanPredictor(nn.Module):
         self.mag_logits = mag_logits
 
         # Convert to sign and log magnitude format
+        # Sign ∈ [-1,1]; Log-magnitude now allowed to be negative to represent |v|<1.
         initial_sgn = torch.tanh(sign_logits)
-        initial_log = torch.abs(torch.tanh(mag_logits)) * LOG_LIM
+        initial_log = torch.tanh(mag_logits) * LOG_LIM
 
         # Process operation logits
         operation_logits = operation_logits_raw.view(B, T, self.dag_depth, self.n_ops)
