@@ -405,6 +405,11 @@ class DAGPlanPredictor(nn.Module):
             nn.GELU(),
             nn.Linear(config.n_embd, operations_output_dim),
         )
+        # Set initial op softmax to nearly one-hot by biasing toward first op
+        with torch.no_grad():
+            self.operations_projection[-1].bias.fill_(-4.0)
+        # Flag last Linear layer for custom initialisation in GPT._init_weights
+        self.operations_projection[-1].is_operations_projection = True
 
         # Store last predictions for logging
         self.last_operation_probs: torch.Tensor | None = None
@@ -646,20 +651,14 @@ def execute_stack(
             prev_logs_slice = buffer_log[
                 ..., : current_size - 1
             ]  # (B, T, current_size-1)
-            result_log = _rms_rescale(prev_logs_slice, result_log)
 
         # Update buffer: replace second-to-last element with result
-        # Use clone to avoid in-place operations that break autograd
-        new_buffer_sgn = buffer_sgn.clone()
-        new_buffer_log = buffer_log.clone()
+        second_idx = current_size - 2
+        idx = torch.tensor([second_idx], device=buffer_sgn.device)
 
-        # Update the element at position current_size-2 with the result
-        new_buffer_sgn[..., current_size - 2] = result_sgn
-        new_buffer_log[..., current_size - 2] = result_log
-
-        # Update buffers (safe for autograd)
-        buffer_sgn = new_buffer_sgn
-        buffer_log = new_buffer_log
+        # Use index_copy (out-of-place) to update efficiently without full clone
+        buffer_sgn = buffer_sgn.index_copy(-1, idx, result_sgn.unsqueeze(-1))
+        buffer_log = buffer_log.index_copy(-1, idx, result_log.unsqueeze(-1))
 
         # Reduce active size
         current_size -= 1
@@ -870,9 +869,14 @@ class GPT(nn.Module):
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
+            # Use Glorot/Xavier for operations_projection weights and preserve its bias
+            if getattr(module, "is_operations_projection", False):
+                torch.nn.init.xavier_uniform_(module.weight)
+                # Bias was pre-initialised (-4.0) in DAGPlanPredictor; keep as-is.
+            else:
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                if module.bias is not None:
+                    module.bias.data.zero_()
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
