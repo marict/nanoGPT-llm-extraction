@@ -358,10 +358,13 @@ def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
 class DAGPlanPredictor(nn.Module):
     """Predicts both initial values and operation choices for stack-based DAG execution."""
 
-    def __init__(self, config, temperature: float = 10):
+    def __init__(self, config):
         super().__init__()
         self.dag_depth = config.dag_depth
-        self.temperature = temperature
+        init_ops_tau = 20.0
+        # Learnable temperature (log τ) so model can adapt softmax sharpness during training
+        # Parameterised in log-space and passed through softplus → guarantees τ > 0
+        self.log_ops_tau = nn.Parameter(torch.log(torch.tensor(float(init_ops_tau))))
         # Resolve operations from config (allows subsets)
         self.op_names = getattr(config, "op_names", OP_NAMES)
         self.n_ops = len(self.op_names)
@@ -515,10 +518,13 @@ class DAGPlanPredictor(nn.Module):
         # Clamp logits before softmax for numerical stability
         operation_logits = safe_clamp(operation_logits)
 
-        # Standard softmax with temperature scaling (subset size for stability)
+        # Standard softmax with *learnable* temperature (subset size for stability)
+        tau = (F.softplus(self.log_ops_tau) + 1e-4).to(
+            operation_logits.dtype
+        )  # ensure τ>0
         scale = math.sqrt(self.n_ops)
         operation_probs_subset = F.softmax(
-            operation_logits * scale / self.temperature, dim=-1
+            operation_logits * scale / tau, dim=-1
         )  # (B,T,depth,subset)
         # Ensure dtype matches operation_logits to avoid index_copy_ dtype mismatches
         operation_probs_subset = operation_probs_subset.to(operation_logits.dtype)
@@ -707,7 +713,6 @@ class DifferentiableDAG(nn.Module):
 
         # Always use dag_depth + 1 initial values for optimal stack-based computation
         self.num_scratch_nodes = config.dag_depth + 1
-        self.temperature = config.softmax_temperature
 
         # Validate configuration at initialization time
         if self.dag_depth < 1:
@@ -719,7 +724,7 @@ class DifferentiableDAG(nn.Module):
         self.post_dag = Block(config)
 
         # Initialize unified plan predictor (predicts both initial values and operations)
-        self.plan_predictor = DAGPlanPredictor(config, self.temperature)
+        self.plan_predictor = DAGPlanPredictor(config)
         self.scalar_to_embed = ScalarToEmbed(config.n_embd)
 
         self.final_hidden = None
@@ -778,7 +783,6 @@ class GPTConfig:
     dag_depth: int = (
         4  # 0 = standard GPT, >0 = DAG-augmented GPT (minimum 1 for ≥2 initial values)
     )
-    softmax_temperature: float = 20.0
     # Operation names the model should predict; defaults to the full set.
     op_names: list[str] = field(default_factory=lambda: OP_NAMES.copy())
 

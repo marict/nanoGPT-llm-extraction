@@ -118,7 +118,6 @@ class TestShallowAttentionConfig(unittest.TestCase):
             "bias",
             "dag_depth",
             "sequence_length",
-            "softmax_temperature",
         ]
 
         for attr in required_attrs:
@@ -141,7 +140,6 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
             bias=False,
             dag_depth=2,
             sequence_length=32,
-            softmax_temperature=20.0,
         )
 
     def test_model_creation(self):
@@ -1090,7 +1088,6 @@ class TestCheckpointLoadingPredictor(unittest.TestCase):
             bias=False,
             dag_depth=2,
             sequence_length=32,
-            softmax_temperature=20.0,
         )
         model = PredictorOnlyModel(config)
 
@@ -1135,7 +1132,6 @@ class TestCheckpointLoadingPredictor(unittest.TestCase):
             bias=False,
             dag_depth=2,
             sequence_length=32,
-            softmax_temperature=20.0,
         )
         model = PredictorOnlyModel(config)
 
@@ -1183,7 +1179,6 @@ class TestCheckpointLoadingPredictor(unittest.TestCase):
             bias=False,
             dag_depth=2,
             sequence_length=32,
-            softmax_temperature=20.0,
         )
         model = PredictorOnlyModel(config)
 
@@ -1234,7 +1229,6 @@ class TestFullBackbonePredictor(unittest.TestCase):
             dropout=0.0,
             bias=False,
             dag_depth=2,
-            softmax_temperature=20.0,
         )
         self.model = GPT(self.cfg)
         self.model.eval()

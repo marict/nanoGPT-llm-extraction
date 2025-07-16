@@ -22,7 +22,6 @@ def _build_plan_predictor(depth: int = 2, n_embd: int = 32) -> DAGPlanPredictor:
         dropout=0.0,
         bias=False,
         dag_depth=depth,
-        softmax_temperature=20.0,
     )
     predictor = DAGPlanPredictor(cfg)
     predictor.eval()

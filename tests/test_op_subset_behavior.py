@@ -19,7 +19,6 @@ def _make_dummy_predictor(depth: int = 2, n_embd: int = 32, n_head: int = 2):
         bias=False,
         dag_depth=depth,
         sequence_length=16,
-        softmax_temperature=5.0,
         op_names=SUBSET_OPS,
     )
 

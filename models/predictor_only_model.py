@@ -26,7 +26,6 @@ class PredictorOnlyConfig:
     bias: bool = False
     dag_depth: int = 4
     sequence_length: int = 512
-    softmax_temperature: float = 20.0
 
     # Allowed operation names for DAG execution/prediction. Defaults to the full set.
     op_names: list[str] = field(default_factory=lambda: OP_NAMES.copy())
@@ -57,7 +56,7 @@ class PredictorOnlyModel(nn.Module):
         self.ln_f = LayerNorm(config.n_embd, bias=config.bias)
 
         # DAG predictor
-        self.dag_predictor = DAGPlanPredictor(config, config.softmax_temperature)
+        self.dag_predictor = DAGPlanPredictor(config)
 
         # Initialize weights
         self.apply(self._init_weights)

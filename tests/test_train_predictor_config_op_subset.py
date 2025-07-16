@@ -24,7 +24,6 @@ def _make_subset_predictor(op_subset: list[str], depth: int) -> PredictorOnlyMod
         bias=False,
         dag_depth=depth,
         sequence_length=16,
-        softmax_temperature=5.0,
         op_names=op_subset,
     )
     return PredictorOnlyModel(cfg)

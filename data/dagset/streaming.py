@@ -366,10 +366,32 @@ def plan_to_string_expression(
 ) -> tuple[str, torch.Tensor, torch.Tensor]:
     """Convert DAG structure to a simple mathematical expression string following stack-based execution."""
 
-    # Generate expression using only absolute values with unique identifiers
-    # This avoids sympy's automatic simplification of signs
+    # Helper to create clean string representations of floats avoiding artifacts like
+    # "-2.7800000000000002" while still retaining a trailing ".0" for integer values.
+    def _format_number(num: float, max_dp: int = 6) -> str:
+        """Return a compact string representation of *num*.
+
+        If *num* is an integer we keep one decimal place (e.g. 3.0) because many unit
+        tests expect this exact formatting.  Otherwise we round to *max_dp* decimal
+        places, strip any excess trailing zeros and an eventual trailing decimal
+        point.
+        """
+
+        # Represent integers explicitly with a trailing .0 so tests expecting e.g.
+        # "5.0" continue to pass.
+        if float(num).is_integer():
+            return f"{int(num)}.0"
+
+        # For non-integers, use up to 15 significant digits which is generally
+        # enough to round-trip a binary64 float while still trimming superfluous
+        # trailing zeros (and avoiding long artifacts like 2.7800000000000002).
+        return format(num, ".15g")
+
+    # Generate expression using only absolute values with simple unique identifiers.
+    # Separating identifier generation from the raw numeric string avoids leaking
+    # unformatted float representations into the text.
     abs_values = [abs(v) for v in initial_values]
-    unique_symbols = [f"VAL_{i}_{abs_values[i]}" for i in range(len(abs_values))]
+    unique_symbols = [f"VAL_{i}" for i in range(len(abs_values))]
 
     # Create sympy symbols with unique identifiers
     stack = [sympy.Symbol(symbol) for symbol in unique_symbols]
@@ -427,16 +449,15 @@ def plan_to_string_expression(
     expr_str = expr_str.replace("+-", "-")
     expr_str = expr_str.replace("+ -", "-")
 
-    # Replace symbols with actual signed values
-    # This preserves the original operation structure without sympy interference
+    # Replace placeholder symbols with the properly formatted numeric strings while
+    # preserving their original sign.
     for i, original_value in enumerate(initial_values):
-        old_symbol = unique_symbols[i]
-        if original_value >= 0:
-            new_value = str(abs_values[i])
-        else:
-            new_value = f"-{abs_values[i]}"
+        placeholder = unique_symbols[i]
 
-        expr_str = expr_str.replace(old_symbol, new_value)
+        formatted_abs = _format_number(abs_values[i], max_decimal_places)
+        new_value = formatted_abs if original_value >= 0 else f"-{formatted_abs}"
+
+        expr_str = expr_str.replace(placeholder, new_value)
 
     # Apply final formatting
     result = format_expression_string(

@@ -625,9 +625,6 @@ class CheckpointManager:
                 "bias": (saved_cfg or {}).get("bias", cfg.bias),
                 "dag_depth": (saved_cfg or {}).get("dag_depth", cfg.dag_depth),
                 "block_size": (saved_cfg or {}).get("block_size", cfg.sequence_length),
-                "softmax_temperature": (saved_cfg or {}).get(
-                    "softmax_temperature", 20.0
-                ),
                 # Propagate subset or default full list
                 "op_names": (saved_cfg or {}).get(
                     "op_names", getattr(cfg, "op_names", OP_NAMES.copy())
@@ -646,9 +643,6 @@ class CheckpointManager:
                 "dag_depth": (saved_cfg or {}).get("dag_depth", cfg.dag_depth),
                 "sequence_length": (saved_cfg or {}).get(
                     "sequence_length", cfg.sequence_length
-                ),
-                "softmax_temperature": (saved_cfg or {}).get(
-                    "softmax_temperature", 20.0
                 ),
                 # Propagate subset or default full list
                 "op_names": (saved_cfg or {}).get(

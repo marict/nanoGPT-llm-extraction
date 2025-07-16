@@ -22,7 +22,6 @@ class TestDigitPrediction(unittest.TestCase):
             bias=False,
             dag_depth=2,
             sequence_length=32,
-            softmax_temperature=20.0,
         )
 
         # Attach the digit-related attributes expected by DAGPlanPredictor at runtime
