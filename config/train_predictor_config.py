@@ -43,7 +43,7 @@ bias = False
 dag_depth = max_dag_depth  # MUST match max_dag_depth above
 
 # Optimization (tuned for longer training)
-learning_rate = 5e-4  # Based on when performance started to degrade
+learning_rate = 5e-5  # Based on when performance started to degrade
 max_iters = 5000
 weight_decay = 1e-1
 beta1 = 0.9

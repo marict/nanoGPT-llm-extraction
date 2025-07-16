@@ -715,13 +715,6 @@ class DifferentiableDAG(nn.Module):
                 f"Use dag_depth=0 for standard GPT or dag_depth≥1 for DAG-augmented GPT."
             )
 
-        # Validate we have enough initial values for the requested depth
-        if self.dag_depth >= self.num_scratch_nodes:
-            raise ValueError(
-                f"Cannot execute {self.dag_depth} DAG steps with only {self.num_scratch_nodes} initial values. "
-                f"Each step consumes one value, need at least {self.dag_depth + 1} initial values."
-            )
-
         self.post_dag = Block(config)
 
         # Initialize unified plan predictor (predicts both initial values and operations)
@@ -760,7 +753,9 @@ class DifferentiableDAG(nn.Module):
 
         # Cache for logging
         self.final_hidden = final_hidden
-        self.final_values = (initial_sgn * initial_log).permute(0, 2, 1).contiguous()
+        self.final_values = (
+            (initial_sgn * 10**initial_log).permute(0, 2, 1).contiguous()
+        )
 
         return final_hidden
 
