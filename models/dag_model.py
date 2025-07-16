@@ -20,6 +20,8 @@ import torch.nn as nn
 from rff.layers import PositionalEncoding
 from torch.nn import functional as F
 
+from tensor_utils import index_copy_like
+
 
 class LayerNorm(nn.Module):
     """LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False"""
@@ -656,9 +658,9 @@ def execute_stack(
         second_idx = current_size - 2
         idx = torch.tensor([second_idx], device=buffer_sgn.device)
 
-        # Use index_copy (out-of-place) to update efficiently without full clone
-        buffer_sgn = buffer_sgn.index_copy(-1, idx, result_sgn.unsqueeze(-1))
-        buffer_log = buffer_log.index_copy(-1, idx, result_log.unsqueeze(-1))
+        # Dtype-safe indexed update (no full clone)
+        buffer_sgn = index_copy_like(buffer_sgn, -1, idx, result_sgn)
+        buffer_log = index_copy_like(buffer_log, -1, idx, result_log)
 
         # Reduce active size
         current_size -= 1
