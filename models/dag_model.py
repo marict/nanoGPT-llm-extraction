@@ -513,6 +513,8 @@ class DAGPlanPredictor(nn.Module):
         operation_probs_subset = F.softmax(
             operation_logits * scale / self.temperature, dim=-1
         )  # (B,T,depth,subset)
+        # Ensure dtype matches operation_logits to avoid index_copy_ dtype mismatches
+        operation_probs_subset = operation_probs_subset.to(operation_logits.dtype)
 
         # ------------------------------------------------------------------
         # Map subset probabilities back to full OP_NAMES length so that all
