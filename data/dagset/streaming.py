@@ -659,6 +659,8 @@ def generate_single_dag_example(
     seed: int = 42,
     english_conversion_probability: float = 0.0,
     integer_no_decimal_probability: float = 0.0,
+    expression_permutation_probability: float = 0.0,
+    expression_simplification_probability: float = 0.0,
     max_digits: int = 4,
     max_decimal_places: int = 6,
     allowed_operations: list[str] | None = None,
@@ -688,6 +690,8 @@ def generate_single_dag_example(
         seed=seed,
         english_conversion_probability=english_conversion_probability,
         integer_no_decimal_probability=integer_no_decimal_probability,
+        expression_simplification_probability=expression_simplification_probability,
+        expression_permutation_probability=expression_permutation_probability,
         max_decimal_places=max_decimal_places,
     )
 
@@ -730,6 +734,8 @@ class DAGStructureDataset:
         max_seq_length: int = 512,
         english_conversion_probability: float = 0.0,
         integer_no_decimal_probability: float = 0.0,
+        expression_permutation_probability: float = 0.0,
+        expression_simplification_probability: float = 0.0,
         max_digits: int = 4,
         max_decimal_places: int = 6,
         allowed_operations: list[str] | None = None,
@@ -747,6 +753,10 @@ class DAGStructureDataset:
         self.max_seq_length = max_seq_length
         self.english_conversion_probability = english_conversion_probability
         self.integer_no_decimal_probability = integer_no_decimal_probability
+        self.expression_permutation_probability = expression_permutation_probability
+        self.expression_simplification_probability = (
+            expression_simplification_probability
+        )
         self.max_digits = max_digits
         self.max_decimal_places = max_decimal_places
         self.identity_cutoff_p = identity_cutoff_p
@@ -795,6 +805,8 @@ class DAGStructureDataset:
             seed=seed + self.num_generated,
             english_conversion_probability=self.english_conversion_probability,
             integer_no_decimal_probability=self.integer_no_decimal_probability,
+            expression_simplification_probability=self.expression_simplification_probability,
+            expression_permutation_probability=self.expression_permutation_probability,
             max_digits=self.max_digits,
             max_decimal_places=self.max_decimal_places,
             allowed_operations=self.allowed_operations,
@@ -977,6 +989,8 @@ def create_dag_structure_dataloaders(
     seed: int = 42,
     english_conversion_probability: float = 0.0,
     integer_no_decimal_probability: float = 0.0,
+    expression_permutation_probability: float = 0.0,
+    expression_simplification_probability: float = 0.0,
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = 6,  # Auto-derived from max_digits for uniform string distribution
     allowed_operations: list[str] | None = None,
@@ -1005,6 +1019,8 @@ def create_dag_structure_dataloaders(
         seed=seed,
         english_conversion_probability=english_conversion_probability,
         integer_no_decimal_probability=integer_no_decimal_probability,
+        expression_permutation_probability=expression_permutation_probability,
+        expression_simplification_probability=expression_simplification_probability,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
         allowed_operations=allowed_operations,
@@ -1016,6 +1032,8 @@ def create_dag_structure_dataloaders(
         seed=seed,
         english_conversion_probability=english_conversion_probability,
         integer_no_decimal_probability=integer_no_decimal_probability,
+        expression_permutation_probability=expression_permutation_probability,
+        expression_simplification_probability=expression_simplification_probability,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
         allowed_operations=allowed_operations,

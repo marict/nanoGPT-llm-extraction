@@ -35,9 +35,11 @@ max_decimal_places = 6
 train_examples_per_batch = 100
 val_examples_per_batch = 20
 
-# English conversion settings
-english_conversion_probability = 0  # Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
+# Preprocessing settings
+english_conversion_probability = 0.3
 integer_no_decimal_probability = 0.7
+expression_simplification_probability = 0.2
+expression_permutation_probability = 1
 
 # Data generation settings
 
