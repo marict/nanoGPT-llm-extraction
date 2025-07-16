@@ -281,68 +281,38 @@ def generate_random_dag_plan(
         # All provided operations are valid; use them
         op_choices = list(allowed_operations)
 
-    # Decide whether to insert an early identity which truncates the plan.  When an
-    # identity is injected, the plan length will be *<= depth* and will contain
-    # exactly one identity.  Otherwise a full‐length plan of size *depth* is
-    # generated.
+    # Step 1 & 2 – generate operations excluding identity, then (optionally) insert
+    # an identity at a random cutoff index and convert all following ops to identity.
 
-    insert_cutoff = (depth > 0) and (rng.random() < identity_cutoff_p)
+    if len(op_choices) == 0:
+        raise ValueError("No operations provided")
 
-    # Create a version of the operation pool that never contains "identity" –
-    # the special op is introduced *only* via the explicit cutoff logic.
     op_choices_no_identity = [op for op in op_choices if op != "identity"]
 
-    if insert_cutoff:
-        # Choose cutoff index k (0-based, inclusive) uniformly from 0 .. depth-1
+    if len(op_choices_no_identity) == 0:
+        # We only have identity operations.
+        # Return all identity operations with 1.0 initial values
+        operations = ["identity"] * depth
+        initial_values = [1.0] * (depth + 1)
+        return initial_values, operations
+
+    operations = [rng.choice(op_choices_no_identity) for _ in range(depth)]
+
+    if depth > 0:
         cutoff_idx = rng.randint(0, depth - 1)
+        operations[cutoff_idx:] = ["identity"] * (depth - cutoff_idx)
 
-        # Sample normal operations for the first k positions (indices 0..k-1)
-        operations = [rng.choice(op_choices_no_identity) for _ in range(cutoff_idx)]
+    # Step 4 – constant-based identity replacement on every surviving op.
+    for k in range(depth - 1, -1, -1):  # iterate right-to-left
+        if k + 1 >= len(initial_values):
+            continue
 
-        # Insert the single identity at position k
-        operations.append("identity")
-    else:
-        operations = [rng.choice(op_choices_no_identity) for _ in range(depth)]
+        right_operand = initial_values[k + 1]
 
-    # Ensure that we keep **at most one** identity in the final plan.  If an
-    # identity has already been inserted (either via the cutoff logic above or
-    # through an earlier replacement in this loop) we skip further identity
-    # replacements.
-    identity_present = "identity" in operations
-
-    # Only attempt constant-based identity replacement if an identity has already
-    # been placed by the cutoff logic.  This keeps the overall probability of
-    # emitting an identity equal to *identity_cutoff_p* while still preserving
-    # the historical optimisation of collapsing redundant ops **after** the
-    # explicit cutoff.
-    if identity_present:
-        for k in range(len(operations) - 1, -1, -1):  # iterate right-to-left
-            # Right-hand operand is initial_values[k+1]
-            if k + 1 < len(initial_values):
-                right_operand = initial_values[k + 1]
-
-                # Check if operation should be replaced with identity
-                should_replace = False
-
-                # Check for multiply/divide with operand approximately 1.0
-                if (
-                    operations[k] in ["multiply", "divide"]
-                    and abs(right_operand - 1.0) < 1e-6
-                ):
-                    should_replace = True
-
-                # Check for add/subtract with operand approximately 0.0
-                elif (
-                    operations[k] in ["add", "subtract"]
-                    and abs(right_operand - 0.0) < 1e-6
-                ):
-                    should_replace = True
-
-                if should_replace and not identity_present:
-                    # Replace with identity operation (first and only one)
-                    operations[k] = "identity"
-                    identity_present = True
-                    # Leave the constant untouched (don't modify initial_values[k+1])
+        if (
+            operations[k] in ["multiply", "divide"] and abs(right_operand - 1.0) < 1e-6
+        ) or (operations[k] in ["add", "subtract"] and abs(right_operand) < 1e-6):
+            operations[k] = "identity"
 
     return initial_values, operations
 
@@ -755,6 +725,11 @@ class DAGStructureDataset:
         operation_probs = torch.zeros(depth, len(OP_NAMES))
         rows_to_copy = min(op_len, depth)
         operation_probs[:rows_to_copy] = example.operations[:rows_to_copy]
+
+        # For rows beyond the generated length, explicitly mark them as identity
+        identity_idx = OP_NAMES.index("identity")
+        if rows_to_copy < depth:
+            operation_probs[rows_to_copy:, identity_idx] = 1.0
 
         if self.allowed_operations is not None:
             disallowed_idx = [

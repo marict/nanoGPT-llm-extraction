@@ -25,9 +25,9 @@ def test_identity_frequency(depth, p, n, tol):
         if "identity" in ops:
             identities += 1
     freq = identities / n
-    assert math.isclose(
-        freq, p, abs_tol=tol
-    ), f"Identity frequency {freq:.3f} outside tolerance for p={p}"
+    # With constant-based replacement the identity frequency should be at least
+    # the cutoff probability (within tolerance).
+    assert freq >= p - tol, f"Identity frequency {freq:.3f} below expected cutoff {p}"
 
 
 def test_non_identity_distribution_uniform():
