@@ -28,7 +28,7 @@ class TestNumberFormatting:
             initial_values=initial_values,
             operations=operations,
             seed=123,
-            conversion_probability=0.0,
+            english_conversion_probability=0.0,
         )
 
         # Expression should not contain long repeating zero artefacts.

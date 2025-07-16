@@ -72,6 +72,7 @@ def test_dagstructure_dataset_subset_ops():
         max_depth=depth,
         seed=0,
         english_conversion_probability=0.0,  # deterministic for test
+        integer_no_decimal_probability=0.0,  # deterministic for test
         allowed_operations=SUBSET_OPS,
     )
 

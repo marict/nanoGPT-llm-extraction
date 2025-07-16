@@ -571,9 +571,9 @@ def generate_single_dag_example(
     num_initial_values: int = None,
     seed: int = 42,
     english_conversion_probability: float = 0.3,
+    integer_no_decimal_probability: float = 0.7,
     max_digits: int = 4,
     max_decimal_places: int = 6,
-    integer_no_decimal_probability: float = 0.0,
     allowed_operations: list[str] | None = None,
     identity_cutoff_p: float = 0.1,
 ) -> DAGExample:
@@ -600,8 +600,8 @@ def generate_single_dag_example(
         operations=operations,
         seed=seed,
         english_conversion_probability=english_conversion_probability,
-        max_decimal_places=max_decimal_places,
         integer_no_decimal_probability=integer_no_decimal_probability,
+        max_decimal_places=max_decimal_places,
     )
 
     signs, digits_tensor, operations_tensor = plan_to_tensors(
@@ -903,6 +903,7 @@ def create_dag_structure_dataloaders(
         max_depth: DAG depth (all examples will have this depth)
         seed: Seed for training data
         english_conversion_probability: Probability of converting to English (0.0 to 1.0)
+        integer_no_decimal_probability: Probability of converting to integers (0.0 to 1.0)
         max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
         max_decimal_places: Maximum decimal places.
 

@@ -64,7 +64,7 @@ class TestIdentityFunction(unittest.TestCase):
         expression = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
-            conversion_probability=0.0,
+            english_conversion_probability=0.0,
         )
 
         # With right-to-left (stack-based) execution:
@@ -97,7 +97,7 @@ class TestIdentityFunction(unittest.TestCase):
         expression = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
-            conversion_probability=0.0,
+            english_conversion_probability=0.0,
         )
 
         # Verify the expression is valid
@@ -121,7 +121,7 @@ class TestIdentityFunction(unittest.TestCase):
         expression = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
-            conversion_probability=1.0,  # Force conversion
+            english_conversion_probability=1.0,  # Force conversion
         )
 
         self.assertIsInstance(expression, str)
@@ -197,7 +197,7 @@ class TestIdentityFunction(unittest.TestCase):
             expr = plan_to_string_expression(
                 initial_values=initial_values.copy(),
                 operations=operations.copy(),
-                conversion_probability=0.0,
+                english_conversion_probability=0.0,
             )
             expressions.append(expr)
 
@@ -691,7 +691,7 @@ class TestExpressionMatching(unittest.TestCase):
             initial_values=initial_values,
             operations=operations,
             seed=42,
-            conversion_probability=0.0,
+            english_conversion_probability=0.0,
         )
 
         # Manually compute the result using right-to-left (stack-based) execution
@@ -735,7 +735,7 @@ class TestExpressionMatching(unittest.TestCase):
                     initial_values=initial_values,
                     operations=operations,
                     seed=seed,
-                    conversion_probability=0.0,
+                    english_conversion_probability=0.0,
                 )
 
                 # Manually compute expected result using right-to-left (stack-based) execution
@@ -784,7 +784,7 @@ class TestExpressionMatching(unittest.TestCase):
             initial_values=initial_values,
             operations=operations,
             seed=42,
-            conversion_probability=0.0,
+            english_conversion_probability=0.0,
         )
 
         # Test with English conversion
@@ -792,7 +792,7 @@ class TestExpressionMatching(unittest.TestCase):
             initial_values=initial_values,
             operations=operations,
             seed=42,
-            conversion_probability=0.3,
+            english_conversion_probability=0.3,
         )
 
         # Both should be valid strings
@@ -832,7 +832,7 @@ class TestExpressionMatching(unittest.TestCase):
                         initial_values=initial_values,
                         operations=ops,
                         seed=seed,
-                        conversion_probability=0.0,
+                        english_conversion_probability=0.0,
                     )
 
                     # Check that there are no double negatives
@@ -872,7 +872,7 @@ class TestExpressionMatching(unittest.TestCase):
             initial_values=initial_values,
             operations=operations,
             seed=42,
-            conversion_probability=1.0,  # Force English conversion for determinism
+            english_conversion_probability=1.0,  # Force English conversion for determinism
         )
 
         # Sanity checks: text should be non-empty and free of double-negative artefacts
@@ -901,7 +901,7 @@ class TestExpressionMatching(unittest.TestCase):
             initial_values=initial_values,
             operations=operations,
             seed=123,
-            conversion_probability=1.0,
+            english_conversion_probability=1.0,
         )
 
         self.assertIn(
@@ -962,7 +962,7 @@ class TestExpressionMatching(unittest.TestCase):
                     initial_values=initial_values,
                     operations=operations,
                     seed=42,
-                    conversion_probability=0.0,
+                    english_conversion_probability=0.0,
                 )
 
                 # Verify basic properties
@@ -1050,7 +1050,7 @@ class TestExpressionMatching(unittest.TestCase):
                     initial_values=initial_values,
                     operations=operations,
                     seed=42,
-                    conversion_probability=1.0,
+                    english_conversion_probability=1.0,
                 )
 
                 # Verify basic properties
@@ -1101,7 +1101,7 @@ class TestNumberConversionFix(unittest.TestCase):
         expression = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
-            conversion_probability=1.0,
+            english_conversion_probability=1.0,
             max_decimal_places=10,  # ensure we don't truncate
         )
 

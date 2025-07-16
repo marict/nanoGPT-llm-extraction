@@ -19,7 +19,10 @@ def test_text_generation_rounding_subset():
     """
     for _ in range(100):
         example = generate_single_dag_example(
-            depth=3, english_conversion_probability=0, allowed_operations=OP_NAMES
+            depth=3,
+            english_conversion_probability=0,
+            integer_no_decimal_probability=0,
+            allowed_operations=OP_NAMES,
         )
         text = example.text
         expected_values = example.initial_values

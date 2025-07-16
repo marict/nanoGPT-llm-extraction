@@ -66,6 +66,7 @@ def test_train_predictor_config_op_subset():
         max_depth=cfg.dag_depth,
         seed=cfg.seed,
         english_conversion_probability=cfg.english_conversion_probability,
+        integer_no_decimal_probability=cfg.integer_no_decimal_probability,
         max_digits=cfg.max_digits,
         max_decimal_places=cfg.max_decimal_places,
         allowed_operations=model.dag_predictor.op_names,
