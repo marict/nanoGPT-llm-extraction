@@ -282,10 +282,14 @@ def generate_random_dag_plan(
 ) -> tuple[list[float], list[str]]:
     rng = random.Random(seed)
     # Generate random initial values with uniform digit count distribution
-    # for both integer part and decimal part
+    # for both integer part and decimal part.
+    # Use a different seed for each initial value to avoid initial values being repeated in certain cases.
+    number_seed = rng.randint(0, 1000000)
     initial_values = [
         generate_uniform_digit_number(
-            max_digits=max_digits, max_decimal_places=max_decimal_places, seed=seed + i
+            max_digits=max_digits,
+            max_decimal_places=max_decimal_places,
+            seed=number_seed + i,
         )
         for i in range(num_initial_values)
     ]
