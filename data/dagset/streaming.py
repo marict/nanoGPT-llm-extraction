@@ -299,8 +299,10 @@ def generate_random_dag_plan(
     operations = [rng.choice(op_choices_no_identity) for _ in range(depth)]
 
     if depth > 0:
-        cutoff_idx = rng.randint(0, depth - 1)
-        operations[cutoff_idx:] = ["identity"] * (depth - cutoff_idx)
+        # Uniformly sample cutoff index in 0..depth inclusive.  depth => no cutoff.
+        cutoff_idx = rng.randint(0, depth)  # depth means keep all ops
+        if cutoff_idx < depth:
+            operations[cutoff_idx:] = ["identity"] * (depth - cutoff_idx)
 
     # Step 4 – constant-based identity replacement on every surviving op.
     for k in range(depth - 1, -1, -1):  # iterate right-to-left
