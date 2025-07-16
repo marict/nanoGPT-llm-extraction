@@ -206,6 +206,31 @@ def format_expression_string(
     return " ".join(converted_tokens)
 
 
+# --------------------------------------------------------------------------- #
+# Expression transformation helpers
+# --------------------------------------------------------------------------- #
+
+
+def permute_top_level_operands(expr: sympy.Basic, rng: random.Random) -> sympy.Basic:
+    """Shuffle the immediate operands of a commutative Add/Mul expression.
+
+    The permutation is non-recursive and therefore safe for maintaining overall
+    expression semantics while providing surface-level variability.
+    """
+
+    if not isinstance(expr, (sympy.Add, sympy.Mul)):
+        return expr
+
+    operands = list(expr.args)
+    rng.shuffle(operands)
+
+    if isinstance(expr, sympy.Add):
+        return sympy.Add(*operands, evaluate=False)
+
+    # sympy.Mul
+    return sympy.Mul(*operands, evaluate=False)
+
+
 @dataclass
 class DAGExample:
     """Lightweight container for a DAG computation example."""
@@ -390,14 +415,24 @@ def plan_to_string_expression(
     seed: int = 42,
     english_conversion_probability: float = 0.0,
     integer_no_decimal_probability: float = 0.0,
+    expression_simplification_probability: float = 0.0,
+    expression_permutation_probability: float = 0.0,
     max_decimal_places: int = 6,
-) -> tuple[str, torch.Tensor, torch.Tensor]:
-    """Convert DAG structure to a simple mathematical expression string following stack-based execution."""
+) -> str:
+    """Convert DAG structure to a simple mathematical expression string following stack-based execution.
+
+    The returned string can subsequently be fed into an LLM.
+    """
 
     # Random generator used solely for integer formatting. We use a different
     # seed offset so that changing *integer_no_decimal_probability* does not
     # interfere with the English-conversion RNG that lives elsewhere.
     rng_int = random.Random(seed + 12345)
+
+    # RNGs for permutation/simplification decisions – keep them isolated so that
+    # toggling either flag does not affect other stochastic choices.
+    rng_perm = random.Random(seed + 54321)
+    rng_simp = random.Random(seed + 98765)
 
     # Generate expression using only absolute values with simple unique identifiers.
     # Separating identifier generation from the raw numeric string avoids leaking
@@ -453,8 +488,23 @@ def plan_to_string_expression(
 
         stack_dependencies.append(result_deps)
 
-    # Get expression string with unique symbols
-    expr_str = str(stack[0])
+    # ------------------------------------------------------------------ #
+    # Build the final SymPy expression & optional stochastic transforms
+    # ------------------------------------------------------------------ #
+
+    sym_expr = stack[0]
+
+    # 1. Optional permutation (non-recursive; shuffle only the top-level operands
+    #    of commutative Add/Mul while preserving semantics).
+    if rng_perm.random() < expression_permutation_probability:
+        sym_expr = permute_top_level_operands(sym_expr, rng_perm)
+
+    # ------------------------------------------------------------------ #
+    # Convert to string with placeholders – **after** permutation, **before**
+    # simplification so that simplification can operate on concrete numerals.
+    # ------------------------------------------------------------------ #
+
+    expr_str = str(sym_expr)
 
     # At this point, since we know our expression contains non-negative values, we can collapse + - into -
     expr_str = expr_str.replace("+ (-", "- (")
@@ -475,9 +525,42 @@ def plan_to_string_expression(
 
         expr_str = expr_str.replace(placeholder, new_value)
 
-    # Apply final formatting
+    # 2. Optional simplification – operate on the numeric expression after
+    #    placeholders have been substituted so that SymPy sees concrete values.
+    if rng_simp.random() < expression_simplification_probability:
+        try:
+            simplified = sympy.simplify(sympy.sympify(expr_str))
+            expr_str = str(simplified)
+        except Exception:
+            # Fallback gracefully – if SymPy chokes on the expression (should be
+            # rare), keep the original string.
+            pass
+
+    # 3. Fallback string-level permutation for additive-only expressions.  This
+    #    guarantees some visible variability even when SymPy's canonicalisation
+    #    keeps argument order unchanged.
+    if (
+        expression_permutation_probability > 0.0
+        and rng_perm.random() < expression_permutation_probability
+    ):
+        # Quick heuristic: operate only on expressions that exclusively use '+'
+        # as their binary operator (ignoring spaces and parentheses).  This is
+        # safe because addition is commutative – re-ordering operands preserves
+        # semantics.
+        op_chars = re.sub(r"[0-9\.\s+()\-]", "", expr_str)
+        if not op_chars:  # Contains only digits, '.', '+', '-', spaces, parens
+            # Extract numeric literals (including optional leading minus sign).
+            tokens = re.findall(r"-?\d+\.?\d*", expr_str)
+            if len(tokens) >= 2:
+                rng_perm.shuffle(tokens)
+                expr_str = " + ".join(tokens)
+
+    # Apply final formatting (English conversion / spacing)
     result = format_expression_string(
-        expr_str, english_conversion_probability, seed, max_decimal_places
+        expr_str,
+        english_conversion_probability,
+        seed,
+        max_decimal_places,
     )
 
     return result
@@ -575,7 +658,7 @@ def generate_single_dag_example(
     num_initial_values: int = None,
     seed: int = 42,
     english_conversion_probability: float = 0.0,
-    integer_no_decimal_probability: float = 0.7,
+    integer_no_decimal_probability: float = 0.0,
     max_digits: int = 4,
     max_decimal_places: int = 6,
     allowed_operations: list[str] | None = None,
@@ -893,7 +976,7 @@ def create_dag_structure_dataloaders(
     max_depth: int = 8,
     seed: int = 42,
     english_conversion_probability: float = 0.0,
-    integer_no_decimal_probability: float = 0.7,
+    integer_no_decimal_probability: float = 0.0,
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = 6,  # Auto-derived from max_digits for uniform string distribution
     allowed_operations: list[str] | None = None,

@@ -32,8 +32,8 @@ class DAGTrainConfig(BaseConfig):
     val_examples_per_batch: int = 100
 
     # English conversion
-    english_conversion_probability: float = 0.3
-    integer_no_decimal_probability: float = 0.7
+    english_conversion_probability: float = 0.0
+    integer_no_decimal_probability: float = 0.0
 
     # Batching / sequence
     gradient_accumulation_steps: int = 4
