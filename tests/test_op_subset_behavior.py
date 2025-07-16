@@ -61,7 +61,7 @@ def test_generate_random_dag_plan_subset():
         allowed_operations=SUBSET_OPS,
     )
 
-    assert len(ops) == depth
+    assert 1 <= len(ops) <= depth
     assert all(op in SUBSET_OPS for op in ops), "Found operation outside subset."
 
 

@@ -255,6 +255,7 @@ def generate_random_dag_plan(
     max_digits: int = 4,  # Maximum number of integer digits (1=1-digit, 2=2-digit, etc.)
     max_decimal_places: int = 6,
     allowed_operations: list[str] | None = None,
+    identity_cutoff_p: float = 0.1,
 ) -> tuple[list[float], list[str]]:
     rng = random.Random(seed)
     # Generate random initial values with uniform digit count distribution
@@ -280,36 +281,68 @@ def generate_random_dag_plan(
         # All provided operations are valid; use them
         op_choices = list(allowed_operations)
 
-    operations = [rng.choice(op_choices) for _ in range(depth)]
+    # Decide whether to insert an early identity which truncates the plan.  When an
+    # identity is injected, the plan length will be *<= depth* and will contain
+    # exactly one identity.  Otherwise a full‐length plan of size *depth* is
+    # generated.
 
-    # Iterate operations from right-to-left (k indexes that order)
-    # and replace multiply/divide operations with identity when right-hand operand is approximately 1.0
-    # and replace add/subtract operations with identity when right-hand operand is approximately 0.0
-    for k in range(depth - 1, -1, -1):  # k goes from depth-1 to 0
-        # Right-hand operand is initial_values[k+1]
-        if k + 1 < len(initial_values):
-            right_operand = initial_values[k + 1]
+    insert_cutoff = (depth > 0) and (rng.random() < identity_cutoff_p)
 
-            # Check if operation should be replaced with identity
-            should_replace = False
+    # Create a version of the operation pool that never contains "identity" –
+    # the special op is introduced *only* via the explicit cutoff logic.
+    op_choices_no_identity = [op for op in op_choices if op != "identity"]
 
-            # Check for multiply/divide with operand approximately 1.0
-            if (
-                operations[k] in ["multiply", "divide"]
-                and abs(right_operand - 1.0) < 1e-6
-            ):
-                should_replace = True
+    if insert_cutoff:
+        # Choose cutoff index k (0-based, inclusive) uniformly from 0 .. depth-1
+        cutoff_idx = rng.randint(0, depth - 1)
 
-            # Check for add/subtract with operand approximately 0.0
-            elif (
-                operations[k] in ["add", "subtract"] and abs(right_operand - 0.0) < 1e-6
-            ):
-                should_replace = True
+        # Sample normal operations for the first k positions (indices 0..k-1)
+        operations = [rng.choice(op_choices_no_identity) for _ in range(cutoff_idx)]
 
-            if should_replace:
-                # Replace with identity operation
-                operations[k] = "identity"
-                # Leave the constant untouched (don't modify initial_values[k+1])
+        # Insert the single identity at position k
+        operations.append("identity")
+    else:
+        operations = [rng.choice(op_choices_no_identity) for _ in range(depth)]
+
+    # Ensure that we keep **at most one** identity in the final plan.  If an
+    # identity has already been inserted (either via the cutoff logic above or
+    # through an earlier replacement in this loop) we skip further identity
+    # replacements.
+    identity_present = "identity" in operations
+
+    # Only attempt constant-based identity replacement if an identity has already
+    # been placed by the cutoff logic.  This keeps the overall probability of
+    # emitting an identity equal to *identity_cutoff_p* while still preserving
+    # the historical optimisation of collapsing redundant ops **after** the
+    # explicit cutoff.
+    if identity_present:
+        for k in range(len(operations) - 1, -1, -1):  # iterate right-to-left
+            # Right-hand operand is initial_values[k+1]
+            if k + 1 < len(initial_values):
+                right_operand = initial_values[k + 1]
+
+                # Check if operation should be replaced with identity
+                should_replace = False
+
+                # Check for multiply/divide with operand approximately 1.0
+                if (
+                    operations[k] in ["multiply", "divide"]
+                    and abs(right_operand - 1.0) < 1e-6
+                ):
+                    should_replace = True
+
+                # Check for add/subtract with operand approximately 0.0
+                elif (
+                    operations[k] in ["add", "subtract"]
+                    and abs(right_operand - 0.0) < 1e-6
+                ):
+                    should_replace = True
+
+                if should_replace and not identity_present:
+                    # Replace with identity operation (first and only one)
+                    operations[k] = "identity"
+                    identity_present = True
+                    # Leave the constant untouched (don't modify initial_values[k+1])
 
     return initial_values, operations
 
@@ -536,6 +569,7 @@ def generate_single_dag_example(
     max_digits: int = 4,
     max_decimal_places: int = 6,
     allowed_operations: list[str] | None = None,
+    identity_cutoff_p: float = 0.1,
 ) -> DAGExample:
     """Generate a single DAG computation example as a simple math expression."""
     # Determine number of initial values to match DAG predictor expectations
@@ -550,6 +584,7 @@ def generate_single_dag_example(
         max_digits,
         max_decimal_places,
         allowed_operations=allowed_operations,
+        identity_cutoff_p=identity_cutoff_p,
     )
 
     initial_values, operations = pad_plan(initial_values, operations)
@@ -603,6 +638,7 @@ class DAGStructureDataset:
         max_digits: int = 4,
         max_decimal_places: int = 6,
         allowed_operations: list[str] | None = None,
+        identity_cutoff_p: float = 0.1,
     ):
         """Initialize the DAG structure dataset."""
         self.max_depth = max_depth
@@ -617,6 +653,7 @@ class DAGStructureDataset:
         self.english_conversion_probability = english_conversion_probability
         self.max_digits = max_digits
         self.max_decimal_places = max_decimal_places
+        self.identity_cutoff_p = identity_cutoff_p
         # If a subset of operations is provided, validate and store mapping.
         if allowed_operations is not None:
             invalid_ops = [op for op in allowed_operations if op not in OP_NAMES]
@@ -664,6 +701,7 @@ class DAGStructureDataset:
             max_digits=self.max_digits,
             max_decimal_places=self.max_decimal_places,
             allowed_operations=self.allowed_operations,
+            identity_cutoff_p=self.identity_cutoff_p,
         )
 
         self.num_generated += 1
@@ -709,10 +747,15 @@ class DAGStructureDataset:
             log_val = max(min(log_val.item(), LOG_LIM), -LOG_LIM)
             initial_log[i] = log_val
 
-        # Use the example's operation tensor (full OP_NAMES length) and zero
-        # out disallowed columns when a subset is specified. This keeps tensor
-        # shapes consistent for downstream code.
-        operation_probs = example.operations.clone()
+        # Pad or trim the example's operation tensor so that it always has
+        # *depth* rows.  This guarantees consistent tensor shapes downstream
+        # even when an early identity truncates the plan length.
+
+        op_len = example.operations.shape[0]
+        operation_probs = torch.zeros(depth, len(OP_NAMES))
+        rows_to_copy = min(op_len, depth)
+        operation_probs[:rows_to_copy] = example.operations[:rows_to_copy]
+
         if self.allowed_operations is not None:
             disallowed_idx = [
                 i for i in range(len(OP_NAMES)) if i not in self.allowed_op_indices
@@ -834,6 +877,7 @@ def create_dag_structure_dataloaders(
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = 6,  # Auto-derived from max_digits for uniform string distribution
     allowed_operations: list[str] | None = None,
+    identity_cutoff_p: float = 0.1,
 ) -> Tuple[Iterator, Iterator]:
     """Create train/val DAG structure dataloaders for predictor training.
 
@@ -859,6 +903,7 @@ def create_dag_structure_dataloaders(
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
         allowed_operations=allowed_operations,
+        identity_cutoff_p=identity_cutoff_p,
     )
 
     val_dataset = DAGStructureDataset(
@@ -868,6 +913,7 @@ def create_dag_structure_dataloaders(
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
         allowed_operations=allowed_operations,
+        identity_cutoff_p=identity_cutoff_p,
     )
 
     # Create dataloaders

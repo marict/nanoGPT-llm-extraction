@@ -16,7 +16,8 @@ def test_generate_random_dag_plan_respects_allowed_ops():
         allowed_operations=allowed_subset,
     )
 
-    assert len(ops) == depth
+    # With early identity truncation the plan may be shorter than *depth*.
+    assert 1 <= len(ops) <= depth
     assert all(
         op in allowed_subset for op in ops
     ), f"Found ops outside allowed subset: {ops}"

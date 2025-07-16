@@ -44,7 +44,7 @@ class TestIdentityFunction(unittest.TestCase):
                 identity_found = True
                 # Verify the plan is valid
                 self.assertEqual(len(initial_values), 4)
-                self.assertEqual(len(operations), 3)
+                self.assertLessEqual(len(operations), 3)
                 break
 
         self.assertTrue(
