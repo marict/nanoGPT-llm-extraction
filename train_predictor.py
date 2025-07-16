@@ -227,13 +227,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     )
 
     if checkpoint is not None and "optimizer" in checkpoint:
-        # Checkpoint state message removed
         optimizer.load_state_dict(checkpoint["optimizer"])
-        # print(
-        #     f"[{time.time() - setup_start:.2f}s] ✅ Optimizer state loaded (Adam momentum preserved)"
-        # )
     else:
-        # Fresh optimiser state message removed
         pass
 
     # Gradient scaler
