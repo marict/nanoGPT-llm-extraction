@@ -24,7 +24,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from models.dag_model import LOG_LIM, OP_NAMES
 
 
-def convert_number_to_words(number, max_decimal_places: int = 6) -> str:
+def convert_number_to_english(number: float, max_decimal_places: int = 6) -> str:
     """Convert a number to its English word equivalent.
 
     Args:
@@ -72,9 +72,32 @@ def convert_number_to_words(number, max_decimal_places: int = 6) -> str:
     return str(number)
 
 
+# --------------------------------------------------------------------------- #
+# Helper utilities
+# --------------------------------------------------------------------------- #
+
+
+def number_to_string(
+    num: float,
+    rng: random.Random,
+    integer_no_decimal_probability: float = 0.0,
+) -> str:
+    """Return a compact human-readable string for *num*."""
+
+    # Handle integer case with optional probability to drop ".0"
+    if float(num).is_integer():
+        if rng.random() < integer_no_decimal_probability:
+            return f"{int(num)}"
+        return f"{int(num)}.0"
+
+    # For non-integers fall back to a general format that trims needless zeros
+    # while keeping enough precision to round-trip typical binary64 floats.
+    return format(num, ".15g")
+
+
 def format_expression_string(
     expression: str,
-    conversion_probability: float = 0.3,
+    english_conversion_probability: float = 0.3,
     seed: int = 42,
     max_decimal_places: int = 6,
 ) -> str:
@@ -82,7 +105,7 @@ def format_expression_string(
 
     Args:
         expression: Expression string
-        conversion_probability: Probability of converting each individual token
+        english_conversion_probability: Probability of converting each individual token
         rng: Random number generator
 
     Returns:
@@ -152,7 +175,7 @@ def format_expression_string(
     for token in tokens:
         if token in symbol_to_english:
             # Randomly convert operator to English based on probability
-            if rng.random() < conversion_probability:
+            if rng.random() < english_conversion_probability:
                 converted_tokens.append(rng.choice(symbol_to_english[token]))
             else:
                 converted_tokens.append(token)
@@ -170,9 +193,9 @@ def format_expression_string(
             except ValueError:
                 number = float(token)
 
-            if rng.random() < conversion_probability:
+            if rng.random() < english_conversion_probability:
                 converted_tokens.append(
-                    convert_number_to_words(number, max_decimal_places)
+                    convert_number_to_english(number, max_decimal_places)
                 )
             else:
                 converted_tokens.append(token)
@@ -361,31 +384,16 @@ def plan_to_string_expression(
     initial_values: list[float],
     operations: list[str],
     seed: int = 42,
-    conversion_probability: float = 0.3,
+    english_conversion_probability: float = 0.3,
+    integer_no_decimal_probability: float = 0.0,
     max_decimal_places: int = 6,
 ) -> tuple[str, torch.Tensor, torch.Tensor]:
     """Convert DAG structure to a simple mathematical expression string following stack-based execution."""
 
-    # Helper to create clean string representations of floats avoiding artifacts like
-    # "-2.7800000000000002" while still retaining a trailing ".0" for integer values.
-    def _format_number(num: float, max_dp: int = 6) -> str:
-        """Return a compact string representation of *num*.
-
-        If *num* is an integer we keep one decimal place (e.g. 3.0) because many unit
-        tests expect this exact formatting.  Otherwise we round to *max_dp* decimal
-        places, strip any excess trailing zeros and an eventual trailing decimal
-        point.
-        """
-
-        # Represent integers explicitly with a trailing .0 so tests expecting e.g.
-        # "5.0" continue to pass.
-        if float(num).is_integer():
-            return f"{int(num)}.0"
-
-        # For non-integers, use up to 15 significant digits which is generally
-        # enough to round-trip a binary64 float while still trimming superfluous
-        # trailing zeros (and avoiding long artifacts like 2.7800000000000002).
-        return format(num, ".15g")
+    # Random generator used solely for integer formatting. We use a different
+    # seed offset so that changing *integer_no_decimal_probability* does not
+    # interfere with the English-conversion RNG that lives elsewhere.
+    rng_int = random.Random(seed + 12345)
 
     # Generate expression using only absolute values with simple unique identifiers.
     # Separating identifier generation from the raw numeric string avoids leaking
@@ -454,14 +462,18 @@ def plan_to_string_expression(
     for i, original_value in enumerate(initial_values):
         placeholder = unique_symbols[i]
 
-        formatted_abs = _format_number(abs_values[i], max_decimal_places)
+        formatted_abs = number_to_string(
+            abs_values[i],
+            rng=rng_int,
+            integer_no_decimal_probability=integer_no_decimal_probability,
+        )
         new_value = formatted_abs if original_value >= 0 else f"-{formatted_abs}"
 
         expr_str = expr_str.replace(placeholder, new_value)
 
     # Apply final formatting
     result = format_expression_string(
-        expr_str, conversion_probability, seed, max_decimal_places
+        expr_str, english_conversion_probability, seed, max_decimal_places
     )
 
     return result
@@ -558,9 +570,10 @@ def generate_single_dag_example(
     depth: int,
     num_initial_values: int = None,
     seed: int = 42,
-    conversion_probability: float = 0.3,
+    english_conversion_probability: float = 0.3,
     max_digits: int = 4,
     max_decimal_places: int = 6,
+    integer_no_decimal_probability: float = 0.0,
     allowed_operations: list[str] | None = None,
     identity_cutoff_p: float = 0.1,
 ) -> DAGExample:
@@ -586,8 +599,9 @@ def generate_single_dag_example(
         initial_values=initial_values,
         operations=operations,
         seed=seed,
-        conversion_probability=conversion_probability,
+        english_conversion_probability=english_conversion_probability,
         max_decimal_places=max_decimal_places,
+        integer_no_decimal_probability=integer_no_decimal_probability,
     )
 
     signs, digits_tensor, operations_tensor = plan_to_tensors(
@@ -628,6 +642,7 @@ class DAGStructureDataset:
         tokenizer: str = "gpt2",
         max_seq_length: int = 512,
         english_conversion_probability: float = 0.3,
+        integer_no_decimal_probability: float = 0.0,
         max_digits: int = 4,
         max_decimal_places: int = 6,
         allowed_operations: list[str] | None = None,
@@ -644,6 +659,7 @@ class DAGStructureDataset:
         self.tokenizer = tokenizer
         self.max_seq_length = max_seq_length
         self.english_conversion_probability = english_conversion_probability
+        self.integer_no_decimal_probability = integer_no_decimal_probability
         self.max_digits = max_digits
         self.max_decimal_places = max_decimal_places
         self.identity_cutoff_p = identity_cutoff_p
@@ -690,7 +706,8 @@ class DAGStructureDataset:
             depth=depth,
             num_initial_values=self.num_initial_values,
             seed=seed + self.num_generated,
-            conversion_probability=self.english_conversion_probability,
+            english_conversion_probability=self.english_conversion_probability,
+            integer_no_decimal_probability=self.integer_no_decimal_probability,
             max_digits=self.max_digits,
             max_decimal_places=self.max_decimal_places,
             allowed_operations=self.allowed_operations,
@@ -871,7 +888,8 @@ def create_dag_structure_dataloaders(
     val_batch_size: int = 32,
     max_depth: int = 8,
     seed: int = 42,
-    english_conversion_rate: float = 0.3,
+    english_conversion_probability: float = 0.3,
+    integer_no_decimal_probability: float = 0.7,
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = 6,  # Auto-derived from max_digits for uniform string distribution
     allowed_operations: list[str] | None = None,
@@ -884,7 +902,7 @@ def create_dag_structure_dataloaders(
         val_batch_size: Validation batch size
         max_depth: DAG depth (all examples will have this depth)
         seed: Seed for training data
-        english_conversion_rate: Probability of converting to English (0.0 to 1.0)
+        english_conversion_probability: Probability of converting to English (0.0 to 1.0)
         max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
         max_decimal_places: Maximum decimal places.
 
@@ -897,7 +915,8 @@ def create_dag_structure_dataloaders(
     train_dataset = DAGStructureDataset(
         max_depth=max_depth,
         seed=seed,
-        english_conversion_probability=english_conversion_rate,
+        english_conversion_probability=english_conversion_probability,
+        integer_no_decimal_probability=integer_no_decimal_probability,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
         allowed_operations=allowed_operations,
@@ -907,7 +926,8 @@ def create_dag_structure_dataloaders(
     val_dataset = DAGStructureDataset(
         max_depth=max_depth,
         seed=seed,
-        english_conversion_probability=english_conversion_rate,
+        english_conversion_probability=english_conversion_probability,
+        integer_no_decimal_probability=integer_no_decimal_probability,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
         allowed_operations=allowed_operations,

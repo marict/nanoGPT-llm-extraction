@@ -28,7 +28,8 @@ train_examples_per_batch = 8000  # Increased from 4000 - match larger batch size
 val_examples_per_batch = 1600  # Increased from 800 - match larger batch sizes
 
 # English conversion settings
-english_conversion_rate = 0  # Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
+english_conversion_probability = 0  # Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
+integer_no_decimal_probability = 0.7
 
 # Model configuration
 gradient_accumulation_steps = 16  # Updated from 8

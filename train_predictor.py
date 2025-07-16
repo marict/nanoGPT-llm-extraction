@@ -18,7 +18,7 @@ import runpod_service
 import wandb
 from checkpoint_manager import CheckpointManager
 from data.dagset.streaming import create_dag_structure_dataloaders
-from models.dag_model import GPT, OP_NAMES, DAGPlanPredictor
+from models.dag_model import GPT, OP_NAMES
 from models.predictor_only_model import PredictorOnlyModel
 from predictor_config import DAGTrainConfig
 from predictor_utils import (compute_dag_structure_loss, digits_to_magnitude,
@@ -263,7 +263,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         val_batch_size=cfg.batch_size,
         max_depth=cfg.dag_depth,
         seed=cfg.seed,
-        english_conversion_rate=cfg.english_conversion_rate,
+        english_conversion_probability=cfg.english_conversion_probability,
+        integer_no_decimal_probability=cfg.integer_no_decimal_probability,
         max_digits=cfg.max_digits,
         max_decimal_places=cfg.max_decimal_places,
         allowed_operations=allowed_operations,
@@ -305,7 +306,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     val_batch_size=cfg.batch_size,
                     max_depth=cfg.dag_depth,
                     seed=seed + iter_num,
-                    english_conversion_rate=cfg.english_conversion_rate,
+                    english_conversion_probability=cfg.english_conversion_probability,
+                    integer_no_decimal_probability=cfg.integer_no_decimal_probability,
                     max_digits=cfg.max_digits,
                     max_decimal_places=cfg.max_decimal_places,
                     allowed_operations=allowed_operations,
