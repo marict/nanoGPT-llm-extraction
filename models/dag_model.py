@@ -1,7 +1,7 @@
 """
 Full definition of a GPT Language Model with optional DAG augmentation.
 When dag_depth=0, behaves as a standard GPT model.
-When dag_depth>0, uses differentiable DAG for enhanced reasoning.
+When dag_depth>0, uses differentiable ALU DAG for enhanced reasoning.
 
 References:
 1) the official GPT-2 TensorFlow implementation released by OpenAI:
