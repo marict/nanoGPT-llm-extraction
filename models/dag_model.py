@@ -122,7 +122,6 @@ class Block(nn.Module):
 
 # Log-space arithmetic utilities
 LOG_LIM = 10.0  # Bound on log-magnitudes to avoid numerical instabilities
-GRAD_CAP = 0.3  # try 0.1–10.0 depending on bfloat16/float16 range
 
 
 def _clip_log(log_t: torch.Tensor) -> torch.Tensor:

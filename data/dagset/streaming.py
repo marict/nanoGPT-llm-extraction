@@ -97,7 +97,7 @@ def number_to_string(
 
 def format_expression_string(
     expression: str,
-    english_conversion_probability: float = 0.3,
+    english_conversion_probability: float = 0.0,
     seed: int = 42,
     max_decimal_places: int = 6,
 ) -> str:
@@ -388,7 +388,7 @@ def plan_to_string_expression(
     initial_values: list[float],
     operations: list[str],
     seed: int = 42,
-    english_conversion_probability: float = 0.3,
+    english_conversion_probability: float = 0.0,
     integer_no_decimal_probability: float = 0.0,
     max_decimal_places: int = 6,
 ) -> tuple[str, torch.Tensor, torch.Tensor]:
@@ -574,7 +574,7 @@ def generate_single_dag_example(
     depth: int,
     num_initial_values: int = None,
     seed: int = 42,
-    english_conversion_probability: float = 0.3,
+    english_conversion_probability: float = 0.0,
     integer_no_decimal_probability: float = 0.7,
     max_digits: int = 4,
     max_decimal_places: int = 6,
@@ -645,7 +645,7 @@ class DAGStructureDataset:
         seed: int = 42,
         tokenizer: str = "gpt2",
         max_seq_length: int = 512,
-        english_conversion_probability: float = 0.3,
+        english_conversion_probability: float = 0.0,
         integer_no_decimal_probability: float = 0.0,
         max_digits: int = 4,
         max_decimal_places: int = 6,
@@ -892,7 +892,7 @@ def create_dag_structure_dataloaders(
     val_batch_size: int = 32,
     max_depth: int = 8,
     seed: int = 42,
-    english_conversion_probability: float = 0.3,
+    english_conversion_probability: float = 0.0,
     integer_no_decimal_probability: float = 0.7,
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = 6,  # Auto-derived from max_digits for uniform string distribution
