@@ -5,6 +5,7 @@ Moving these functions into their own module drastically reduces the size of
 `train_predictor.py` while keeping behaviour unchanged.
 """
 
+import math  # For log10 computations
 import random as _eval_random
 from typing import Dict, List
 
@@ -12,7 +13,7 @@ import torch
 import torch.nn.functional as F
 from tiktoken import get_encoding
 
-from models.dag_model import OP_NAMES
+from models.dag_model import OP_NAMES, execute_stack
 
 __all__ = [
     "tokenize_texts",
@@ -187,6 +188,8 @@ def evaluate_dag_model(
         "full_dag_op_match": 0.0,
         "sign_accuracy": 0.0,
         "log_magnitude_mape": 0.0,
+        # Mean-squared-error between executed DAG outputs (target vs prediction)
+        "final_mse": 0.0,
     }
 
     num_batches = 0
@@ -281,6 +284,44 @@ def evaluate_dag_model(
                 )
                 log_mape = ((pred_mag - tgt_mag).abs() / tgt_mag.clamp_min(1e-8)).mean()
 
+                # ------------------------------------------------------------------ #
+                # Execute full DAGs to obtain scalar answers and compute MSE          #
+                # ------------------------------------------------------------------ #
+                # Retrieve ground-truth initial log magnitudes (base-10) consistently
+                tgt_log = torch.log(tgt_mag + 1e-8) / math.log(10.0)
+
+                # Predicted log magnitudes derived from digit logits (already have pred_mag)
+                pred_log = torch.log(pred_mag.clamp_min(1e-8)) / math.log(10.0)  # (B,N)
+
+                # Add sequence length dimension expected by execute_stack (T=1)
+                tgt_sgn_seq = tgt_sgn.unsqueeze(1)
+                tgt_log_seq = tgt_log.unsqueeze(1)
+                tgt_ops_seq = tgt_ops.unsqueeze(1)
+
+                pred_sgn_seq = pred_sgn  # already (B,1,N)
+                pred_log_seq = pred_log.unsqueeze(1)
+                # pred_ops currently (B,1,depth,n_ops)
+
+                # Execute stacks
+                tgt_final_sgn, tgt_final_log = execute_stack(
+                    tgt_sgn_seq, tgt_log_seq, tgt_ops_seq
+                )
+                pred_final_sgn, pred_final_log = execute_stack(
+                    pred_sgn_seq, pred_log_seq, pred_ops
+                )
+
+                # Convert to real numbers
+                tgt_final_val = tgt_final_sgn * torch.pow(
+                    torch.tensor(10.0, device=device, dtype=tgt_final_log.dtype),
+                    tgt_final_log,
+                )
+                pred_final_val = pred_final_sgn * torch.pow(
+                    torch.tensor(10.0, device=device, dtype=pred_final_log.dtype),
+                    pred_final_log,
+                )
+
+                final_mse = F.mse_loss(pred_final_val, tgt_final_val)
+
                 # -------------------------------------------------------------- #
                 # Console debug: print one random sample from the first batch
                 # -------------------------------------------------------------- #
@@ -346,6 +387,7 @@ def evaluate_dag_model(
             total_metrics["full_dag_op_match"] += full_match.item()
             total_metrics["sign_accuracy"] += sign_acc.item()
             total_metrics["log_magnitude_mape"] += log_mape.item()
+            total_metrics["final_mse"] += final_mse.item()
             num_batches += 1
 
     if num_batches:
