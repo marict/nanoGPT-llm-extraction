@@ -13,7 +13,7 @@ always_save_checkpoint = False
 clear_previous_checkpoints = True  # Save space on RunPod
 
 # Model initialization
-init_from = "scratch"
+init_from = "/runpod-volume/checkpoints/7s82hmn20nfjjt-allpreprocessing/ckpt_predictor_pretrain.pt"
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
@@ -30,8 +30,8 @@ val_examples_per_batch = 1600  # Increased from 800 - match larger batch sizes
 # English conversion settings
 english_conversion_probability = 0.3
 integer_no_decimal_probability = 0.7
-expression_simplification_probability = 0.2
-expression_permutation_probability = 0.1
+expression_simplification_probability = 0.1
+expression_permutation_probability = 0.2
 
 # Model configuration
 gradient_accumulation_steps = 16  # Updated from 8
