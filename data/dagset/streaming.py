@@ -368,6 +368,12 @@ def generate_random_dag_plan(
         ) or (operations[k] in ["add", "subtract"] and abs(right_operand) < 1e-6):
             operations[k] = "identity"
 
+        if operations[k] == "divide" and abs(right_operand) < 1e-6:
+            # Cannot divide by zero – turn this op into identity
+            operations[k] = "identity"
+            right_operand = 1.0
+            initial_values[k + 1] = 1.0
+
     return initial_values, operations
 
 

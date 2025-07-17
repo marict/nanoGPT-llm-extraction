@@ -35,8 +35,8 @@ class SoftGCD(torch.nn.Module):
     def __init__(
         self,
         primes: List[int],
-        alpha: float = 30.0,
-        beta: float = 20.0,
+        alpha: float = 200.0,
+        beta: float = 2560.0,
         mask_power: int = 8,
         tau: float = 1e-2,
     ) -> None:
@@ -46,7 +46,7 @@ class SoftGCD(torch.nn.Module):
             alpha: sharpness of prime‑divisibility Gaussian.
             beta:  sharpness of exponent divisibility Gaussian.
             mask_power: exponent applied to prime mask (makes 0/1 crisper).
-            tau:  temperature for torchsort.softsort (0 → hard sort).
+            tau:  regularization_strength for torchsort.soft_sort (smaller → harder).
         """
         super().__init__()
         self.register_buffer("primes", torch.tensor(primes, dtype=torch.float32))
@@ -73,7 +73,7 @@ class SoftGCD(torch.nn.Module):
         mask_p = self._prime_divisibility_mask(n)
         exponents = []
         for idx, p in enumerate(self.primes):
-            if mask_p[idx] < 1e-6:
+            if mask_p[idx] < 0.99:
                 exponents.append(torch.tensor(0.0, device=n.device))
                 continue
             # integer upper bound for k: floor(log_p n)
@@ -87,9 +87,13 @@ class SoftGCD(torch.nn.Module):
             ratios = n / (p**k_candidates)
             frac = ratios - torch.round(ratios)
             mask_k = torch.exp(-self.beta * frac * frac)
-            scores = mask_k * k_candidates
-            # differentiable max via softsort
-            k_hat = torchsort.soft_sort(scores, direction="descending", tau=self.tau)[0]
+            scores = mask_k * k_candidates  # (K,)
+            # differentiable soft max via torchsort: take last element after sorting ascending
+            sorted_scores = torchsort.soft_sort(
+                scores[None, :],
+                regularization_strength=self.tau,
+            )  # shape (1, K)
+            k_hat = sorted_scores[0, -1]
             exponents.append(k_hat)
         return torch.stack(exponents)  # shape (num_primes,)
 
@@ -99,9 +103,12 @@ class SoftGCD(torch.nn.Module):
         e1 = self._soft_exponent(n1)
         e2 = self._soft_exponent(n2)
         stacked = torch.stack((e1, e2), dim=-1)  # (num_primes, 2)
-        min_exp = torchsort.soft_sort(stacked, direction="ascending", tau=self.tau)[
-            :, 0
-        ]
+        # differentiable soft-min via torchsort (first column)
+        sorted_pair = torchsort.soft_sort(
+            stacked,
+            regularization_strength=self.tau,
+        )  # shape (num_primes, 2)
+        min_exp = sorted_pair[:, 0]
         log_gcd = (min_exp * self.log_primes).sum()
         return torch.exp(log_gcd)
 
@@ -109,9 +116,18 @@ class SoftGCD(torch.nn.Module):
 # ---------------------------------------------------------------------------#
 def parse_args() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="SoftGCD demo")
-    parser.add_argument("--n1", type=float, default=83160.0, help="first integer")
-    parser.add_argument("--n2", type=float, default=123120.0, help="second integer")
-    parser.add_argument("--prime-limit", type=int, default=100, help="max prime to use")
+    parser.add_argument(
+        "--n1", type=float, default=83160.0, help="first integer (≤ max-input)"
+    )
+    parser.add_argument(
+        "--n2", type=float, default=123120.0, help="second integer (≤ max-input)"
+    )
+    parser.add_argument(
+        "--max-input",
+        type=float,
+        default=1e6,
+        help="maximum allowed value for n1 or n2 (controls prime search cost)",
+    )
     return parser
 
 
@@ -119,7 +135,14 @@ def parse_args() -> argparse.ArgumentParser:
 if __name__ == "__main__":
     args = parse_args().parse_args()
 
-    primes = generate_primes(args.prime_limit)
+    # Validate input magnitude to keep the prime search tractable.
+    max_val = max(args.n1, args.n2)
+    if max_val > args.max_input:
+        raise ValueError(
+            f"Inputs too large (max={max_val}); increase --max-input if intentional."
+        )
+
+    primes = generate_primes(int(max_val))
     model = SoftGCD(primes)
 
     n1 = torch.tensor(args.n1, requires_grad=True)
