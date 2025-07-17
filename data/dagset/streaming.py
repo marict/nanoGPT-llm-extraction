@@ -669,7 +669,6 @@ def generate_single_dag_example(
     max_digits: int = 4,
     max_decimal_places: int = 6,
     allowed_operations: list[str] | None = None,
-    identity_cutoff_p: float = 0.1,
 ) -> DAGExample:
     """Generate a single DAG computation example as a simple math expression."""
     # Determine number of initial values to match DAG predictor expectations
@@ -684,7 +683,6 @@ def generate_single_dag_example(
         max_digits,
         max_decimal_places,
         allowed_operations=allowed_operations,
-        identity_cutoff_p=identity_cutoff_p,
     )
 
     initial_values, operations = pad_plan(initial_values, operations)
@@ -744,7 +742,6 @@ class DAGStructureDataset:
         max_digits: int = 4,
         max_decimal_places: int = 6,
         allowed_operations: list[str] | None = None,
-        identity_cutoff_p: float = 0.1,
     ):
         """Initialize the DAG structure dataset."""
         self.max_depth = max_depth
@@ -764,7 +761,6 @@ class DAGStructureDataset:
         )
         self.max_digits = max_digits
         self.max_decimal_places = max_decimal_places
-        self.identity_cutoff_p = identity_cutoff_p
         # If a subset of operations is provided, validate and store mapping.
         if allowed_operations is not None:
             invalid_ops = [op for op in allowed_operations if op not in OP_NAMES]
@@ -815,7 +811,6 @@ class DAGStructureDataset:
             max_digits=self.max_digits,
             max_decimal_places=self.max_decimal_places,
             allowed_operations=self.allowed_operations,
-            identity_cutoff_p=self.identity_cutoff_p,
         )
 
         self.num_generated += 1
@@ -999,7 +994,6 @@ def create_dag_structure_dataloaders(
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = 6,  # Auto-derived from max_digits for uniform string distribution
     allowed_operations: list[str] | None = None,
-    identity_cutoff_p: float = 0.1,
 ) -> Tuple[Iterator, Iterator]:
     """Create train/val DAG structure dataloaders for predictor training.
 
@@ -1029,7 +1023,6 @@ def create_dag_structure_dataloaders(
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
         allowed_operations=allowed_operations,
-        identity_cutoff_p=identity_cutoff_p,
     )
 
     val_dataset = DAGStructureDataset(
@@ -1042,7 +1035,6 @@ def create_dag_structure_dataloaders(
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
         allowed_operations=allowed_operations,
-        identity_cutoff_p=identity_cutoff_p,
     )
 
     # Create dataloaders

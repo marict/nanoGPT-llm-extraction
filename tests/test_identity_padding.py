@@ -6,8 +6,7 @@ from data.dagset.streaming import OP_NAMES, DAGStructureDataset
 
 def test_post_identity_rows_are_identity():
     depth = 4
-    # Force identity_cutoff_p=1.0 to guarantee early identity
-    dataset = DAGStructureDataset(max_depth=depth, seed=0, identity_cutoff_p=1.0)
+    dataset = DAGStructureDataset(max_depth=depth, seed=0)
     identity_idx = OP_NAMES.index("identity")
 
     for seed in range(20):
