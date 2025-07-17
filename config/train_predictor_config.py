@@ -20,7 +20,7 @@ dataset = "dagset"  # Use DAG dataset for predictor training
 
 # DAG dataset parameters
 max_dag_depth = 6  # Match the model dag_depth for consistency
-max_digits = 4  # Maximum number of integer digits for uniform digit distribution
+max_digits = 6  # Maximum number of integer digits for uniform digit distribution
 max_decimal_places = 6  # Seems like a reasonable rounding for the numbers initially
 
 # OPTIMIZED: Significantly increase data generation for better GPU utilization
@@ -31,7 +31,7 @@ val_examples_per_batch = 1600  # Increased from 800 - match larger batch sizes
 english_conversion_probability = 0.3
 integer_no_decimal_probability = 0.7
 expression_simplification_probability = 0.2
-expression_permutation_probability = 0.2
+expression_permutation_probability = 0.1
 
 # Model configuration
 gradient_accumulation_steps = 16  # Updated from 8
@@ -69,7 +69,7 @@ check_nans = False  # Check for NaNs in cloud training
 sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
-op_names = ["add", "identity"]
+# op_names = ["add", "identity"]
 
 # Random seeds
 seed = 42
