@@ -633,6 +633,13 @@ class CheckpointManager:
                 "op_names": (saved_cfg or {}).get(
                     "op_names", getattr(cfg, "op_names", OP_NAMES.copy())
                 ),
+                # Digit configuration
+                "max_digits": (saved_cfg or {}).get(
+                    "max_digits", getattr(cfg, "max_digits", 4)
+                ),
+                "max_decimal_places": (saved_cfg or {}).get(
+                    "max_decimal_places", getattr(cfg, "max_decimal_places", 6)
+                ),
             }
             model_config = GPTConfig(**model_cfg_dict)
             model = GPT(model_config)
@@ -651,6 +658,13 @@ class CheckpointManager:
                 # Propagate subset or default full list
                 "op_names": (saved_cfg or {}).get(
                     "op_names", getattr(cfg, "op_names", OP_NAMES.copy())
+                ),
+                # Digit configuration
+                "max_digits": (saved_cfg or {}).get(
+                    "max_digits", getattr(cfg, "max_digits", 4)
+                ),
+                "max_decimal_places": (saved_cfg or {}).get(
+                    "max_decimal_places", getattr(cfg, "max_decimal_places", 6)
                 ),
             }
             model_config = PredictorOnlyConfig(**model_cfg_dict)

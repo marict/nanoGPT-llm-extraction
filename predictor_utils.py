@@ -85,6 +85,22 @@ def compute_dag_structure_loss(
     # the caller (training code passes logits, some tests pass one-hot probs).
     # We convert to log-probabilities in a way that supports both cases.
     B, T, N, D, _ = pred_digits.shape
+
+    # ------------------------------------------------------------------
+    # Sanity-check: the model and dataset must agree on the number of digit
+    # slots (integer + fractional). The vast majority of silent shape errors
+    # later on – e.g. index mismatches inside the loss – come from this being
+    # out of sync (for instance after increasing ``max_digits`` without
+    # propagating the change to the model).
+    # ------------------------------------------------------------------
+    if target_digits.shape[-2] != D:
+        raise ValueError(
+            "Shape mismatch between model-predicted digits and target digits: "
+            f"predicted D={D} , target D={target_digits.shape[-2]}. "
+            "Ensure that `max_digits` and `max_decimal_places` are set to the "
+            "*same* values for both the dataset and the model (these values are "
+            "propagated via the training config)."
+        )
     with torch.amp.autocast(device_type=device_type, enabled=False):
         # Use reshape to handle potential non-contiguous tensors (view can fail)
         pred_flat = pred_digits.reshape(-1, 10).to(torch.float32)  # (B*T*N*D, 10)

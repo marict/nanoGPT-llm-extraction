@@ -29,7 +29,7 @@ dataset = "dagset"  # Use DAG dataset for predictor training
 
 # DAG dataset parameters
 max_dag_depth = 4
-max_digits = 4  # Maximum number of integer digits for uniform digit distribution
+max_digits = 6  # Maximum number of integer digits for uniform digit distribution
 max_decimal_places = 6
 
 train_examples_per_batch = 100
@@ -85,6 +85,6 @@ sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
 
-# op_names = ["add", "identity"]
+op_names = ["add", "multiply", "identity"]
 # Random seeds
 seed = 42

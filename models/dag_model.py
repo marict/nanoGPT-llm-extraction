@@ -785,6 +785,10 @@ class GPTConfig:
     # Operation names the model should predict; defaults to the full set.
     op_names: list[str] = field(default_factory=lambda: OP_NAMES.copy())
 
+    # Digit configuration for initial value prediction
+    max_digits: int = 4  # Integer digits
+    max_decimal_places: int = 6  # Fractional digits
+
 
 # Main GPT model
 class GPT(nn.Module):
