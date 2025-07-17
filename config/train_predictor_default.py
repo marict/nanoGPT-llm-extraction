@@ -20,7 +20,6 @@ eval_only = False
 always_save_checkpoint = True
 # Remove any stale checkpoints when starting a new run.
 clear_previous_checkpoints = True
-overwrite_previous = True
 
 # Model initialization
 init_from = "scratch"  # or "resume"
@@ -40,7 +39,7 @@ val_examples_per_batch = 20
 english_conversion_probability = 0.3
 integer_no_decimal_probability = 0.7
 expression_simplification_probability = 0.2
-expression_permutation_probability = 1
+expression_permutation_probability = 0.1
 
 # Data generation settings
 
@@ -86,6 +85,6 @@ sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
 
-op_names = ["add", "identity"]
+# op_names = ["add", "identity"]
 # Random seeds
 seed = 42

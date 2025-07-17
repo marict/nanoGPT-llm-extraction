@@ -10,8 +10,7 @@ log_interval = 1  # Log every iteration for better monitoring
 eval_iters = 10  # Reduced from 5 - each eval iter is much more informative
 eval_only = False
 always_save_checkpoint = False
-clear_previous_checkpoints = True  # Save space on RunPod
-overwrite_previous = True
+clear_previous_checkpoints = False  # Save space on RunPod
 
 # Model initialization
 init_from = "scratch"
@@ -29,8 +28,10 @@ train_examples_per_batch = 8000  # Increased from 4000 - match larger batch size
 val_examples_per_batch = 1600  # Increased from 800 - match larger batch sizes
 
 # English conversion settings
-english_conversion_probability = 0  # Probability of converting tokens to English (0.0 = disabled, 1.0 = always convert)
+english_conversion_probability = 0.3
 integer_no_decimal_probability = 0.7
+expression_simplification_probability = 0.2
+expression_permutation_probability = 0.2
 
 # Model configuration
 gradient_accumulation_steps = 16  # Updated from 8
@@ -46,7 +47,7 @@ dag_depth = max_dag_depth  # MUST match max_dag_depth above
 
 # Optimization (tuned for longer training)
 learning_rate = 5e-5  # Based on when performance started to degrade
-max_iters = 25000
+max_iters = 50000
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
