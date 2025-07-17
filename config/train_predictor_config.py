@@ -10,7 +10,7 @@ log_interval = 1  # Log every iteration for better monitoring
 eval_iters = 10  # Reduced from 5 - each eval iter is much more informative
 eval_only = False
 always_save_checkpoint = False
-clear_previous_checkpoints = False  # Save space on RunPod
+clear_previous_checkpoints = True  # Save space on RunPod
 
 # Model initialization
 init_from = "scratch"
