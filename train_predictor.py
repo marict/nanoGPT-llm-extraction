@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 import os
+
+# Ensure W&B run data is written to ephemeral storage rather than the project volume.
+os.environ.setdefault("WANDB_DIR", "/tmp/wandb")
 import random
 import time
 from contextlib import nullcontext
@@ -116,9 +119,15 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
     # Initialize checkpoint manager
     checkpoint_manager = CheckpointManager("dag")
+    # Will hold the sanitised W&B run name once available.
+    safe_run_name: str = "default_run"
 
-    # Clean previous checkpoints
-    if master_process and cfg.clear_previous_checkpoints:
+    # Clean previous checkpoints unless we're running with overwrite_previous
+    if (
+        master_process
+        and cfg.clear_previous_checkpoints
+        and not getattr(cfg, "overwrite_previous", False)
+    ):
         checkpoint_manager.clean_previous_checkpoints(cfg.name, model_name)
 
     # W&B initialization
@@ -137,6 +146,13 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     name=generate_run_name(cfg),
                     config=cfg.__dict__,
                 )
+            # Create a dedicated checkpoint sub-directory for this run.
+            safe_run_name = "".join(
+                c for c in run.name if c.isalnum() or c in ("-", "_")
+            )
+            (checkpoint_manager.checkpoint_dir / safe_run_name).mkdir(
+                parents=True, exist_ok=True
+            )
         except Exception as e:
             print(
                 f"[{time.time() - setup_start:.2f}s] Error: Failed to initialize wandb: {e}"
@@ -366,15 +382,22 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     if cfg.save_best and is_new_best:
                         # Save a single checkpoint for the best model
                         val_acc = eval_losses.get("op_accuracy", None)
-                        checkpoint_filename = (
-                            checkpoint_manager.generate_checkpoint_filename(
+
+                        if getattr(cfg, "overwrite_previous", False):
+                            # Still keep a separate *best* checkpoint, but store it within the
+                            # run-specific folder so it doesn't clash with other runs.
+                            checkpoint_filename = (
+                                f"{safe_run_name}/ckpt_{cfg.name}_best.pt"
+                            )
+                        else:
+                            rel_name = checkpoint_manager.generate_checkpoint_filename(
                                 cfg.name,
                                 iter_num,
                                 raw_model.__class__.__name__,
                                 val_acc=val_acc,
                                 is_best=True,
                             )
-                        )
+                            checkpoint_filename = f"{safe_run_name}/{rel_name}"
                         # verbose checkpoint message removed
                         checkpoint_manager.save_checkpoint(
                             checkpoint_data, checkpoint_filename
@@ -385,14 +408,17 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     ):
                         # Save a checkpoint with the iteration number
                         val_acc = eval_losses.get("op_accuracy", None)
-                        checkpoint_filename = (
-                            checkpoint_manager.generate_checkpoint_filename(
+
+                        if getattr(cfg, "overwrite_previous", False):
+                            checkpoint_filename = f"{safe_run_name}/ckpt_{cfg.name}.pt"
+                        else:
+                            rel_name = checkpoint_manager.generate_checkpoint_filename(
                                 cfg.name,
                                 iter_num,
                                 raw_model.__class__.__name__,
                                 val_acc=val_acc,
                             )
-                        )
+                            checkpoint_filename = f"{safe_run_name}/{rel_name}"
                         # verbose checkpoint message removed
                         checkpoint_manager.save_checkpoint(
                             checkpoint_data, checkpoint_filename

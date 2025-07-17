@@ -11,6 +11,7 @@ eval_iters = 10  # Reduced from 5 - each eval iter is much more informative
 eval_only = False
 always_save_checkpoint = False
 clear_previous_checkpoints = True  # Save space on RunPod
+overwrite_previous = True
 
 # Model initialization
 init_from = "scratch"

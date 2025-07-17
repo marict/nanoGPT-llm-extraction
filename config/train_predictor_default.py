@@ -20,6 +20,7 @@ eval_only = False
 always_save_checkpoint = True
 # Remove any stale checkpoints when starting a new run.
 clear_previous_checkpoints = True
+overwrite_previous = True
 
 # Model initialization
 init_from = "scratch"  # or "resume"

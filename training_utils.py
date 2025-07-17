@@ -62,6 +62,11 @@ class BaseConfig:
     always_save_checkpoint: bool = True
     save_best: bool = False
     clear_previous_checkpoints: bool = False
+    # When True, continuously overwrite the latest checkpoint file from this
+    # run instead of creating a new file each time. A unique sub-directory
+    # (based on the current wandb run name) will be used so that checkpoints
+    # from other runs are left untouched.
+    overwrite_previous: bool = True
 
     # Evaluation
     eval_only: bool = False

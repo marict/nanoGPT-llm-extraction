@@ -89,7 +89,7 @@ class CheckpointManager:
 
         checkpoint_files = []
         for pattern in patterns:
-            checkpoint_files.extend(self.checkpoint_dir.glob(pattern))
+            checkpoint_files.extend(self.checkpoint_dir.rglob(pattern))
 
         return [
             f.name
@@ -126,12 +126,12 @@ class CheckpointManager:
             patterns = ["ckpt_*.pt", "ckpt_*.safetensors"]
             checkpoint_files = []
             for pattern in patterns:
-                checkpoint_files.extend(self.checkpoint_dir.glob(pattern))
+                checkpoint_files.extend(self.checkpoint_dir.rglob(pattern))
         else:
             patterns = self._get_checkpoint_patterns(config_name, model_name)
             checkpoint_files = []
             for pattern in patterns:
-                checkpoint_files.extend(self.checkpoint_dir.glob(pattern))
+                checkpoint_files.extend(self.checkpoint_dir.rglob(pattern))
 
         if not checkpoint_files:
             return None
@@ -165,7 +165,7 @@ class CheckpointManager:
 
         checkpoint_files = []
         for pattern in best_patterns:
-            checkpoint_files.extend(self.checkpoint_dir.glob(pattern))
+            checkpoint_files.extend(self.checkpoint_dir.rglob(pattern))
 
         if not checkpoint_files:
             return None
@@ -416,6 +416,10 @@ class CheckpointManager:
     ) -> None:
         """Save checkpoint with retry logic."""
         checkpoint_path = self.checkpoint_dir / filename
+        # Ensure that the destination directory exists (handles optional
+        # per-run sub-directories such as a folder named after the wandb
+        # run). This lets callers pass paths like "<run_name>/ckpt_x.pt".
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = checkpoint_path.with_suffix(".tmp")
 
         for attempt in range(retries + 1):
@@ -464,7 +468,7 @@ class CheckpointManager:
         removed_count = 0
 
         for pattern in patterns:
-            for ckpt_file in self.checkpoint_dir.glob(pattern):
+            for ckpt_file in self.checkpoint_dir.rglob(pattern):
                 try:
                     ckpt_file.unlink()
                     removed_count += 1
