@@ -386,6 +386,10 @@ def evaluate_dag_model(
                     print("\n=== Validation Sample ===")
                     print(f"Sample RNG seed: {sample_seed}")
                     print(f"Text: {sample_text}")
+                    # Print number of tokens in the sample text to check context length
+                    enc = get_encoding("gpt2")
+                    token_count = len(enc.encode_ordinary(sample_text))
+                    print(f"Token count: {token_count}")
                     print("Target initial values (rounded to 10 dp):")
                     print([round(v, 10) for v in tgt_real_vals])
                     print("Predicted initial values (rounded to 10 dp):")
