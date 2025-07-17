@@ -303,7 +303,6 @@ def generate_random_dag_plan(
     max_digits: int = 4,  # Maximum number of integer digits (1=1-digit, 2=2-digit, etc.)
     max_decimal_places: int = 6,
     allowed_operations: list[str] | None = None,
-    identity_cutoff_p: float = 0.1,
 ) -> tuple[list[float], list[str]]:
     rng = random.Random(seed)
     # Generate random initial values with uniform digit count distribution
