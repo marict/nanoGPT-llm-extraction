@@ -519,14 +519,22 @@ def apply_op(
     s2: torch.Tensor,
     l2: torch.Tensor,
     op_probs: torch.Tensor,
+    *,
+    ignore_clip: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Apply a predicted op to log-space values using soft selection over ops."""
-    # Apply all operations
-    add_sgn, add_log = add_log_space(s1, l1, s2, l2)
-    sub_sgn, sub_log = subtract_log_space(s1, l1, s2, l2)
-    mul_sgn, mul_log = multiply_log_space(s1, l1, s2, l2)
-    div_sgn, div_log = divide_log_space(s1, l1, s2, l2)
-    id_sgn, id_log = identity_log_space(s1, l1)
+    """Apply a predicted op to log-space values using soft selection over ops.
+
+    Args:
+        s1, l1, s2, l2: operands in sign/log¹⁰ form
+        op_probs: probabilities over operations (… , n_ops)
+        ignore_clip: if True, disable log-magnitude clipping inside operations
+    """
+    # Apply all operations with the specified clipping behaviour
+    add_sgn, add_log = add_log_space(s1, l1, s2, l2, ignore_clip)
+    sub_sgn, sub_log = subtract_log_space(s1, l1, s2, l2, ignore_clip)
+    mul_sgn, mul_log = multiply_log_space(s1, l1, s2, l2, ignore_clip)
+    div_sgn, div_log = divide_log_space(s1, l1, s2, l2, ignore_clip)
+    id_sgn, id_log = identity_log_space(s1, l1, ignore_clip=ignore_clip)
 
     # Stack results
     ops_sgn = torch.stack(
@@ -550,6 +558,7 @@ def execute_stack(
     *,
     max_digits: int,
     max_decimal_places: int,
+    ignore_clip: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Execute a differentiable stack-based DAG computation.
 
@@ -583,12 +592,17 @@ def execute_stack(
     expected_digits = (digit_probs * digits_values).sum(-1)  # (B,T,N,D)
 
     # Positional weights: 10^{k}
-    int_weights = (
-        10 ** torch.arange(max_digits - 1, -1, -1, device=digit_probs.device)
-    ).to(digit_probs.dtype)
-    frac_weights = (
-        10 ** torch.arange(-1, -max_decimal_places - 1, -1, device=digit_probs.device)
-    ).to(digit_probs.dtype)
+    # Use floating point base to ensure negative exponents produce fractional weights
+    int_weights = 10.0 ** torch.arange(
+        max_digits - 1, -1, -1, device=digit_probs.device, dtype=digit_probs.dtype
+    )
+    frac_weights = 10.0 ** torch.arange(
+        -1,
+        -max_decimal_places - 1,
+        -1,
+        device=digit_probs.device,
+        dtype=digit_probs.dtype,
+    )
     weights = torch.cat((int_weights, frac_weights))  # (D,)
 
     value_abs = (expected_digits * weights).sum(-1).clamp_min(1e-6)  # (B,T,N)
@@ -639,6 +653,7 @@ def execute_stack(
             top_sgn,
             top_log,
             ops[:, :, step],
+            ignore_clip=ignore_clip,
         )
 
         second_idx = current_size - 2
@@ -726,6 +741,7 @@ class DifferentiableDAG(nn.Module):
             operation_probs,
             max_digits=self.plan_predictor.max_digits,
             max_decimal_places=self.plan_predictor.max_decimal_places,
+            ignore_clip=False,  # Default to False for final execution
         )
 
         if ENABLE_DEBUG_NAN_CHECKS:

@@ -404,10 +404,11 @@ def _generate_expression(
     nodes: list[sympy.Basic] = symbols.copy()
     ops_map: dict[sympy.Basic, str] = {}
 
-    for op_name in reversed(operations):
-        a = nodes.pop()
-        b = nodes.pop()
-        expr = _apply_sympy_op(op_name, a, b)
+    for op_name in operations:
+        top = nodes.pop()  # corresponds to newest stack value
+        second = nodes.pop()  # value below the top
+        # Stack semantics: apply operation as second <op> top
+        expr = _apply_sympy_op(op_name, second, top)
         nodes.append(expr)
         ops_map[expr] = op_name
 
@@ -623,9 +624,10 @@ def generate_single_dag_example(
     )
 
     with torch.no_grad():
-        sign_tensor = signs.view(1, 1, -1).to(torch.float32)
-        digit_probs = digits_tensor.unsqueeze(0).unsqueeze(0).to(torch.float32)
-        op_probs = operations_tensor.unsqueeze(0).unsqueeze(0).to(torch.float32)
+        # Use double precision during reference execution to minimize numerical errors
+        sign_tensor = signs.view(1, 1, -1).to(torch.float64)
+        digit_probs = digits_tensor.unsqueeze(0).unsqueeze(0).to(torch.float64)
+        op_probs = operations_tensor.unsqueeze(0).unsqueeze(0).to(torch.float64)
 
         final_sgn, final_log = execute_stack(
             sign_tensor,
@@ -633,9 +635,12 @@ def generate_single_dag_example(
             op_probs,
             max_digits=max_digits,
             max_decimal_places=max_decimal_places,
+            ignore_clip=True,
         )
 
-        final_value_exec = (final_sgn * torch.pow(torch.tensor(10.0), final_log)).item()
+        final_value_exec = (
+            final_sgn * torch.pow(torch.tensor(10.0, dtype=final_log.dtype), final_log)
+        ).item()
 
     return DAGExample(
         text=expression,
