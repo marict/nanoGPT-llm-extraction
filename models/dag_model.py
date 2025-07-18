@@ -22,6 +22,8 @@ from torch.nn import functional as F
 
 from tensor_utils import index_copy_like
 
+LN10 = math.log(10.0)
+
 
 class LayerNorm(nn.Module):
     """LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False"""
@@ -227,9 +229,15 @@ def divide_log_space(
 def _add_logs_same_sign(
     sgn: torch.Tensor, lx: torch.Tensor, ly: torch.Tensor, ignore_clip: bool = False
 ):
-    # Perform high-precision accumulation to avoid bf16 overflows
-    lx32, ly32 = lx.float(), ly.float()
-    l_out = torch.logaddexp(lx32, ly32).to(lx.dtype)
+    # ``torch.logaddexp`` assumes natural logarithm inputs. Our internal
+    # representation uses log₁₀, so convert before/after to ensure numerical
+    # correctness (resolves large discrepancies caught by SymPy equivalence
+    # tests).
+
+    lx_n = lx.float() * LN10
+    ly_n = ly.float() * LN10
+    l_out_n = torch.logaddexp(lx_n, ly_n)
+    l_out = (l_out_n / LN10).to(lx.dtype)
     if not ignore_clip:
         l_out = _clip_log(l_out)
     return sgn, l_out
@@ -290,10 +298,9 @@ def add_log_space(
     small_log = torch.where(bigger_is_x, ly, lx)
     big_sgn = torch.where(bigger_is_x, sx, sy)
 
-    # Ensure delta < -1e-3 to keep gradients bounded
-    delta32 = (small_log - big_log).float().clamp(max=-1e-3, min=-LOG_LIM)
-    diff32 = torch.log1p(-torch.exp(delta32))  # safe in fp32
-    diff = diff32.to(lx.dtype)
+    delta32_n = (small_log - big_log).float().clamp(max=-1e-3, min=-LOG_LIM) * LN10
+    diff32_n = torch.log1p(-torch.exp(delta32_n))  # natural log domain
+    diff = (diff32_n / LN10).to(lx.dtype)
 
     # Perfect cancellation case
     zero_res = small_log == big_log
@@ -545,14 +552,9 @@ class DAGPlanPredictor(nn.Module):
             full_ops.index_copy_(-1, idx, operation_probs_subset)
             operation_probs = full_ops
 
-        # Retain grad for logging.
-        if initial_sgn.requires_grad and initial_sgn.grad_fn is not None:
-            initial_sgn.retain_grad()
-        if operation_probs.requires_grad and operation_probs.grad_fn is not None:
-            operation_probs.retain_grad()
-
-        # Cache for logging
+        # Cache operation probs for logging
         self.last_operation_probs = operation_probs
+
         return initial_sgn, digit_probs, operation_probs
 
 
@@ -612,6 +614,14 @@ def execute_stack(
     """
 
     # *initial_sgn* already provided in [-1,1]
+
+    # ------------------------------------------------------------------
+    # Digit probabilities tensor must be 5-D: (B, T, N, D, 10)
+    if digit_probs.dim() != 5:
+        raise RuntimeError(
+            "digit_probs tensor must have shape (B, T, N, D, 10); got dim="
+            f"{digit_probs.dim()}"
+        )
 
     # Expected digit value per slot to build absolute magnitude
     digits_values = torch.arange(10, device=digit_probs.device, dtype=digit_probs.dtype)
@@ -783,18 +793,21 @@ class DifferentiableDAG(nn.Module):
         int_weights = (
             10
             ** torch.arange(
-                self.plan_predictor.max_digits - 1, -1, -1, device=digit_probs.device
+                self.plan_predictor.max_digits - 1,
+                -1,
+                -1,
+                device=self.plan_predictor.last_digit_probs.device,
             )
-        ).to(digit_probs.dtype)
+        ).to(self.plan_predictor.last_digit_probs.dtype)
         frac_weights = (
             10
             ** torch.arange(
                 -1,
                 -self.plan_predictor.max_decimal_places - 1,
                 -1,
-                device=digit_probs.device,
+                device=self.plan_predictor.last_digit_probs.device,
             )
-        ).to(digit_probs.dtype)
+        ).to(self.plan_predictor.last_digit_probs.dtype)
         weights = torch.cat((int_weights, frac_weights))
         value_abs = (digits_vals * weights).sum(-1)
         initial_log = torch.log(value_abs.clamp_min(1e-6)) / math.log(10.0)

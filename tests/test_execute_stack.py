@@ -204,7 +204,8 @@ def test_perfect_cancellation():
 def test_stack_underflow_error():
     sign_tensor, digit_probs = values_to_sign_and_digits([1.0, 2.0])  # only 2 items
     sign_tensor = sign_tensor.view(1, 1, -1).detach()
-    digit_probs = digit_probs.view(1, 1, -1).detach()
+    # keep digit_probs 5-D; no additional view needed
+    digit_probs = digit_probs.detach()
 
     # depth 2 but only 2 initial → should underflow
     op_probs = torch.zeros(1, 1, 2, len(OP_NAMES))
@@ -233,7 +234,7 @@ def test_gradient_propagation():
     init_vals = torch.randn(num_init).mul(0.5)  # small values around 0
     sign_tensor, digit_probs = values_to_sign_and_digits(init_vals.tolist())
     sign_tensor = sign_tensor.view(1, 1, -1).requires_grad_()
-    digit_probs = digit_probs.view(1, 1, -1).requires_grad_()
+    digit_probs = digit_probs.requires_grad_()
 
     op_choices = torch.randint(0, len(OP_NAMES), (depth,))
     op_probs = torch.zeros(1, 1, depth, len(OP_NAMES))
@@ -269,7 +270,7 @@ def test_random_plans_smoke():
         vals = torch.randn(num_init).mul(3.0)  # diverse range
         sign_tensor, digit_probs = values_to_sign_and_digits(vals.tolist())
         sign_tensor = sign_tensor.view(1, 1, -1)
-        digit_probs = digit_probs.view(1, 1, -1)
+        # digit_probs already correct shape
 
         op_probs = torch.zeros(1, 1, depth, len(OP_NAMES))
         ops = torch.randint(0, len(OP_NAMES), (depth,))

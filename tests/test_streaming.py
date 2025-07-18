@@ -68,11 +68,11 @@ def test_apply_sympy_op_correctness():
         expr = _apply_sympy_op(op_name, a, b)
         assert sympy.simplify(expr - expected) == 0
 
-    # Identity should wrap the first argument and leave its value unchanged
-    identity_expr = _apply_sympy_op("identity", a, b)
-    assert identity_expr.args[0] == a
+    # Identity should raise error rather than wrap the operand
+    with pytest.raises(ValueError):
+        _apply_sympy_op("identity", a, b)
 
-    # Unknown operation should raise
+    # Unknown operation should also raise
     with pytest.raises(ValueError):
         _apply_sympy_op("unknown", a, b)
 
