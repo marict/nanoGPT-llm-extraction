@@ -464,6 +464,7 @@ class DAGPlanPredictor(nn.Module):
             key=initial_value_hidden,
             value=initial_value_hidden,
             attn_mask=causal_mask,
+            is_causal=True,
         )
 
         # Apply LayerNorm for stability
@@ -683,7 +684,7 @@ def execute_stack(
             second_log,
             top_sgn,
             top_log,
-            ops[:, :, depth - 1 - step],
+            ops[:, :, step],
         )
 
         second_idx = current_size - 2
@@ -796,18 +797,18 @@ class DifferentiableDAG(nn.Module):
                 self.plan_predictor.max_digits - 1,
                 -1,
                 -1,
-                device=self.plan_predictor.last_digit_probs.device,
+                device=digit_probs.device,
             )
-        ).to(self.plan_predictor.last_digit_probs.dtype)
+        ).to(digit_probs.dtype)
         frac_weights = (
             10
             ** torch.arange(
                 -1,
                 -self.plan_predictor.max_decimal_places - 1,
                 -1,
-                device=self.plan_predictor.last_digit_probs.device,
+                device=digit_probs.device,
             )
-        ).to(self.plan_predictor.last_digit_probs.dtype)
+        ).to(digit_probs.dtype)
         weights = torch.cat((int_weights, frac_weights))
         value_abs = (digits_vals * weights).sum(-1)
         initial_log = torch.log(value_abs.clamp_min(1e-6)) / math.log(10.0)

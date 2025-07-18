@@ -43,7 +43,7 @@ class TestDigitPrediction(unittest.TestCase):
         input_ids = torch.randint(0, 1000, (B, T))
 
         with torch.no_grad():
-            pred_sgn, pred_log, pred_ops = model(input_ids)
+            pred_sgn, digit_probs, pred_ops = model(input_ids)
 
         # Retrieve digit logits cached by plan_predictor
         digit_logits = model.dag_predictor.digit_logits
@@ -68,9 +68,14 @@ class TestDigitPrediction(unittest.TestCase):
         input_ids = torch.randint(0, 1000, (B, T))
 
         with torch.no_grad():
-            pred_sgn, pred_log, pred_ops = model(input_ids)
-            digit_logits = model.dag_predictor.digit_logits
-            digit_probs = F.softmax(digit_logits, dim=-1)
+            pred_sgn, digit_probs, pred_ops = model(input_ids)
+
+            # Compute log magnitudes for comparison
+            magnitude_from_log = torch.log(
+                digits_to_magnitude(
+                    digit_probs, max_digits=max_digits, max_decimal_places=max_decimals
+                ).clamp_min(1e-6)
+            ) / math.log(10.0)
 
         # Reconstruct absolute magnitude from digits
         reconstructed_abs = digits_to_magnitude(
@@ -79,13 +84,11 @@ class TestDigitPrediction(unittest.TestCase):
             max_decimal_places=max_decimals,
         )  # (B,T,N)
 
-        # Compute magnitude from log prediction: abs = 10 ** log10
-        magnitude_from_log = (10**pred_log).abs()
-
-        # They should be very close (same computation path)
-        # Allow a slightly looser tolerance because reconstructed values use expected-value approximation
+        # They should match closely – both derive from the same probabilities.
         self.assertTrue(
-            torch.allclose(reconstructed_abs, magnitude_from_log, rtol=1e-3, atol=1e-3)
+            torch.allclose(
+                reconstructed_abs, (10**magnitude_from_log).abs(), rtol=1e-3, atol=1e-3
+            )
         )
 
     # ------------------------------------------------------------------

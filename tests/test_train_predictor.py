@@ -6,6 +6,7 @@ This module tests the DAG predictor training components including
 configuration management, loss functions, model setup, and training integration.
 """
 
+import math
 import os
 import shutil
 import tempfile
@@ -18,12 +19,25 @@ import torch
 from checkpoint_manager import CheckpointManager
 from models.dag_model import GPT, OP_NAMES, GPTConfig
 from models.predictor_only_model import PredictorOnlyConfig
+from predictor_utils import digits_to_magnitude
 
 N_OPS = len(OP_NAMES)
 from train_predictor import (DAGTrainConfig, PredictorOnlyModel,
                              apply_overrides, compute_dag_structure_loss,
                              get_lr, load_config_file, tokenize_texts,
                              update_config)
+
+# ------------------------------------------------------------------
+# Helper to adapt to new DAGPlanPredictor outputs (digit probabilities).
+# ------------------------------------------------------------------
+
+
+def _derive_log_from_digits(
+    digit_probs: torch.Tensor, max_digits: int, max_decimals: int
+) -> torch.Tensor:
+    """Return log10 magnitudes computed from digit probability tensor."""
+    magnitude = digits_to_magnitude(digit_probs, max_digits, max_decimals)
+    return torch.log(magnitude.clamp_min(1e-6)) / math.log(10.0)
 
 
 class TestDAGTrainConfig(unittest.TestCase):
@@ -172,7 +186,14 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
 
         with torch.no_grad():
             # Test forward pass shapes
-            pred_sgn, pred_log, pred_ops = model(input_ids)
+            pred_sgn, digit_probs, pred_ops = model(input_ids)
+
+            # Derive log magnitudes for compatibility
+            pred_log = _derive_log_from_digits(
+                digit_probs,
+                self.config.max_digits,
+                self.config.max_decimal_places,
+            )
 
             # Check shapes
             expected_nodes = self.config.dag_depth + 1
@@ -193,7 +214,12 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
 
         with torch.no_grad():
-            pred_sgn, pred_log, pred_ops = model(input_ids)
+            pred_sgn, digit_probs, pred_ops = model(input_ids)
+            pred_log = _derive_log_from_digits(
+                digit_probs,
+                self.config.max_digits,
+                self.config.max_decimal_places,
+            )
 
             # Signs should be in [-1, 1] range (tanh output)
             self.assertTrue((pred_sgn >= -1).all())
@@ -230,7 +256,12 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
                 input_ids = torch.randint(0, 1000, (batch_size, seq_len))
 
                 with torch.no_grad():
-                    pred_sgn, pred_log, pred_ops = model(input_ids)
+                    pred_sgn, digit_probs, pred_ops = model(input_ids)
+                    pred_log = _derive_log_from_digits(
+                        digit_probs,
+                        self.config.max_digits,
+                        self.config.max_decimal_places,
+                    )
 
                     expected_nodes = self.config.dag_depth + 1
                     self.assertEqual(
@@ -254,7 +285,12 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
 
         # Forward pass
-        pred_sgn, pred_log, pred_ops = model(input_ids)
+        pred_sgn, digit_probs, pred_ops = model(input_ids)
+        pred_log = _derive_log_from_digits(
+            digit_probs,
+            self.config.max_digits,
+            self.config.max_decimal_places,
+        )
 
         # Create dummy loss
         loss = pred_sgn.mean() + pred_log.mean() + pred_ops.mean()
@@ -281,7 +317,12 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
         input_ids = torch.zeros((batch_size, seq_len), dtype=torch.long)
 
         # Forward pass with zero inputs
-        pred_sgn, pred_log, pred_ops = model(input_ids)
+        pred_sgn, digit_probs, pred_ops = model(input_ids)
+        pred_log = _derive_log_from_digits(
+            digit_probs,
+            self.config.max_digits,
+            self.config.max_decimal_places,
+        )
 
         # Verify outputs have reasonable shapes and values
         expected_nodes = self.config.dag_depth + 1
@@ -921,7 +962,12 @@ class TestModelSetup(unittest.TestCase):
             hidden = model.transformer.ln_f(hidden)
 
             # DAG predictor forward pass
-            pred_sgn, pred_log, pred_ops = model.dag.plan_predictor(hidden)
+            pred_sgn, digit_probs, pred_ops = model.dag.plan_predictor(hidden)
+            pred_log = _derive_log_from_digits(
+                digit_probs,
+                cfg.max_digits,
+                cfg.max_decimal_places,
+            )
 
             # Verify output shapes
             expected_nodes = cfg.dag_depth + 1
@@ -1235,7 +1281,12 @@ class TestFullBackbonePredictor(unittest.TestCase):
         input_ids = torch.randint(0, self.cfg.vocab_size, (batch, seq_len))
         with torch.no_grad():
             hidden = self.model.forward_hidden(input_ids)
-            pred_sgn, pred_log, pred_ops = self.model.dag.plan_predictor(hidden)
+            pred_sgn, digit_probs, pred_ops = self.model.dag.plan_predictor(hidden)
+            pred_log = _derive_log_from_digits(
+                digit_probs,
+                self.cfg.max_digits,
+                self.cfg.max_decimal_places,
+            )
 
         expected_nodes = self.cfg.dag_depth + 1
         self.assertEqual(pred_sgn.shape, (batch, seq_len, expected_nodes))
