@@ -216,8 +216,18 @@ def _add_logs_same_sign(
     # correctness (resolves large discrepancies caught by SymPy equivalence
     # tests).
 
-    lx_n = lx.float() * LN10
-    ly_n = ly.float() * LN10
+    # Convert to double precision for higher numerical accuracy before calling
+    # torch.logaddexp which operates in the natural logarithm domain.  The
+    # original implementation down-cast to ``float32`` for speed, but this
+    # introduced small discrepancies (≈1e-5 relative) that can accumulate in
+    # deep subtraction chains and trigger the SymPy equivalence assertion.
+    # MPS backend (Apple Silicon) does not support ``float64``.  Detect this
+    # case and fall back to ``float32`` to avoid runtime errors while still
+    # using higher precision on CUDA/CPU devices that *do* support doubles.
+    target_dtype = torch.float64 if lx.device.type != "mps" else torch.float32
+
+    lx_n = lx.to(target_dtype) * LN10
+    ly_n = ly.to(target_dtype) * LN10
     l_out_n = torch.logaddexp(lx_n, ly_n)
     l_out = (l_out_n / LN10).to(lx.dtype)
     if not ignore_clip:
@@ -280,9 +290,14 @@ def add_log_space(
     small_log = torch.where(bigger_is_x, ly, lx)
     big_sgn = torch.where(bigger_is_x, sx, sy)
 
-    delta32_n = (small_log - big_log).float().clamp(max=-1e-3, min=-LOG_LIM) * LN10
-    diff32_n = torch.log1p(-torch.exp(delta32_n))  # natural log domain
-    diff = (diff32_n / LN10).to(lx.dtype)
+    # Work in double precision to minimise error during the ``log1p`` call.
+    target_dtype = torch.float64 if lx.device.type != "mps" else torch.float32
+
+    delta32_n = (small_log - big_log).to(target_dtype).clamp(
+        max=-1e-3, min=-LOG_LIM
+    ) * LN10
+    diff_n = torch.log1p(-torch.exp(delta32_n))  # natural log domain
+    diff = (diff_n / LN10).to(lx.dtype)
 
     # Perfect cancellation case
     zero_res = small_log == big_log
@@ -315,8 +330,19 @@ def subtract_log_space(
 
 
 def identity_log_space(
-    sx: torch.Tensor, lx: torch.Tensor, *_, ignore_clip: bool = False
+    sx: torch.Tensor,
+    lx: torch.Tensor,
+    sy: torch.Tensor,
+    ly: torch.Tensor,
+    ignore_clip: bool = False,
 ):
+    """Identity operation for stack execution.
+
+    Behaviour: discard the *top* (``y``) and keep the *second* (``x``) so that
+    applying identity leaves the running result unchanged.  This ensures that
+    any identities introduced as padding after a shorter expression length do
+    not alter the final value.
+    """
     return sx, lx
 
 
@@ -534,7 +560,7 @@ def apply_op(
     sub_sgn, sub_log = subtract_log_space(s1, l1, s2, l2, ignore_clip)
     mul_sgn, mul_log = multiply_log_space(s1, l1, s2, l2, ignore_clip)
     div_sgn, div_log = divide_log_space(s1, l1, s2, l2, ignore_clip)
-    id_sgn, id_log = identity_log_space(s1, l1, ignore_clip=ignore_clip)
+    id_sgn, id_log = identity_log_space(s1, l1, s2, l2, ignore_clip=ignore_clip)
 
     # Stack results
     ops_sgn = torch.stack(

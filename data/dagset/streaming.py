@@ -4,11 +4,14 @@ streaming.py
 On-the-fly DAG dataset generation for training.
 """
 
+import io
 import math
 import random
 import re
 import sys
+import tokenize
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Dict, Iterator, List, Tuple
 
@@ -38,51 +41,20 @@ from models.dag_model import LOG_LIM, OP_NAMES
 
 
 def convert_number_to_english(number: float, max_decimal_places: int = 6) -> str:
-    """Convert a number to its English word equivalent.
+    """Convert *number* to its English word equivalent using *num2words*.
 
-    Args:
-        number: The number to convert (int or float)
-
-    Returns:
-        String representation (either words or original format)
+    The value is first rounded (half-up) to *max_decimal_places* decimal digits to
+    avoid extremely long fractional strings, then converted.  Negatives are
+    rendered with the "negative" prefix to preserve the previous output style.
     """
 
-    # Handle zero
-    if number == 0 or (isinstance(number, float) and abs(number) < 0.00001):
-        return "zero"
+    # Quantise using Decimal to avoid floating-point surprises (e.g. 0.1+0.2)
+    quantised = Decimal(str(number)).quantize(
+        Decimal(10) ** -max_decimal_places, rounding=ROUND_HALF_UP
+    )
 
-    # Handle negative numbers
-    is_negative = number < 0
-    abs_number = abs(number)
-
-    # Handle integers
-    if isinstance(abs_number, int) or (
-        isinstance(abs_number, float) and abs_number.is_integer()
-    ):
-        result = num2words(int(abs_number))
-        return f"negative {result}" if is_negative else result
-
-    # Handle floats with decimals
-    if isinstance(abs_number, float):
-        # Convert to string to get the decimal representation
-        number_str = str(abs_number)
-
-        if "." in number_str:
-            parts = number_str.split(".")
-            integer_part = int(parts[0]) if parts[0] else 0
-            decimal_part = parts[1]
-
-            # Build the result
-            result = num2words(integer_part) if integer_part != 0 else "zero"
-            result += " point"
-
-            # Convert each decimal digit to words (limit to 5 decimal places)
-            for digit in decimal_part[:max_decimal_places]:
-                result += " " + num2words(int(digit))
-
-            return f"negative {result}" if is_negative else result
-
-    return str(number)
+    words = num2words(abs(quantised))
+    return f"negative {words}" if quantised < 0 else words
 
 
 # --------------------------------------------------------------------------- #
@@ -114,19 +86,16 @@ def format_expression_string(
     seed: int = 42,
     max_decimal_places: int = 6,
 ) -> str:
-    """Format an expression string with optional english words and spaces.
+    """Pretty-print *expression* with optional English replacements.
 
-    Args:
-        expression: Expression string
-        english_conversion_probability: Probability of converting each individual token
-        rng: Random number generator
-
-    Returns:
-        Formatted expression string with optional english words and spaces
+    The built-in *tokenize* module is used for lexing, which eliminates the
+    bespoke scanner and correctly handles numbers, parentheses and operator
+    tokens (including disambiguating unary minus).
     """
+
     rng = random.Random(seed)
 
-    # Symbol to English word mappings
+    # Operator → english synonyms
     symbol_to_english = {
         "+": ["plus", "added to"],
         "-": ["minus", "subtract", "less"],
@@ -134,89 +103,48 @@ def format_expression_string(
         "/": ["divided by", "over", "divide by"],
     }
 
-    # Split the expression into tokens (numbers, operators, parentheses)
-    # Use a more sophisticated approach to handle negative numbers vs minus operators
-    tokens = []
-    i = 0
-    while i < len(expression):
-        if expression[i] == "-":
-            # Check if this is a negative number or a minus operator
-            # It's a negative number if it's at the start or after (, +, -, *, /
-            # We need to look backwards past spaces to find the actual operator
-            is_negative_number = False
-            if i == 0:
-                is_negative_number = True
-            else:
-                # Look backwards past spaces to find the last non-space character
-                k = i - 1
-                while k >= 0 and expression[k] == " ":
-                    k -= 1
-                if k >= 0 and expression[k] in "(+-*/":
-                    is_negative_number = True
+    converted: list[str] = []
 
-            if is_negative_number:
-                # Look ahead to see if there's a number after the minus
-                j = i + 1
-                while j < len(expression) and expression[j] in "0123456789.":
-                    j += 1
-                if j > i + 1:  # Found digits after minus
-                    tokens.append(expression[i:j])
-                    i = j
-                    continue
-            # Otherwise, it's a minus operator
-            tokens.append("-")
-            i += 1
-        elif expression[i] in "0123456789":
-            # Regular positive number
-            j = i
-            while j < len(expression) and expression[j] in "0123456789.":
-                j += 1
-            tokens.append(expression[i:j])
-            i = j
-        elif expression[i] in "+*/()":
-            tokens.append(expression[i])
-            i += 1
-        elif expression[i] == " ":
-            i += 1  # Skip spaces
-        else:
-            i += 1  # Skip unknown characters
+    for tok_type, tok_str, *_ in tokenize.generate_tokens(
+        io.StringIO(expression).readline
+    ):
+        if tok_type == tokenize.ENDMARKER:
+            break
 
-    # Clean up tokens by removing empty strings
-    tokens = [t for t in tokens if t.strip()]
-
-    converted_tokens = []
-    for token in tokens:
-        if token in symbol_to_english:
-            # Randomly convert operator to English based on probability
+        # ------------------------------------------------------------------
+        # 1. Numeric literals
+        # ------------------------------------------------------------------
+        if tok_type == tokenize.NUMBER:
             if rng.random() < english_conversion_probability:
-                converted_tokens.append(rng.choice(symbol_to_english[token]))
+                # Convert to int where possible for nicer wording ("three" vs "three point zero")
+                try:
+                    val = int(tok_str)
+                except ValueError:
+                    val = float(tok_str)
+                converted.append(convert_number_to_english(val, max_decimal_places))
             else:
-                converted_tokens.append(token)
-        elif token in ["(", ")"]:
-            # Keep parentheses as symbols - don't convert to English
-            converted_tokens.append(token)
-        elif re.match(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", token):
-            # Randomly convert number to words based on probability
-            # Handle both positive and negative numbers, int and float types
-            try:
-                if "." in token:
-                    number = float(token)
-                else:
-                    number = int(token)
-            except ValueError:
-                number = float(token)
+                converted.append(tok_str)
+            continue
 
-            if rng.random() < english_conversion_probability:
-                converted_tokens.append(
-                    convert_number_to_english(number, max_decimal_places)
-                )
+        # ------------------------------------------------------------------
+        # 2. Operators (including parentheses)
+        # ------------------------------------------------------------------
+        if tok_type == tokenize.OP:
+            if (
+                tok_str in symbol_to_english
+                and rng.random() < english_conversion_probability
+            ):
+                converted.append(rng.choice(symbol_to_english[tok_str]))
             else:
-                converted_tokens.append(token)
-        else:
-            # Keep token as is
-            converted_tokens.append(token)
+                converted.append(tok_str)
+            continue
 
-    return " ".join(converted_tokens)
+        # ------------------------------------------------------------------
+        # 3. Everything else (identifiers, whitespace, etc.)
+        # ------------------------------------------------------------------
+        converted.append(tok_str)
+
+    return " ".join(converted).strip()
 
 
 @dataclass
@@ -236,6 +164,9 @@ class DAGExample:
     did_simplify: bool
     final_value_sympy: float | None = None  # exact symbolic evaluation
     final_value_exec: float | None = None  # value from execute_stack
+
+    def __str__(self):
+        return f"DAGExample(text={self.text}, depth={self.depth}, initial_values={self.initial_values}, signs={self.signs}, digits={self.digits}, operations={self.operations}, operations_named={self.operations_named}, seed={self.seed}, did_expand={self.did_expand}, did_simplify={self.did_simplify}, final_value_sympy={self.final_value_sympy}, final_value_exec={self.final_value_exec})"
 
 
 def generate_uniform_digit_number(
@@ -642,7 +573,7 @@ def generate_single_dag_example(
             final_sgn * torch.pow(torch.tensor(10.0, dtype=final_log.dtype), final_log)
         ).item()
 
-    return DAGExample(
+    example = DAGExample(
         text=expression,
         depth=depth,
         initial_values=initial_values,
@@ -656,6 +587,12 @@ def generate_single_dag_example(
         final_value_sympy=final_value_sympy,
         final_value_exec=final_value_exec,
     )
+
+    assert math.isclose(
+        example.final_value_exec, example.final_value_sympy, rel_tol=1e-6
+    ), f"Final value mismatch: {example.final_value_exec} != {example.final_value_sympy}, \nexample: {example}"
+
+    return example
 
 
 class DAGStructureDataset:
