@@ -107,19 +107,6 @@ def test_plan_to_tensors_shapes():
     assert ops_onehot[0, OP_NAMES.index("add")].item() == 1
 
 
-def test_generate_single_dag_example_seed_50():
-    example = generate_single_dag_example(
-        depth=4,
-        seed=50,
-        max_digits=4,
-        max_decimal_places=6,
-        expression_simplification_probability=1,
-    )
-    import pdb
-
-    pdb.set_trace()
-
-
 def test_generate_single_dag_example_basic_properties():
     example = generate_single_dag_example(
         depth=3, seed=999, max_digits=2, max_decimal_places=2
