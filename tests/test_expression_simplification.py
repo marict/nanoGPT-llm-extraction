@@ -40,6 +40,10 @@ def test_simplification_matches_sympy(seed):
         expression_permutation_probability=0.0,
     )
 
+    import pdb
+
+    pdb.set_trace()
+
     # Canonical SymPy simplification
     expr_sympy_simplified = str(sympy.simplify(sympy.sympify(expr_raw)))
 

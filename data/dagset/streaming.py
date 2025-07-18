@@ -535,7 +535,13 @@ def plan_to_string_expression(
     # Stringify and replace placeholders
     # ------------------------------------------------------------------ #
 
-    expr_str = str(sym_expr)
+    import pdb
+
+    pdb.set_trace()
+    expr_str = sympy.pretty(sym_expr, order="none")
+    import pdb
+
+    pdb.set_trace()
 
     # At this point, since we know our expression contains non-negative values, we can collapse + - into -
     expr_str = expr_str.replace("+ (-", "- (")
@@ -670,6 +676,9 @@ def generate_single_dag_example(
     max_digits: int = 4,
     max_decimal_places: int = 6,
     allowed_operations: list[str] | None = None,
+    # Test-only overrides – callers should provide **both** or **neither**
+    _operations_override: list[str] | None = None,
+    _initial_values_override: list[float] | None = None,
 ) -> DAGExample:
     """Generate a single DAG computation example as a simple math expression."""
     # Determine number of initial values to match DAG predictor expectations
@@ -677,16 +686,42 @@ def generate_single_dag_example(
         # For DAG with depth n, we need n+1 initial values
         num_initial_values = depth + 1
 
-    initial_values, operations = generate_random_dag_plan(
-        depth,
-        num_initial_values,
-        seed,
-        max_digits,
-        max_decimal_places,
-        allowed_operations=allowed_operations,
-    )
+    # ------------------------------------------------------------------ #
+    # Plan generation – either use caller-supplied overrides (for tests) or
+    # fall back to stochastic generation.
+    # ------------------------------------------------------------------ #
 
-    initial_values, operations = pad_plan(initial_values, operations)
+    if _operations_override is not None or _initial_values_override is not None:
+        # Both overrides must be supplied together to avoid ambiguity.
+        if _operations_override is None or _initial_values_override is None:
+            raise ValueError(
+                "Both _operations_override and _initial_values_override must be provided together."
+            )
+
+        operations = list(_operations_override)
+        initial_values = list(_initial_values_override)
+
+        # Basic sanity checks to avoid silent shape mismatches.
+        if depth != len(operations):
+            raise ValueError("Provided _operations_override length must equal *depth*.")
+        if len(initial_values) != depth + 1:
+            raise ValueError("_initial_values_override must contain depth + 1 values.")
+
+        # Still run through pad_plan so that identity-padding behaviour remains
+        # consistent with regular stochastic generation.
+        initial_values, operations = pad_plan(initial_values, operations)
+
+    else:
+        initial_values, operations = generate_random_dag_plan(
+            depth,
+            num_initial_values,
+            seed,
+            max_digits,
+            max_decimal_places,
+            allowed_operations=allowed_operations,
+        )
+
+        initial_values, operations = pad_plan(initial_values, operations)
 
     expression, did_permute, did_simplify = plan_to_string_expression(
         initial_values=initial_values,

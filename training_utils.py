@@ -89,6 +89,11 @@ class BaseConfig:
     # Debugging
     check_nans: bool = False
 
+    # When True, reset the stored iteration counter to zero when reloading a
+    # checkpoint. This lets you start a fresh learning-rate schedule while
+    # still initialising the model with pre-trained weights.
+    reload_reset_iters: bool = False
+
 
 def load_config_file(path: str) -> Dict[str, object]:
     """Load configuration from a Python file."""

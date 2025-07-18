@@ -351,10 +351,20 @@ class CheckpointManager:
             checkpoint = self.load_checkpoint_from_path(
                 ckpt_path, device, expected_keys
             )
+            # Optionally reset the iteration counter when reloading. This is
+            # useful when fine-tuning from a pre-trained checkpoint but you
+            # want to start a fresh learning-rate schedule.
+            iter_num = checkpoint.get("iter_num", 0)
+            if getattr(config, "reload_reset_iters", False):
+                print("reload_reset_iters is True – resetting iter_num to 0")
+                iter_num = 0
+                checkpoint["iter_num"] = 0
+
+            best_val_loss = checkpoint.get("best_val_loss", 1e9)
             return (
                 checkpoint,
-                checkpoint.get("iter_num", 0),
-                checkpoint.get("best_val_loss", 1e9),
+                iter_num,
+                best_val_loss,
             )
 
         elif init_from.startswith("gpt2"):
@@ -378,10 +388,19 @@ class CheckpointManager:
             checkpoint = self.load_checkpoint_from_path(
                 checkpoint_path, device, expected_keys
             )
+            # Apply the same optional iteration-reset logic for explicit
+            # checkpoint paths.
+            iter_num = checkpoint.get("iter_num", 0)
+            if getattr(config, "reload_reset_iters", False):
+                print("reload_reset_iters is True – resetting iter_num to 0")
+                iter_num = 0
+                checkpoint["iter_num"] = 0
+
+            best_val_loss = checkpoint.get("best_val_loss", 1e9)
             return (
                 checkpoint,
-                checkpoint.get("iter_num", 0),
-                checkpoint.get("best_val_loss", 1e9),
+                iter_num,
+                best_val_loss,
             )
 
     def generate_checkpoint_filename(
