@@ -10,7 +10,7 @@ from models.dag_model import (LOG_LIM, DAGPlanPredictor, GPTConfig,
 # -----------------------------------------------------------------------------
 
 
-def _build_plan_predictor(depth: int = 2, n_embd: int = 32) -> DAGPlanPredictor:
+def _build_plan_predictor(depth: int = 2, n_embd: int = 4) -> DAGPlanPredictor:
     """Return a tiny `DAGPlanPredictor` in eval-mode for unit tests."""
 
     cfg = GPTConfig(
@@ -22,6 +22,8 @@ def _build_plan_predictor(depth: int = 2, n_embd: int = 32) -> DAGPlanPredictor:
         dropout=0.0,
         bias=False,
         dag_depth=depth,
+        max_digits=2,
+        max_decimal_places=2,
     )
     predictor = DAGPlanPredictor(cfg)
     predictor.eval()
@@ -33,7 +35,7 @@ def _build_plan_predictor(depth: int = 2, n_embd: int = 32) -> DAGPlanPredictor:
 # -----------------------------------------------------------------------------
 
 
-def test_causal_mask_invariance():
+def test_causal_mask_invariance_for_predictor():
     """Changing future hidden states must NOT affect earlier predictions."""
 
     predictor = _build_plan_predictor(depth=2)
@@ -51,13 +53,15 @@ def test_causal_mask_invariance():
 
     assert torch.allclose(
         sign_ref[..., :-1, :], sign_mod[..., :-1, :], atol=1e-5, rtol=1e-5
-    )
-    assert torch.allclose(
-        digits_ref[..., :-1, :, :], digits_mod[..., :-1, :, :], atol=1e-5, rtol=1e-5
-    )
+    ), "Causal mask failed for signs"
+
     assert torch.allclose(
         ops_ref[..., :-1, :, :], ops_mod[..., :-1, :, :], atol=1e-5, rtol=1e-5
-    ), "Causal mask failed – future information leaked into past predictions."
+    ), "Causal mask failed for operations"
+
+    assert torch.allclose(
+        digits_ref[:, :-1, ...], digits_mod[:, :-1, ...], atol=1e-5, rtol=1e-5
+    ), "Causal mask failed for digits"
 
 
 # -----------------------------------------------------------------------------

@@ -378,16 +378,23 @@ def _generate_expression(
             for i in range(len(operations) + 1)
         ]
 
-        # Check for division by zero
-        for i in range(len(operations)):
-            if operations[i] == "divide":
-                if initial_values[i + 1] == 0.0:
-                    initial_values[i + 1] = generate_uniform_digit_number(
-                        seed=seed * 7919 + i,
-                        max_digits=max_digits,
-                        max_decimal_places=max_decimal_places,
-                        allow_zero=False,
-                    )
+        # ------------------------------------------------------------------
+        # Ensure we never divide by zero under the current stack evaluation
+        # semantics (top ÷ second). A zero anywhere in *initial_values* could
+        # end up in the denominator after a chain of sub-expressions, so we
+        # simply replace *all* exact zeros with a small non-zero number drawn
+        # from the standard generator. This preserves determinism while
+        # guaranteeing a finite result.
+        # ------------------------------------------------------------------
+
+        for i, val in enumerate(initial_values):
+            if val == 0.0:
+                initial_values[i] = generate_uniform_digit_number(
+                    seed=seed * 7919 + i,
+                    max_digits=max_digits,
+                    max_decimal_places=max_decimal_places,
+                    allow_zero=False,
+                )
 
     # ------------------------------------------------------------------
     # 2. Build SymPy expression from leaves + operations
@@ -407,6 +414,10 @@ def _generate_expression(
     assert len(nodes) == 1
     sym_expr: sympy.Basic = nodes[0]
 
+    # Execute the sympy expression and store the final value for validation purposes.
+    value_map = {symbols[i]: initial_values[i] for i in range(len(initial_values))}
+    final_value = sympy.N(sym_expr.subs(value_map))
+
     # Pad the rest of the operations with identity
     operations.extend(["identity"] * (depth - len(operations)))
     # Pad the rest of initial values with 1.0
@@ -424,10 +435,6 @@ def _generate_expression(
     if rng.random() < expression_expansion_probability:
         sym_expr = sympy.expand(sym_expr)
         did_expand = True
-
-    # Execute the sympy expression and store the final value for validation purposes.
-    value_map = {symbols[i]: initial_values[i] for i in range(len(initial_values))}
-    final_value = sympy.N(sym_expr.subs(value_map))
 
     return sym_expr, initial_values, operations, final_value, did_simplify, did_expand
 

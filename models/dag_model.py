@@ -131,24 +131,6 @@ def _clip_log(log_t: torch.Tensor) -> torch.Tensor:
     return torch.tanh(log_t / LOG_LIM) * LOG_LIM
 
 
-def _rms_rescale(prev_logs: torch.Tensor, new_log: torch.Tensor) -> torch.Tensor:
-    """Return a RMS-rescaled version of *new_log* so that, when appended to
-    *prev_logs*, the running RMS equals ``LOG_LIM``.
-
-    No in-place mutation → avoids autograd versioning issues.
-
-    Args:
-        prev_logs: (B,T,S) tensor with existing log magnitudes.
-        new_log:   (B,T)   tensor – the candidate log magnitude to append.
-    Returns:
-        new_log_scaled: (B,T) tensor, rescaled.
-    """
-    slice_ = torch.cat((prev_logs, new_log.unsqueeze(-1)), dim=-1)
-    rms = torch.sqrt((slice_**2).mean(dim=-1, keepdim=True) + 1e-6)
-    scale = (LOG_LIM / rms).clamp(max=1.0)
-    return new_log * scale.squeeze(-1)
-
-
 # Debug utility
 ENABLE_DEBUG_NAN_CHECKS = os.getenv("DAGGPT_DEBUG_NANS", "0") == "1"
 if ENABLE_DEBUG_NAN_CHECKS:
@@ -388,9 +370,10 @@ class DAGPlanPredictor(nn.Module):
         self.max_decimal_places = getattr(config, "max_decimal_places", 6)
         self.digits_per_number = self.max_digits + self.max_decimal_places
 
+        # One sign + 10-way per digit slot per node
         initial_values_output_dim = self.num_scratch_nodes * (
             1 + self.digits_per_number * 10
-        )  # 1 sign + 10-way per digit slot
+        )
         self.initial_values_predictor = nn.Sequential(
             nn.Linear(config.n_embd, config.n_embd),
             nn.GELU(),
@@ -448,17 +431,34 @@ class DAGPlanPredictor(nn.Module):
         # Process initial values
         initial_value_flat = initial_value_hidden.reshape(B * T, H)
         initial_values_raw = self.initial_values_predictor(initial_value_flat)
-        initial_values_raw = initial_values_raw.view(
-            B, T, -1
-        )  # (B, T, 2 * num_scratch_nodes)
+        initial_values_raw = initial_values_raw.view(B, T, -1)
 
-        # Process operations using cross attention
+        # Process initial values
+        slice_sign = self.num_scratch_nodes
+        slice_digits = self.num_scratch_nodes * self.digits_per_number * 10
+
+        digit_logits = initial_values_raw[..., slice_sign : slice_sign + slice_digits]
+
+        # Ensure contiguous memory layout before reshaping.
+        digit_logits = digit_logits.contiguous().view(
+            B, T, self.num_scratch_nodes, self.digits_per_number, 10
+        )
+
+        # Store the last digit logits predicted for logging / compatibility
+        self.last_digit_logits = digit_logits.detach().clone()
+
+        # Compute probabilities and expected digits
+        digit_probs = F.softmax(digit_logits, dim=-1).contiguous()
+        sign_logits = initial_values_raw[..., :slice_sign]
+
+        # Convert sign tensor in [-1,1]
+        initial_sgn = torch.tanh(sign_logits)
+
+        # Process operations:
         # Cross attention: dag_structure_hidden attends to initial_value_hidden
-        # Create causal mask to prevent attending to future positions
         causal_mask = torch.triu(
             torch.full((T, T), float("-inf"), device=original_hidden.device), diagonal=1
         )
-
         cross_output, _ = self.cross_attn(
             query=dag_structure_hidden,
             key=initial_value_hidden,
@@ -477,48 +477,6 @@ class DAGPlanPredictor(nn.Module):
             B, T, -1
         )  # (B, T, dag_depth * n_ops)
 
-        # Process initial values
-        slice_sign = self.num_scratch_nodes
-        slice_digits = self.num_scratch_nodes * self.digits_per_number * 10
-
-        sign_logits = initial_values_raw[..., :slice_sign]
-        digit_logits = initial_values_raw[..., slice_sign : slice_sign + slice_digits]
-
-        # Reshape digit logits
-        digit_logits = digit_logits.view(
-            B, T, self.num_scratch_nodes, self.digits_per_number, 10
-        )
-
-        # Store for logging / compatibility
-        self.digit_logits = digit_logits
-
-        # Compute probabilities and expected digits
-        digit_probs = F.softmax(digit_logits, dim=-1)
-        digits_values = torch.arange(
-            10, device=digit_probs.device, dtype=digit_probs.dtype
-        )
-        expected_digits = (digit_probs * digits_values).sum(-1)  # (B,T,N,D)
-
-        # Build absolute value per node
-        int_weights = (
-            10 ** torch.arange(self.max_digits - 1, -1, -1, device=digit_probs.device)
-        ).to(
-            digit_probs.dtype
-        )  # (D1,)
-        frac_weights = (
-            10
-            ** torch.arange(
-                -1, -self.max_decimal_places - 1, -1, device=digit_probs.device
-            )
-        ).to(digit_probs.dtype)
-        weights = torch.cat((int_weights, frac_weights))  # (D,)
-        value_abs = (expected_digits * weights).sum(-1)  # (B,T,N)
-        value_abs = value_abs.clamp_min(1e-6)
-
-        # Convert sign tensor in [-1,1]
-        initial_sgn = torch.tanh(sign_logits)
-
-        # Process operation logits
         operation_logits = operation_logits_raw.view(B, T, self.dag_depth, self.n_ops)
 
         # Clamp logits before softmax for numerical stability
@@ -535,11 +493,7 @@ class DAGPlanPredictor(nn.Module):
         # Ensure dtype matches operation_logits to avoid index_copy_ dtype mismatches
         operation_probs_subset = operation_probs_subset.to(operation_logits.dtype)
 
-        # ------------------------------------------------------------------
-        # Map subset probabilities back to full OP_NAMES length so that all
-        # downstream code (loss functions, metrics, etc.) can assume a fixed
-        # size independent of configured subset.
-        # ------------------------------------------------------------------
+        # Map subset probabilities back to full OP_NAMES length
         if self.n_ops == len(OP_NAMES):
             # No subset → return directly to avoid extra alloc
             operation_probs = operation_probs_subset
@@ -555,7 +509,6 @@ class DAGPlanPredictor(nn.Module):
 
         # Cache operation probs for logging
         self.last_operation_probs = operation_probs
-
         return initial_sgn, digit_probs, operation_probs
 
 

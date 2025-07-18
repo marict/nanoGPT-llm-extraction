@@ -46,7 +46,7 @@ class TestDigitPrediction(unittest.TestCase):
             pred_sgn, digit_probs, pred_ops = model(input_ids)
 
         # Retrieve digit logits cached by plan_predictor
-        digit_logits = model.dag_predictor.digit_logits
+        digit_logits = model.dag_predictor.last_digit_logits
         self.assertIsNotNone(digit_logits, "digit_logits attribute missing")
 
         N = model.config.dag_depth + 1  # scratch nodes
@@ -106,7 +106,7 @@ class TestDigitPrediction(unittest.TestCase):
 
         # Forward pass
         pred_sgn, _, pred_ops = model(input_ids)
-        digit_logits = model.dag_predictor.digit_logits
+        digit_logits = model.dag_predictor.last_digit_logits
         self.assertIsNotNone(digit_logits)
 
         # Enable gradient capture on non-leaf tensor

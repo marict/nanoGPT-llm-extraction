@@ -170,6 +170,26 @@ def digits_to_magnitude(
     )  # (..., D)
 
     int_weights = 10 ** torch.arange(max_digits - 1, -1, -1, device=device, dtype=dtype)
+
+    # ------------------------------------------------------------------
+    # Allow callers to pass ``max_decimal_places=None`` which is the default
+    # in several configuration classes. In that case we *infer* the number of
+    # fractional digit slots from the digits tensor itself (last-but-one
+    # dimension) instead of raising a TypeError. This makes the helper
+    # backward-compatible with existing test suites that assume the parameter
+    # can be omitted.  When *max_decimal_places* is provided explicitly we
+    # keep the original behaviour for full determinism.
+    # ------------------------------------------------------------------
+
+    if max_decimal_places is None:
+        total_slots = digits.shape[-2]
+        max_decimal_places = total_slots - max_digits
+        if max_decimal_places < 0:
+            raise ValueError(
+                "Inferred a negative number of decimal places. "
+                "Check that *max_digits* is correct or provide *max_decimal_places* explicitly."
+            )
+
     frac_weights = 10 ** torch.arange(
         -1, -max_decimal_places - 1, -1, device=device, dtype=dtype
     )
@@ -311,9 +331,7 @@ def evaluate_dag_model(
 
                 # Prediction tensors ---------------------------------------------
                 pred_sign = pred_sgn.squeeze(1).unsqueeze(1)  # (B,1,N)
-                pred_digit_probs = digit_logits.softmax(dim=-1).unsqueeze(
-                    1
-                )  # (B,1,N,D,10)
+                pred_digit_probs = digit_logits.softmax(dim=-1)  # (B,1,N,D,10)
                 # pred_ops already (B,1,depth,n_ops)
 
                 # Execute stacks
