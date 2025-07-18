@@ -275,10 +275,10 @@ class DAGExample:
     initial_values: list[float]  # for logging
     signs: torch.Tensor  # (D+1)
     digits: torch.Tensor  # (D+1, digits_total, 10)
-    log_magnitudes: torch.Tensor  # (D+1) natural-log magnitudes (for legacy tests)
+    # log magnitudes are now computed on-the-fly during structure tensor creation
     operations: torch.Tensor  # (D, num_ops)
     seed: int
-    did_permute: bool
+    did_expand: bool
     did_simplify: bool
 
 
@@ -333,249 +333,204 @@ def generate_uniform_digit_number(
     return value
 
 
-def generate_random_dag_plan(
+# NEW EXPRESSION-FIRST HELPERS --------------------------------------------------
+
+
+def _apply_sympy_op(op_name: str, a: sympy.Basic, b: sympy.Basic) -> sympy.Basic:
+    """Return a SymPy expression representing *a <op> b* without evaluation."""
+    if op_name == "add":
+        return sympy.Add(a, b, evaluate=False)
+    if op_name == "subtract":
+        return sympy.Add(a, -b, evaluate=False)
+    if op_name == "multiply":
+        return sympy.Mul(a, b, evaluate=False)
+    if op_name == "divide":
+        return sympy.Mul(a, sympy.Pow(b, -1, evaluate=False), evaluate=False)
+    if op_name == "identity":
+        # Represent identity as a 2-argument dummy function so traversal
+        # records the op while the mathematical value equals *a*.
+        IdentityFunc = sympy.Function("IDENTITY")
+        return IdentityFunc(a, b)
+    raise ValueError(f"Unsupported op_name: {op_name}")
+
+
+def _generate_expression(
+    *,
     depth: int,
-    num_initial_values: int = 1,
-    seed: int = 42,
-    max_digits: int = 4,  # Maximum number of integer digits (1=1-digit, 2=2-digit, etc.)
-    max_decimal_places: int = 6,
-    allowed_operations: list[str] | None = None,
-) -> tuple[list[float], list[str]]:
+    seed: int,
+    max_digits: int,
+    max_decimal_places: int,
+    allowed_operations: list[str] | None,
+    expression_simplification_probability: float,
+    expression_expansion_probability: float,
+    override_initial_values: list[float] | None = None,
+    override_operations: list[str] | None = None,
+) -> tuple[sympy.Basic, list[float], list[str], bool, bool]:
+    """Create a random SymPy expression of exactly *depth* operations.
+
+    Returns (expr, initial_values, operations, did_simplify, did_expand).
+    """
     rng = random.Random(seed)
-    # Generate random initial values with uniform digit count distribution
-    # for both integer part and decimal part.
-    # Use a different seed for each initial value to avoid initial values being repeated in certain cases.
-    number_seed = rng.randint(0, 1000000)
-    initial_values = [
-        generate_uniform_digit_number(
-            max_digits=max_digits,
-            max_decimal_places=max_decimal_places,
-            seed=number_seed + i,
+
+    # ------------------------------------------------------------------
+    # 1. Determine leaf values & operations (override vs random)
+    # ------------------------------------------------------------------
+    if (override_initial_values is None) ^ (override_operations is None):
+        raise ValueError(
+            "Both override_initial_values and override_operations must be provided together (or neither)."
         )
-        for i in range(num_initial_values)
-    ]
 
-    # Determine the set of operations that can be sampled
-    if allowed_operations is None:
-        op_choices = OP_NAMES
+    if override_initial_values is not None:
+        # Use caller-supplied plan verbatim
+        if len(override_operations) != depth:
+            raise ValueError("Length of override_operations must equal depth")
+        if len(override_initial_values) != depth + 1:
+            raise ValueError("override_initial_values must have depth+1 elements")
+
+        initial_values = list(override_initial_values)
+        operations = list(override_operations)
     else:
-        # Check for invalid operations and raise an informative error
-        invalid_ops = [op for op in allowed_operations if op not in OP_NAMES]
-        if invalid_ops:
-            raise ValueError(
-                f"Invalid operations provided: {invalid_ops}. Available operations: {OP_NAMES}"
+        num_leaves = depth + 1
+        initial_values = [
+            generate_uniform_digit_number(
+                seed=seed * 7919 + i,
+                max_digits=max_digits,
+                max_decimal_places=max_decimal_places,
             )
+            for i in range(num_leaves)
+        ]
 
-        # All provided operations are valid; use them
-        op_choices = list(allowed_operations)
+        # Choose operations under identity cutoff logic
+        if allowed_operations is None:
+            op_pool = [op for op in OP_NAMES if op != "identity"]
+        else:
+            invalid = [op for op in allowed_operations if op not in OP_NAMES]
+            if invalid:
+                raise ValueError(
+                    f"Invalid operations provided: {invalid}. Available operations: {OP_NAMES}"
+                )
+            op_pool = [op for op in allowed_operations if op != "identity"]
+            if not op_pool:
+                op_pool = [op for op in OP_NAMES if op != "identity"]
 
-    # Step 1 & 2 – generate operations excluding identity, then (optionally) insert
-    # an identity at a random cutoff index and convert all following ops to identity.
+        cutoff_idx = rng.randint(0, depth)
+        operations = [
+            ("identity" if idx >= cutoff_idx else rng.choice(op_pool))
+            for idx in range(depth)
+        ]
 
-    if len(op_choices) == 0:
-        raise ValueError("No operations provided")
+    # ------------------------------------------------------------------
+    # 2. Build SymPy expression from leaves + operations
+    # ------------------------------------------------------------------
+    symbols = [sympy.Symbol(f"VAL_{i}") for i in range(len(initial_values))]
+    placeholder_to_value = dict(zip(symbols, initial_values))
 
-    op_choices_no_identity = [op for op in op_choices if op != "identity"]
+    nodes: list[sympy.Basic] = symbols.copy()
+    ops_map: dict[sympy.Basic, str] = {}
 
-    if len(op_choices_no_identity) == 0:
-        # We only have identity operations.
-        # Return all identity operations with 1.0 initial values
-        operations = ["identity"] * depth
-        initial_values = [1.0] * (depth + 1)
-        return initial_values, operations
+    for op_name in reversed(operations):  # process stackwise (right-to-left)
+        b = nodes.pop()
+        a = nodes.pop()
+        expr = _apply_sympy_op(op_name, a, b)
+        nodes.append(expr)
+        ops_map[expr] = op_name
 
-    operations = [rng.choice(op_choices_no_identity) for _ in range(depth)]
+    assert len(nodes) == 1
+    sym_expr: sympy.Basic = nodes[0]
 
-    if depth > 0:
-        # Uniformly sample cutoff index in 0..depth inclusive.  depth => no cutoff.
-        cutoff_idx = rng.randint(0, depth)  # depth means keep all ops
-        if cutoff_idx < depth:
-            operations[cutoff_idx:] = ["identity"] * (depth - cutoff_idx)
+    # ------------------------------------------------------------------
+    # 4. Deterministic post-order traversal to derive plan BEFORE any
+    #    algebraic transforms so that we always traverse a strictly *binary*
+    #    tree (the structure produced by the stack-based op application).  Any
+    #    subsequent simplify/expand calls may merge operands into n-ary nodes
+    #    but those changes must *not* affect the recorded plan.
+    # ------------------------------------------------------------------
+    derived_ops: list[str] = []
+    derived_initials: list[float] = []
+    symbol_to_index: dict[sympy.Symbol, int] = {}
 
-    # Step 4 – constant-based identity replacement on every surviving op.
-    for k in range(depth - 1, -1, -1):  # iterate right-to-left
-        if k + 1 >= len(initial_values):
-            continue
+    def _traverse(node: sympy.Basic) -> int:
+        if isinstance(node, sympy.Symbol):
+            if node not in symbol_to_index:
+                idx = len(symbol_to_index)
+                symbol_to_index[node] = idx
+                derived_initials.append(placeholder_to_value[node])
+            return symbol_to_index[node]
+        # With traversal now happening before any algebraic transforms, every
+        # internal node is guaranteed to have **exactly two** operands.
+        if len(node.args) != 2:
+            raise ValueError("Non-binary node encountered before simplify/expand phase")
 
-        right_operand = initial_values[k + 1]
+        left, right = node.args
+        _traverse(left)
+        _traverse(right)
 
-        if (
-            operations[k] in ["multiply", "divide"] and abs(right_operand - 1.0) < 1e-6
-        ) or (operations[k] in ["add", "subtract"] and abs(right_operand) < 1e-6):
-            operations[k] = "identity"
+        op_name = ops_map.get(node, "identity")
+        derived_ops.append(op_name)
 
-        if operations[k] == "divide" and abs(right_operand) < 1e-6:
-            # Cannot divide by zero – turn this op into identity
-            operations[k] = "identity"
-            right_operand = 1.0
-            initial_values[k + 1] = 1.0
+        # Return index of the left child so that parent nodes refer to it.
+        return symbol_to_index[left]
 
-    return initial_values, operations
+    _traverse(sym_expr)
 
+    assert len(derived_ops) == depth, "Traversal yielded wrong op count"
+    assert len(derived_initials) == depth + 1, "Incorrect initial value count"
 
-def pad_plan(
-    initial_values: list[float], operations: list[str]
-) -> tuple[list[float], list[str]]:
-    """Pad a DAG plan with systematic identity operations and 1.0 values.
-
-    Now that operations are processed right-to-left (like a stack), padding is simple:
-    - Find first identity operation
-    - Replace all subsequent operations with identities
-    - Replace corresponding rightmost initial values with 1.0s
-
-    Args:
-        initial_values: List of initial values
-        operations: List of operations (processed right-to-left)
-
-    Returns:
-        Tuple of (padded_initial_values, padded_operations)
-    """
-    # Find first identity operation
-    try:
-        first_identity_idx = operations.index("identity")
-    except ValueError:
-        # No identity operations found, return original plan
-        return initial_values.copy(), operations.copy()
-
-    # Pad operations: replace everything after first identity with identities
-    padded_operations = operations.copy()
-    for i in range(first_identity_idx + 1, len(operations)):
-        padded_operations[i] = "identity"
-
-    # Pad initial values: since operations are processed right-to-left,
-    # the rightmost operations (padding identities) will consume the rightmost initial values
-    padded_initial_values = initial_values.copy()
-    for i in range(first_identity_idx + 1, len(padded_initial_values)):
-        padded_initial_values[i] = 1.0
-
-    return padded_initial_values, padded_operations
-
-
-def plan_to_string_expression(
-    initial_values: list[float],
-    operations: list[str],
-    seed: int = 42,
-    english_conversion_probability: float = 0.0,
-    integer_no_decimal_probability: float = 0.0,
-    expression_simplification_probability: float = 0.0,
-    expression_permutation_probability: float = 0.0,
-    max_decimal_places: int = 6,
-) -> str:
-    """Convert DAG structure to a simple mathematical expression string following stack-based execution.
-
-    The returned string can subsequently be fed into an LLM.
-    """
-
-    # Random generator used solely for integer formatting. We use a different
-    # seed offset so that changing *integer_no_decimal_probability* does not
-    # interfere with the English-conversion RNG that lives elsewhere.
-    rng_int = random.Random(seed + 12345)
-
-    # RNGs for permutation/simplification decisions – keep them isolated so that
-    # toggling either flag does not affect other stochastic choices.
-    rng_perm = random.Random(seed + 54321)
-    rng_simp = random.Random(seed + 98765)
-
-    # Generate expression using only absolute values with simple unique identifiers.
-    # Separating identifier generation from the raw numeric string avoids leaking
-    # unformatted float representations into the text.
-    abs_values = [abs(v) for v in initial_values]
-    unique_symbols = [f"VAL_{i}" for i in range(len(abs_values))]
-
-    # Create sympy symbols with unique identifiers
-    stack = [sympy.Symbol(symbol) for symbol in unique_symbols]
-
-    op_name_to_symbol = {
-        "add": "+",
-        "subtract": "-",
-        "multiply": "*",
-        "divide": "/",
-        "identity": "identity",
-    }
-    op_symbol_to_expression = {
-        # Use unevaluated SymPy objects for consistent behavior
-        "+": lambda a, b: sympy.Add(a, b, evaluate=False),
-        "-": lambda a, b: sympy.Add(a, -b, evaluate=False),
-        "*": lambda a, b: sympy.Mul(a, b, evaluate=False),
-        "/": lambda a, b: sympy.Mul(
-            a, sympy.Pow(b, -1, evaluate=False), evaluate=False
-        ),
-        "identity": lambda a, b: a,  # Discard b
-    }
-
-    # Process operations from right to left (like a stack)
-    for op in reversed(operations):
-        # Pop operands from both stacks
-        b = stack.pop()
-        a = stack.pop()
-
-        # Create expression
-        op_symbol = op_name_to_symbol[op]
-        expr = op_symbol_to_expression[op_symbol](a, b)
-        stack.append(expr)
-
-    sym_expr = stack[0]
-    did_permute = False
+    # ------------------------------------------------------------------
+    # 5. Optional simplify / expand for prettified expression rendering.
+    #    These *must* happen *after* plan derivation so they don't interfere
+    #    with the binary traversal assumptions above.
+    # ------------------------------------------------------------------
     did_simplify = False
-
-    # ------------------------------------------------------------------ #
-    # Optionally simplify then optionally permute the symbolic tree
-    # ------------------------------------------------------------------ #
-
-    if rng_simp.random() < expression_simplification_probability:
+    did_expand = False
+    if rng.random() < expression_simplification_probability:
         sym_expr = sympy.simplify(sym_expr)
         did_simplify = True
-    if (
-        expression_permutation_probability > 0.0
-        and rng_perm.random() < expression_permutation_probability
-    ):
-        sym_expr = permute_expression(sym_expr, rng_perm)
-        did_permute = True
-    # ------------------------------------------------------------------ #
-    # Stringify and replace placeholders
-    # ------------------------------------------------------------------ #
 
-    import pdb
+    if rng.random() < expression_expansion_probability:
+        sym_expr = sympy.expand(sym_expr)
+        did_expand = True
 
-    pdb.set_trace()
-    expr_str = sympy.pretty(sym_expr, order="none")
-    import pdb
+    return sym_expr, derived_initials, derived_ops, did_simplify, did_expand
 
-    pdb.set_trace()
 
-    # At this point, since we know our expression contains non-negative values, we can collapse + - into -
-    expr_str = expr_str.replace("+ (-", "- (")
-    expr_str = expr_str.replace("+-", "-")
-    expr_str = expr_str.replace("+ -", "-")
+def _expression_to_text(
+    *,
+    expr: sympy.Basic,
+    initial_values: list[float],
+    seed: int,
+    english_conversion_probability: float,
+    integer_no_decimal_probability: float,
+    max_decimal_places: int,
+) -> str:
+    """Convert *expr* into a pretty-printed, optionally English-augmented string."""
+    # sympy.pretty produces multi-line box drawings which are hard to post-process.
+    # sstr yields a compact single-line representation respecting arg order.
+    expr_str = sympy.sstr(expr, order="lex")
 
-    # Replace placeholder symbols with the properly formatted numeric strings while
-    # preserving their original sign.
-    for i, original_value in enumerate(initial_values):
-        placeholder = unique_symbols[i]
+    # Replace placeholders with formatted numbers
+    rng_int = random.Random(seed + 12345)
 
+    for idx, val in enumerate(initial_values):
+        placeholder = f"VAL_{idx}"
         formatted_abs = number_to_string(
-            abs_values[i],
+            abs(val),
             rng=rng_int,
             integer_no_decimal_probability=integer_no_decimal_probability,
         )
-        new_value = formatted_abs if original_value >= 0 else f"-{formatted_abs}"
+        replacement = formatted_abs if val >= 0 else f"-{formatted_abs}"
+        expr_str = expr_str.replace(placeholder, replacement)
 
-        expr_str = expr_str.replace(placeholder, new_value)
-
-    # Remove **all** whitespace to guarantee no stray spaces remain within
-    # numeric literals.  Spaces are unnecessary for SymPy parsing, and their
-    # removal ensures tokens like "860389 .3125" cannot occur.
+    # Collapse spaces that might appear inside numeric literals
     expr_str = re.sub(r"\s+", "", expr_str)
 
-    # Apply final formatting (English conversion / spacing)
-    result = format_expression_string(
+    # Final English / spacing formatting
+    return format_expression_string(
         expr_str,
         english_conversion_probability,
         seed,
         max_decimal_places,
     )
-
-    return result, did_permute, did_simplify
 
 
 def float_to_digit_onehot(
@@ -641,7 +596,7 @@ def plan_to_tensors(
         operations: List of operations
 
     Returns:
-        Tuple of (signs, log_magnitudes, operations_one_hot)
+        Tuple of (signs, digits_tensor, operations_one_hot)
     """
     # Convert initial values to signs and digit one-hots
     signs = torch.tensor([1.0 if v >= 0.0 else -1.0 for v in initial_values])
@@ -671,7 +626,7 @@ def generate_single_dag_example(
     seed: int = 42,
     english_conversion_probability: float = 0.0,
     integer_no_decimal_probability: float = 0.0,
-    expression_permutation_probability: float = 0.0,
+    expression_expansion_probability: float = 0.0,
     expression_simplification_probability: float = 0.0,
     max_digits: int = 4,
     max_decimal_places: int = 6,
@@ -691,59 +646,40 @@ def generate_single_dag_example(
     # fall back to stochastic generation.
     # ------------------------------------------------------------------ #
 
-    if _operations_override is not None or _initial_values_override is not None:
-        # Both overrides must be supplied together to avoid ambiguity.
-        if _operations_override is None or _initial_values_override is None:
-            raise ValueError(
-                "Both _operations_override and _initial_values_override must be provided together."
-            )
-
-        operations = list(_operations_override)
-        initial_values = list(_initial_values_override)
-
-        # Basic sanity checks to avoid silent shape mismatches.
-        if depth != len(operations):
-            raise ValueError("Provided _operations_override length must equal *depth*.")
-        if len(initial_values) != depth + 1:
-            raise ValueError("_initial_values_override must contain depth + 1 values.")
-
-        # Still run through pad_plan so that identity-padding behaviour remains
-        # consistent with regular stochastic generation.
-        initial_values, operations = pad_plan(initial_values, operations)
-
-    else:
-        initial_values, operations = generate_random_dag_plan(
-            depth,
-            num_initial_values,
-            seed,
-            max_digits,
-            max_decimal_places,
+    # Always call _generate_expression_plan with overrides parameters
+    sym_expr, initial_values, operations, did_simplify, did_expand = (
+        _generate_expression(
+            depth=depth,
+            seed=seed,
+            max_digits=max_digits,
+            max_decimal_places=max_decimal_places,
             allowed_operations=allowed_operations,
+            expression_simplification_probability=expression_simplification_probability,
+            expression_expansion_probability=expression_expansion_probability,
+            override_initial_values=(
+                _initial_values_override
+                if _initial_values_override is not None
+                else None
+            ),
+            override_operations=(
+                _operations_override if _operations_override is not None else None
+            ),
         )
+    )
 
-        initial_values, operations = pad_plan(initial_values, operations)
-
-    expression, did_permute, did_simplify = plan_to_string_expression(
+    expression = _expression_to_text(
+        expr=sym_expr,
         initial_values=initial_values,
-        operations=operations,
         seed=seed,
         english_conversion_probability=english_conversion_probability,
         integer_no_decimal_probability=integer_no_decimal_probability,
-        expression_simplification_probability=expression_simplification_probability,
-        expression_permutation_probability=expression_permutation_probability,
         max_decimal_places=max_decimal_places,
     )
-
     signs, digits_tensor, operations_tensor = plan_to_tensors(
         initial_values=initial_values,
         operations=operations,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
-    )
-
-    # Compute log magnitudes (natural log) for legacy compatibility
-    log_magnitudes = torch.tensor(
-        [math.log(abs(v) if v != 0 else 1e-6) for v in initial_values]
     )
 
     return DAGExample(
@@ -752,10 +688,9 @@ def generate_single_dag_example(
         initial_values=initial_values,
         signs=signs,
         digits=digits_tensor,
-        log_magnitudes=log_magnitudes,
         operations=operations_tensor,
         seed=seed,
-        did_permute=did_permute,
+        did_expand=did_expand,
         did_simplify=did_simplify,
     )
 
@@ -775,8 +710,8 @@ class DAGStructureDataset:
         max_seq_length: int = 512,
         english_conversion_probability: float = 0.0,
         integer_no_decimal_probability: float = 0.0,
-        expression_permutation_probability: float = 0.0,
         expression_simplification_probability: float = 0.0,
+        expression_expansion_probability: float = 0.0,
         max_digits: int = 4,
         max_decimal_places: int = 6,
         allowed_operations: list[str] | None = None,
@@ -793,10 +728,10 @@ class DAGStructureDataset:
         self.max_seq_length = max_seq_length
         self.english_conversion_probability = english_conversion_probability
         self.integer_no_decimal_probability = integer_no_decimal_probability
-        self.expression_permutation_probability = expression_permutation_probability
         self.expression_simplification_probability = (
             expression_simplification_probability
         )
+        self.expression_expansion_probability = expression_expansion_probability
         self.max_digits = max_digits
         self.max_decimal_places = max_decimal_places
         # If a subset of operations is provided, validate and store mapping.
@@ -829,7 +764,6 @@ class DAGStructureDataset:
         self,
         depth: int,
         seed: int = 42,
-        return_example: bool = False,
     ) -> Tuple[
         str, Dict[str, torch.Tensor] | Tuple[str, Dict[str, torch.Tensor], "DAGExample"]
     ]:
@@ -850,7 +784,7 @@ class DAGStructureDataset:
             english_conversion_probability=self.english_conversion_probability,
             integer_no_decimal_probability=self.integer_no_decimal_probability,
             expression_simplification_probability=self.expression_simplification_probability,
-            expression_permutation_probability=self.expression_permutation_probability,
+            expression_expansion_probability=self.expression_expansion_probability,
             max_digits=self.max_digits,
             max_decimal_places=self.max_decimal_places,
             allowed_operations=self.allowed_operations,
@@ -863,10 +797,7 @@ class DAGStructureDataset:
         # Create structure tensors
         structure = self._create_structure_tensors(example)
 
-        if return_example:
-            # Return the raw DAGExample as well (for debugging/logging)
-            return text, structure, example
-        return text, structure
+        return text, structure, example
 
     def _create_structure_tensors(self, example: DAGExample) -> Dict[str, torch.Tensor]:
         """Convert DAG example to structure tensors matching DAGPlanPredictor format.
@@ -895,11 +826,16 @@ class DAGStructureDataset:
         initial_sgn[:copy_len] = signs_tensor[:copy_len]
         digits_template[:copy_len] = digits_tensor[:copy_len]
 
-        # Compute log magnitudes (natural log) from the original initial values
+        # Compute log magnitudes (natural log) on-the-fly
         for i in range(copy_len):
-            log_val = example.log_magnitudes[i]
+            v = (
+                abs(example.initial_values[i])
+                if example.initial_values[i] != 0
+                else 1e-6
+            )
+            log_val = math.log(v)
             # Clip to LOG_LIM for safety
-            log_val = max(min(log_val.item(), LOG_LIM), -LOG_LIM)
+            log_val = max(min(log_val, LOG_LIM), -LOG_LIM)
             initial_log[i] = log_val
 
         # Pad or trim the example's operation tensor so that it always has
@@ -954,7 +890,7 @@ class DAGStructureDataset:
 
             # Generate example
             text, structure, example = self.generate_structure_example(
-                depth, seed=seed + i, return_example=True
+                depth, seed=seed + i
             )
             texts.append(text)
             structures.append(structure)
@@ -1037,8 +973,8 @@ def create_dag_structure_dataloaders(
     seed: int = 42,
     english_conversion_probability: float = 0.0,
     integer_no_decimal_probability: float = 0.0,
-    expression_permutation_probability: float = 0.0,
     expression_simplification_probability: float = 0.0,
+    expression_expansion_probability: float = 0.0,
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = 6,  # Auto-derived from max_digits for uniform string distribution
     allowed_operations: list[str] | None = None,
@@ -1066,8 +1002,8 @@ def create_dag_structure_dataloaders(
         seed=seed,
         english_conversion_probability=english_conversion_probability,
         integer_no_decimal_probability=integer_no_decimal_probability,
-        expression_permutation_probability=expression_permutation_probability,
         expression_simplification_probability=expression_simplification_probability,
+        expression_expansion_probability=expression_expansion_probability,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
         allowed_operations=allowed_operations,
@@ -1078,8 +1014,8 @@ def create_dag_structure_dataloaders(
         seed=seed,
         english_conversion_probability=english_conversion_probability,
         integer_no_decimal_probability=integer_no_decimal_probability,
-        expression_permutation_probability=expression_permutation_probability,
         expression_simplification_probability=expression_simplification_probability,
+        expression_expansion_probability=expression_expansion_probability,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
         allowed_operations=allowed_operations,
@@ -1105,11 +1041,6 @@ if __name__ == "__main__":
     print(f"Original plan:")
     print(f"Initial values: {initial_values}")
     print(f"Operations: {operations}")
-
-    padded_values, padded_ops = pad_plan(initial_values, operations)
-    print(f"\nAfter padding:")
-    print(f"Initial values: {padded_values}")
-    print(f"Operations: {padded_ops}")
 
     # Test the structure dataset (used in train_predictor.py)
     print("\nTesting DAGStructureDataset with consistent stack-based processing:")

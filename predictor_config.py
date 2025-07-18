@@ -34,7 +34,7 @@ class DAGTrainConfig(BaseConfig):
     # English conversion
     english_conversion_probability: float = 0.0
     integer_no_decimal_probability: float = 0.0
-    expression_permutation_probability: float = 0.0
+    expression_expansion_probability: float = 0.0
     expression_simplification_probability: float = 0.0
 
     # Batching / sequence

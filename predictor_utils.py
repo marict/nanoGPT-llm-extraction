@@ -347,7 +347,7 @@ def evaluate_dag_model(
                     sample_text = texts[sample_idx]
                     sample_obj = examples[sample_idx]
                     sample_seed = sample_obj.seed
-                    did_permute = sample_obj.did_permute
+                    did_expand = sample_obj.did_expand
                     did_simplify = sample_obj.did_simplify
 
                     # Sign vectors (N,) and digit logits (N,D,10)
@@ -389,7 +389,7 @@ def evaluate_dag_model(
                     print("\n=== Validation Sample ===")
                     print(f"Sample RNG seed: {sample_seed}")
                     print(f"Text: {sample_text}")
-                    print(f"Did permute: {did_permute}")
+                    print(f"Did expand: {did_expand}")
                     print(f"Did simplify: {did_simplify}")
                     # Print number of tokens in the sample text to check context length
                     enc = get_encoding("gpt2")

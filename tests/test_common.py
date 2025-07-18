@@ -294,7 +294,3 @@ def quick_forward_pass_test(model, config, check_gradients=False):
             return logits, loss, grad_found
 
     return logits, loss
-
-
-# Legacy aliases for backwards compatibility
-MockModel = OptimizedMockModel

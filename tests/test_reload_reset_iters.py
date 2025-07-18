@@ -21,9 +21,9 @@ def test_reload_reset_iters(tmp_path, monkeypatch):
     # Monkey-patch the global CHECKPOINT_DIR used by CheckpointManager so it
     # looks inside our temporary folder.
     monkeypatch.setattr(_cm, "CHECKPOINT_DIR", str(ckpt_dir))
-    # Reload the module so that any module-level properties that captured the
-    # old constant (unlikely, but safe) see the new path.
     importlib.reload(_cm)
+    # Patch again *after* reload because the constant is redefined during reload.
+    monkeypatch.setattr(_cm, "CHECKPOINT_DIR", str(ckpt_dir))
 
     cm = _cm.CheckpointManager("regular")
 
