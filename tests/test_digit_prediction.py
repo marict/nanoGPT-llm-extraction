@@ -43,7 +43,7 @@ class TestDigitPrediction(unittest.TestCase):
         input_ids = torch.randint(0, 1000, (B, T))
 
         with torch.no_grad():
-            pred_sgn, digit_probs, pred_ops = model(input_ids)
+            model(input_ids)
 
         # Retrieve digit logits cached by plan_predictor
         digit_logits = model.dag_predictor.last_digit_logits

@@ -462,20 +462,24 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     # Average over sequence dimension
                     pred_sgn_avg = pred_sgn.mean(dim=1)  # (B, num_nodes_pred)
                     if hasattr(raw_model, "dag"):  # GPT backbone with DAG
-                        digit_logits = (
-                            raw_model.dag.plan_predictor.digit_logits
-                            if hasattr(raw_model.dag.plan_predictor, "digit_logits")
+                        last_digit_logits = (
+                            raw_model.dag.plan_predictor.last_digit_logits
+                            if hasattr(
+                                raw_model.dag.plan_predictor, "last_digit_logits"
+                            )
                             else None
                         )
                     else:  # PredictorOnlyModel
-                        digit_logits = (
-                            raw_model.dag_predictor.digit_logits
-                            if hasattr(raw_model.dag_predictor, "digit_logits")
+                        last_digit_logits = (
+                            raw_model.dag_predictor.last_digit_logits
+                            if hasattr(raw_model.dag_predictor, "last_digit_logits")
                             else None
                         )
-                    if digit_logits is None:
-                        raise RuntimeError("digit_logits not set in plan_predictor")
-                    digit_logits_avg = digit_logits.mean(dim=1)  # (B,N,D,10)
+                    if last_digit_logits is None:
+                        raise RuntimeError(
+                            "last_digit_logits not set in plan_predictor"
+                        )
+                    digit_logits_avg = last_digit_logits.mean(dim=1)  # (B,N,D,10)
                     pred_ops_avg = pred_ops.mean(dim=1)  # (B, depth_pred, n_ops)
 
                     # Ensure target and prediction tensors have compatible shapes

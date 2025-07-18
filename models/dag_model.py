@@ -407,6 +407,7 @@ class DAGPlanPredictor(nn.Module):
 
         # Store last predictions for logging
         self.last_operation_probs: torch.Tensor | None = None
+        self.last_digit_logits: torch.Tensor | None = None
 
     def forward(self, original_hidden: torch.Tensor):
         """
@@ -445,7 +446,7 @@ class DAGPlanPredictor(nn.Module):
         )
 
         # Store the last digit logits predicted for logging / compatibility
-        self.last_digit_logits = digit_logits.detach().clone()
+        self.last_digit_logits = digit_logits.clone()
 
         # Compute probabilities and expected digits
         digit_probs = F.softmax(digit_logits, dim=-1).contiguous()

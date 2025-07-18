@@ -257,23 +257,23 @@ def evaluate_dag_model(
                 # ------------------------------------------------------------------
                 if hasattr(model, "dag"):
                     # GPT backbone with DAG augmentation
-                    digit_logits = (
-                        model.dag.plan_predictor.digit_logits
-                        if hasattr(model.dag.plan_predictor, "digit_logits")
+                    last_digit_logits = (
+                        model.dag.plan_predictor.last_digit_logits
+                        if hasattr(model.dag.plan_predictor, "last_digit_logits")
                         else None
                     )
                 else:
                     # Stand-alone predictor model
-                    digit_logits = (
-                        model.dag_predictor.digit_logits
-                        if hasattr(model.dag_predictor, "digit_logits")
+                    last_digit_logits = (
+                        model.dag_predictor.last_digit_logits
+                        if hasattr(model.dag_predictor, "last_digit_logits")
                         else None
                     )
 
-                if digit_logits is None:
-                    raise RuntimeError("digit_logits not found for evaluation")
+                if last_digit_logits is None:
+                    raise RuntimeError("last_digit_logits not found for evaluation")
 
-                digit_logits = digit_logits.mean(dim=1)  # (B,N,D,10)
+                last_digit_logits = last_digit_logits.mean(dim=1)  # (B,N,D,10)
                 pred_ops = pred_ops.mean(dim=1)
 
                 nodes, depth = tgt_sgn.size(1), tgt_ops.size(1)
@@ -285,12 +285,12 @@ def evaluate_dag_model(
 
                 # Sequence dimension for loss function compatibility
                 pred_sgn = pred_sgn.unsqueeze(1)
-                digit_logits = digit_logits.unsqueeze(1)
+                last_digit_logits = last_digit_logits.unsqueeze(1)
                 pred_ops = pred_ops.unsqueeze(1)
 
                 losses = compute_dag_structure_loss(
                     pred_sgn,
-                    digit_logits,
+                    last_digit_logits,
                     pred_ops,
                     tgt_sgn.unsqueeze(1),
                     tgt_digits.unsqueeze(1),
@@ -309,7 +309,7 @@ def evaluate_dag_model(
                 sign_acc = sign_correct.float().mean()
 
                 pred_mag = digits_to_magnitude(
-                    digit_logits.squeeze(1).softmax(dim=-1),
+                    last_digit_logits.squeeze(1).softmax(dim=-1),
                     cfg.max_digits,
                     cfg.max_decimal_places,
                 )
@@ -331,7 +331,7 @@ def evaluate_dag_model(
 
                 # Prediction tensors ---------------------------------------------
                 pred_sign = pred_sgn.squeeze(1).unsqueeze(1)  # (B,1,N)
-                pred_digit_probs = digit_logits.softmax(dim=-1)  # (B,1,N,D,10)
+                pred_digit_probs = last_digit_logits.softmax(dim=-1)  # (B,1,N,D,10)
                 # pred_ops already (B,1,depth,n_ops)
 
                 # Execute stacks
@@ -379,7 +379,7 @@ def evaluate_dag_model(
                     pred_sign_vec = pred_sgn.squeeze(1)[sample_idx]
                     tgt_sign_vec = tgt_sgn[sample_idx]
 
-                    pred_digits_vec = digit_logits.squeeze(1)[sample_idx].softmax(
+                    pred_digits_vec = last_digit_logits.squeeze(1)[sample_idx].softmax(
                         dim=-1
                     )
                     tgt_digits_vec = tgt_digits[sample_idx]
