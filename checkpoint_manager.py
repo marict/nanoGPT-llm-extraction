@@ -58,9 +58,7 @@ class CheckpointManager:
         """Get the current checkpoint directory (allows for dynamic updates)."""
         return Path(CHECKPOINT_DIR)
 
-    def _get_checkpoint_patterns(
-        self, config_name: str, model_name: str = None
-    ) -> List[str]:
+    def _get_checkpoint_patterns(self, config_name: str) -> List[str]:
         """Get checkpoint file patterns based on config name.
 
         Both regular and DAG training use the same checkpoint naming: ckpt_{config_name}_*
@@ -82,7 +80,7 @@ class CheckpointManager:
             return []
 
         if config_name:
-            patterns = self._get_checkpoint_patterns(config_name, model_name)
+            patterns = self._get_checkpoint_patterns(config_name)
         else:
             # List all checkpoints (both regular and DAG use same pattern)
             patterns = ["ckpt_*.pt", "ckpt_*.safetensors"]
@@ -116,7 +114,7 @@ class CheckpointManager:
             return 0
 
     def find_latest_checkpoint(
-        self, config_name: str, model_name: str = None, any_run: bool = False
+        self, config_name: str, any_run: bool = False
     ) -> Path | None:
         """Find the latest checkpoint by iteration number."""
         if not self.checkpoint_dir.exists():
@@ -128,7 +126,7 @@ class CheckpointManager:
             for pattern in patterns:
                 checkpoint_files.extend(self.checkpoint_dir.rglob(pattern))
         else:
-            patterns = self._get_checkpoint_patterns(config_name, model_name)
+            patterns = self._get_checkpoint_patterns(config_name)
             checkpoint_files = []
             for pattern in patterns:
                 checkpoint_files.extend(self.checkpoint_dir.rglob(pattern))
@@ -151,14 +149,12 @@ class CheckpointManager:
         # Fallback: no iteration info, choose by modification time
         return max(checkpoint_files, key=lambda x: x.stat().st_mtime)
 
-    def find_best_checkpoint(
-        self, config_name: str, model_name: str = None
-    ) -> Path | None:
+    def find_best_checkpoint(self, config_name: str) -> Path | None:
         """Find the best checkpoint (saved with 'best' in the name)."""
         if not self.checkpoint_dir.exists():
             return None
 
-        patterns = self._get_checkpoint_patterns(config_name, model_name)
+        patterns = self._get_checkpoint_patterns(config_name)
         best_patterns = []
 
         for pattern in patterns:
@@ -292,19 +288,17 @@ class CheckpointManager:
         elif init_from in ["resume", "latest", "best"]:
             if init_from == "best" or prefer_best:
                 print("Resuming from best checkpoint")
-                ckpt_path = self.find_best_checkpoint(config.name, model_name)
+                ckpt_path = self.find_best_checkpoint(config.name)
                 if ckpt_path is None:
                     print("No best checkpoint found, looking for latest checkpoint")
-                    ckpt_path = self.find_latest_checkpoint(config.name, model_name)
+                    ckpt_path = self.find_latest_checkpoint(config.name)
             else:
                 print("Resuming from latest checkpoint")
-                ckpt_path = self.find_latest_checkpoint(config.name, model_name)
+                ckpt_path = self.find_latest_checkpoint(config.name)
 
             if ckpt_path is None:
                 # List available checkpoints for a helpful error message
-                available_checkpoints = self._list_available_checkpoints(
-                    config.name, model_name
-                )
+                available_checkpoints = self._list_available_checkpoints(config.name)
                 if available_checkpoints:
                     checkpoint_list = "\n".join(
                         f"  - {name}" for name in available_checkpoints[:10]
@@ -394,7 +388,6 @@ class CheckpointManager:
         self,
         config_name: str,
         iter_num: int,
-        model_name: str = None,
         val_acc: float = None,
         is_best: bool = False,
     ) -> str:
@@ -460,14 +453,12 @@ class CheckpointManager:
                     f"Retrying checkpoint save ({attempt+1}/{retries}) due to error: {exc}"
                 )
 
-    def clean_previous_checkpoints(
-        self, config_name: str, model_name: str = None
-    ) -> None:
+    def clean_previous_checkpoints(self, config_name: str) -> None:
         """Remove previous checkpoint files for this config name."""
         if not self.checkpoint_dir.exists():
             return
 
-        patterns = self._get_checkpoint_patterns(config_name, model_name)
+        patterns = self._get_checkpoint_patterns(config_name)
         removed_count = 0
 
         for pattern in patterns:
