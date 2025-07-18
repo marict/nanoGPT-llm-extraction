@@ -5,15 +5,15 @@
 name = "predictor_pretrain"
 
 # Training intervals
-eval_interval = 50
-log_interval = 1
-eval_iters = 10
+eval_interval = 100  # We don't need to do this very often because train is seeing unseen data as well.
+log_interval = 1  # Log every iteration for better monitoring
+eval_iters = 10  # Reduced from 5 - each eval iter is much more informative
 eval_only = False
 always_save_checkpoint = False
 clear_previous_checkpoints = True  # Save space on RunPod
 
 # Model initialization
-init_from = "resume"
+init_from = "/runpod-volume/checkpoints/0p3ba0hopdeuri-nodivideby0indag/ckpt_predictor_pretrain.pt"
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training

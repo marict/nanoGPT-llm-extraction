@@ -136,17 +136,20 @@ class CheckpointManager:
         if not checkpoint_files:
             return None
 
-        # Find checkpoint with highest iteration number
-        latest_file = None
-        latest_iter = -1
+        # Prefer newest modification time instead of relying on encoded iteration.
+        # Determine highest iteration number among checkpoints
+        iters = [self._extract_iteration_number(p) for p in checkpoint_files]
+        max_iter = max(iters)
 
-        for ckpt_file in checkpoint_files:
-            iter_num = self._extract_iteration_number(ckpt_file)
-            if iter_num > latest_iter:
-                latest_iter = iter_num
-                latest_file = ckpt_file
+        if max_iter > 0:
+            # Filter to checkpoints with this iteration and pick most recent mtime among them
+            candidates = [
+                p for p, it_n in zip(checkpoint_files, iters) if it_n == max_iter
+            ]
+            return max(candidates, key=lambda x: x.stat().st_mtime)
 
-        return latest_file
+        # Fallback: no iteration info, choose by modification time
+        return max(checkpoint_files, key=lambda x: x.stat().st_mtime)
 
     def find_best_checkpoint(
         self, config_name: str, model_name: str = None
@@ -616,6 +619,37 @@ class CheckpointManager:
         # from the current cfg.
         saved_cfg = checkpoint.get("model_config") if checkpoint is not None else None
 
+        # ------------------------------------------------------------------ #
+        # If the saved model configuration is incompatible with the current
+        # cfg (e.g. different dag_depth or digit settings that change tensor
+        # shapes), **ignore** the checkpoint and start fresh. This prevents
+        # shape-mismatch errors when resuming after hyper-parameter changes.
+        # ------------------------------------------------------------------ #
+        critical_keys = [
+            "dag_depth",
+            "max_digits",
+            "max_decimal_places",
+            "n_embd",
+            "n_head",
+            "n_layer",
+            "sequence_length",
+            "vocab_size",
+        ]
+        if saved_cfg is not None:
+            incompat = []
+            for k in critical_keys:
+                if k in saved_cfg and hasattr(cfg, k):
+                    if saved_cfg[k] != getattr(cfg, k):
+                        incompat.append((k, saved_cfg[k], getattr(cfg, k)))
+            if incompat:
+                err_lines = [
+                    "Incompatible checkpoint detected – the following critical parameters differ between the saved model and current config:",
+                    *[f"  * {k}: ckpt={old} ≠ cfg={new}" for k, old, new in incompat],
+                    "Aborting resume. Either revert your config changes, specify a compatible checkpoint path, or set init_from='scratch'.",
+                ]
+                raise CheckpointLoadError("\n".join(err_lines))
+        # ------------------------------------------------------------------ #
+
         if use_full_backbone:
             # Prepare configuration for GPT backbone
             model_cfg_dict = {
@@ -677,7 +711,13 @@ class CheckpointManager:
             state_dict = {
                 k.removeprefix("_orig_mod."): v for k, v in checkpoint["model"].items()
             }
-            model.load_state_dict(state_dict)
+            try:
+                model.load_state_dict(state_dict)
+            except RuntimeError as e:
+                raise CheckpointLoadError(
+                    f"Failed to load weights from checkpoint due to shape mismatch: {e}\n"
+                    "Ensure that your configuration matches the checkpoint or start from scratch with init_from='scratch'."
+                )
             print(
                 f"[{time.time() - setup_start_time:.2f}s] ✅ Model loaded from checkpoint"
             )
