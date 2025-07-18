@@ -210,7 +210,7 @@ def evaluate_dag_model(
 
     num_batches = 0
     with torch.no_grad():
-        for i, (texts, structures, seeds) in enumerate(val_loader):
+        for i, (texts, structures, examples) in enumerate(val_loader):
             if i >= eval_iters:
                 break
 
@@ -345,7 +345,10 @@ def evaluate_dag_model(
                     batch_size = tgt_sgn.size(0)
                     sample_idx = _eval_random.randrange(batch_size)
                     sample_text = texts[sample_idx]
-                    sample_seed = seeds[sample_idx]
+                    sample_obj = examples[sample_idx]
+                    sample_seed = sample_obj.seed
+                    did_permute = sample_obj.did_permute
+                    did_simplify = sample_obj.did_simplify
 
                     # Sign vectors (N,) and digit logits (N,D,10)
                     pred_sign_vec = pred_sgn.squeeze(1)[sample_idx]
@@ -386,12 +389,16 @@ def evaluate_dag_model(
                     print("\n=== Validation Sample ===")
                     print(f"Sample RNG seed: {sample_seed}")
                     print(f"Text: {sample_text}")
+                    print(f"Did permute: {did_permute}")
+                    print(f"Did simplify: {did_simplify}")
                     # Print number of tokens in the sample text to check context length
                     enc = get_encoding("gpt2")
                     token_count = len(enc.encode_ordinary(sample_text))
                     print(f"Token count: {token_count}")
-                    print("Target initial values (rounded to 10 dp):")
-                    print([round(v, 10) for v in tgt_real_vals])
+                    # If we have the raw DAGExample, use its original floats for nicer printing
+                    true_vals = sample_obj.initial_values
+                    print("Target initial values:")
+                    print(true_vals)
                     print("Predicted initial values (rounded to 10 dp):")
                     print([round(v, 10) for v in pred_real_vals])
                     print("Operations (ground truth):")

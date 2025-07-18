@@ -24,7 +24,7 @@ class TestNumberFormatting:
         ],
     )
     def test_no_long_repr_and_correct_trimming(self, initial_values, operations):
-        expr = plan_to_string_expression(
+        expr, _, _ = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
             seed=123,

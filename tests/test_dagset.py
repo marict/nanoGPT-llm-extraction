@@ -61,7 +61,7 @@ class TestIdentityFunction(unittest.TestCase):
         ]  # Operations processed right-to-left (stack-based)
 
         # Generate expression
-        expression = plan_to_string_expression(
+        expression, _, _ = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
             english_conversion_probability=0.0,
@@ -94,7 +94,7 @@ class TestIdentityFunction(unittest.TestCase):
         operations = ["identity", "multiply"]
 
         # Generate expression
-        expression = plan_to_string_expression(
+        expression, _, _ = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
             english_conversion_probability=0.0,
@@ -118,7 +118,7 @@ class TestIdentityFunction(unittest.TestCase):
         initial_values = [42, 7, 3]
         operations = ["identity"]
 
-        expression = plan_to_string_expression(
+        expression, _, _ = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
             english_conversion_probability=1.0,  # Force conversion
@@ -194,7 +194,7 @@ class TestIdentityFunction(unittest.TestCase):
         # Generate expression multiple times
         expressions = []
         for _ in range(3):
-            expr = plan_to_string_expression(
+            expr, _, _ = plan_to_string_expression(
                 initial_values=initial_values.copy(),
                 operations=operations.copy(),
                 english_conversion_probability=0.0,
@@ -687,7 +687,7 @@ class TestExpressionMatching(unittest.TestCase):
         operations = ["add", "multiply"]
 
         # Generate expression
-        expression = plan_to_string_expression(
+        expression, _, _ = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
             seed=42,
@@ -731,7 +731,7 @@ class TestExpressionMatching(unittest.TestCase):
                 operations = [rng.choice(OP_NAMES) for _ in range(3)]
 
                 # Generate expression
-                expression = plan_to_string_expression(
+                expression, _, _ = plan_to_string_expression(
                     initial_values=initial_values,
                     operations=operations,
                     seed=seed,
@@ -780,7 +780,7 @@ class TestExpressionMatching(unittest.TestCase):
         operations = ["add", "multiply"]
 
         # Test without English conversion
-        expression_numeric = plan_to_string_expression(
+        expression_numeric, _, _ = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
             seed=42,
@@ -788,7 +788,7 @@ class TestExpressionMatching(unittest.TestCase):
         )
 
         # Test with English conversion
-        expression_english = plan_to_string_expression(
+        expression_english, _, _ = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
             seed=42,
@@ -828,7 +828,7 @@ class TestExpressionMatching(unittest.TestCase):
                 ops = operations[:max_ops] if len(operations) > max_ops else operations
 
                 for seed in [42, 123, 999]:
-                    expression = plan_to_string_expression(
+                    expression, _, _ = plan_to_string_expression(
                         initial_values=initial_values,
                         operations=ops,
                         seed=seed,
@@ -868,7 +868,7 @@ class TestExpressionMatching(unittest.TestCase):
         initial_values = [-4.4262, -6.10979, -10.0]
         operations = ["subtract", "subtract"]  # depth = 2
 
-        text = plan_to_string_expression(
+        text, _, _ = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
             seed=42,
@@ -897,7 +897,7 @@ class TestExpressionMatching(unittest.TestCase):
         operations = ["add"]
 
         # Force English conversion
-        text = plan_to_string_expression(
+        text, _, _ = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
             seed=123,
@@ -958,7 +958,7 @@ class TestExpressionMatching(unittest.TestCase):
                 expected_pattern = test_case["expected_pattern"]
 
                 # Generate expression without English conversion for easier pattern matching
-                expression = plan_to_string_expression(
+                expression, _, _ = plan_to_string_expression(
                     initial_values=initial_values,
                     operations=operations,
                     seed=42,
@@ -1046,7 +1046,7 @@ class TestExpressionMatching(unittest.TestCase):
                 expected_words = test_case["expected_words"]
 
                 # Generate expression with full English conversion
-                expression = plan_to_string_expression(
+                expression, _, _ = plan_to_string_expression(
                     initial_values=initial_values,
                     operations=operations,
                     seed=42,
@@ -1098,7 +1098,7 @@ class TestNumberConversionFix(unittest.TestCase):
         operations = ["subtract", "subtract", "identity", "identity"]
 
         # Force conversion to English
-        expression = plan_to_string_expression(
+        expression, _, _ = plan_to_string_expression(
             initial_values=initial_values,
             operations=operations,
             english_conversion_probability=1.0,

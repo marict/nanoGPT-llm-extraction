@@ -19,7 +19,7 @@ def test_simplification_matches_sympy(seed):
     )
 
     # Original unsimplified expression
-    expr_raw = plan_to_string_expression(
+    expr_raw, _, _ = plan_to_string_expression(
         init_vals,
         ops,
         seed=seed,
@@ -30,7 +30,7 @@ def test_simplification_matches_sympy(seed):
     )
 
     # Our implementation's simplified form
-    expr_simplified = plan_to_string_expression(
+    expr_simplified, _, _ = plan_to_string_expression(
         init_vals,
         ops,
         seed=seed,

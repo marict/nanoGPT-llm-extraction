@@ -46,11 +46,11 @@ def example_structures():
     }
 
     texts = [example.text]
-    seeds = [example.seed]
-    return texts, structures, seeds
+    examples = [example]
+    return texts, structures, examples
 
 
-def _run_eval(texts, structures, seeds, predictor):
+def _run_eval(texts, structures, examples, predictor):
     # Minimal config to satisfy evaluate_dag_model
     cfg = DAGTrainConfig()
     cfg.full_backbone = False
@@ -63,7 +63,7 @@ def _run_eval(texts, structures, seeds, predictor):
     ctx = nullcontext()
 
     # Single-batch val_loader
-    val_loader = iter([(texts, structures, seeds)])
+    val_loader = iter([(texts, structures, examples)])
 
     metrics = evaluate_dag_model(
         predictor, val_loader, device, ctx, cfg, eval_iters=1, seed=42
@@ -72,7 +72,7 @@ def _run_eval(texts, structures, seeds, predictor):
 
 
 def test_final_mse_perfect_predictions(example_structures):
-    texts, structures, seeds = example_structures
+    texts, structures, examples = example_structures
 
     # Prepare perfect predictions (copy targets)
     tgt_sgn = structures["initial_sgn"].unsqueeze(1)  # (B,1,N)
@@ -83,13 +83,13 @@ def test_final_mse_perfect_predictions(example_structures):
     tgt_digits_logits = tgt_digits.clone() * 50.0
     model = DummyPredictor(tgt_sgn.clone(), tgt_digits_logits.clone(), tgt_ops.clone())
 
-    metrics = _run_eval(texts, structures, seeds, model)
+    metrics = _run_eval(texts, structures, examples, model)
 
     assert metrics["final_mse"] < 1e-3  # Should be nearly zero for perfect predictions
 
 
 def test_final_mse_incorrect_predictions(example_structures):
-    texts, structures, seeds = example_structures
+    texts, structures, examples = example_structures
 
     # Prepare incorrect predictions by flipping the sign of first initial value
     tgt_sgn = structures["initial_sgn"].clone()
@@ -103,7 +103,7 @@ def test_final_mse_incorrect_predictions(example_structures):
 
     model = DummyPredictor(pred_sgn, pred_digits_logits, pred_ops)
 
-    metrics = _run_eval(texts, structures, seeds, model)
+    metrics = _run_eval(texts, structures, examples, model)
 
     # MSE should be strictly positive due to incorrect sign
     assert metrics["final_mse"] > 0.0

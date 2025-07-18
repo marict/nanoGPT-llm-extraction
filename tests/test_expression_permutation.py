@@ -36,7 +36,7 @@ def test_permutation_after_simplification(seed_start):
             allowed_operations=["add"],
         )
 
-        expr_base = plan_to_string_expression(
+        expr_base, _, _ = plan_to_string_expression(
             init_vals,
             ops,
             seed=seed,
@@ -49,7 +49,7 @@ def test_permutation_after_simplification(seed_start):
         if not is_flat_add_or_mul(expr_base):
             continue  # cannot permute safely, skip
 
-        expr_perm = plan_to_string_expression(
+        expr_perm, _, _ = plan_to_string_expression(
             init_vals,
             ops,
             seed=seed,

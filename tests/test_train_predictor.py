@@ -605,9 +605,7 @@ class TestUtilityFunctions(unittest.TestCase):
         """Test checkpoint filename generation."""
         checkpoint_manager = CheckpointManager("dag")
 
-        filename = checkpoint_manager.generate_checkpoint_filename(
-            "test_run", 1000, "TestModel"
-        )
+        filename = checkpoint_manager.generate_checkpoint_filename("test_run", 1000)
         self.assertEqual(filename, "ckpt_test_run_1000.pt")
 
     def test_all_tensors(self):
@@ -1010,7 +1008,7 @@ class TestCheckpointManagement(unittest.TestCase):
         ).touch()  # Different run name, shouldn't be removed
 
         with patch("checkpoint_manager.CHECKPOINT_DIR", self.temp_dir):
-            checkpoint_manager.clean_previous_checkpoints(cfg.name, model_name)
+            checkpoint_manager.clean_previous_checkpoints(cfg.name)
 
         # Check that only the matching checkpoints were removed
         self.assertFalse((checkpoint_dir / f"ckpt_{cfg.name}_100.pt").exists())
@@ -1033,7 +1031,7 @@ class TestCheckpointManagement(unittest.TestCase):
         (checkpoint_dir / f"ckpt_{cfg.name}_300.pt").touch()
 
         with patch("checkpoint_manager.CHECKPOINT_DIR", self.temp_dir):
-            latest = checkpoint_manager.find_latest_checkpoint(cfg.name, model_name)
+            latest = checkpoint_manager.find_latest_checkpoint(cfg.name)
 
         self.assertIsNotNone(latest)
         self.assertEqual(latest.name, f"ckpt_{cfg.name}_500.pt")
@@ -1057,9 +1055,7 @@ class TestCheckpointManagement(unittest.TestCase):
 
         # Test that we can find the best checkpoint
         with patch("checkpoint_manager.CHECKPOINT_DIR", str(self.checkpoint_dir)):
-            best_checkpoint = checkpoint_manager.find_best_checkpoint(
-                cfg.name, model_name
-            )
+            best_checkpoint = checkpoint_manager.find_best_checkpoint(cfg.name)
             self.assertIsNotNone(best_checkpoint)
             self.assertEqual(best_checkpoint.name, best_ckpt_filename)
 

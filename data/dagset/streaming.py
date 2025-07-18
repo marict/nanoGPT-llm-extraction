@@ -278,6 +278,8 @@ class DAGExample:
     log_magnitudes: torch.Tensor  # (D+1) natural-log magnitudes (for legacy tests)
     operations: torch.Tensor  # (D, num_ops)
     seed: int
+    did_permute: bool
+    did_simplify: bool
 
 
 def generate_uniform_digit_number(
@@ -513,6 +515,8 @@ def plan_to_string_expression(
         stack.append(expr)
 
     sym_expr = stack[0]
+    did_permute = False
+    did_simplify = False
 
     # ------------------------------------------------------------------ #
     # Optionally simplify then optionally permute the symbolic tree
@@ -520,13 +524,13 @@ def plan_to_string_expression(
 
     if rng_simp.random() < expression_simplification_probability:
         sym_expr = sympy.simplify(sym_expr)
-
+        did_simplify = True
     if (
         expression_permutation_probability > 0.0
         and rng_perm.random() < expression_permutation_probability
     ):
         sym_expr = permute_expression(sym_expr, rng_perm)
-
+        did_permute = True
     # ------------------------------------------------------------------ #
     # Stringify and replace placeholders
     # ------------------------------------------------------------------ #
@@ -565,7 +569,7 @@ def plan_to_string_expression(
         max_decimal_places,
     )
 
-    return result
+    return result, did_permute, did_simplify
 
 
 def float_to_digit_onehot(
@@ -684,7 +688,7 @@ def generate_single_dag_example(
 
     initial_values, operations = pad_plan(initial_values, operations)
 
-    expression = plan_to_string_expression(
+    expression, did_permute, did_simplify = plan_to_string_expression(
         initial_values=initial_values,
         operations=operations,
         seed=seed,
@@ -716,6 +720,8 @@ def generate_single_dag_example(
         log_magnitudes=log_magnitudes,
         operations=operations_tensor,
         seed=seed,
+        did_permute=did_permute,
+        did_simplify=did_simplify,
     )
 
 
@@ -785,8 +791,13 @@ class DAGStructureDataset:
         self.op_idx_to_name = {i: name for i, name in enumerate(OP_NAMES)}
 
     def generate_structure_example(
-        self, depth: int, seed: int = 42
-    ) -> Tuple[str, Dict[str, torch.Tensor]]:
+        self,
+        depth: int,
+        seed: int = 42,
+        return_example: bool = False,
+    ) -> Tuple[
+        str, Dict[str, torch.Tensor] | Tuple[str, Dict[str, torch.Tensor], "DAGExample"]
+    ]:
         """Generate a single (text, structure) pair.
 
         Args:
@@ -817,6 +828,9 @@ class DAGStructureDataset:
         # Create structure tensors
         structure = self._create_structure_tensors(example)
 
+        if return_example:
+            # Return the raw DAGExample as well (for debugging/logging)
+            return text, structure, example
         return text, structure
 
     def _create_structure_tensors(self, example: DAGExample) -> Dict[str, torch.Tensor]:
@@ -885,7 +899,7 @@ class DAGStructureDataset:
 
     def generate_batch(
         self, batch_size: int, seed: int = 42
-    ) -> Tuple[List[str], Dict[str, torch.Tensor]]:
+    ) -> Tuple[List[str], Dict[str, torch.Tensor], List["DAGExample"]]:
         """Generate a batch of structure examples.
 
         Args:
@@ -894,9 +908,9 @@ class DAGStructureDataset:
         Returns:
             Tuple of (text_list, batched_structure_tensors)
         """
-        texts = []
-        structures = []
-        seeds = []
+        texts: list[str] = []
+        structures: list[Dict[str, torch.Tensor]] = []
+        examples: list[DAGExample] = []
 
         for i in range(batch_size):
             # Use fixed depth - all examples in dataset should have the same depth
@@ -904,15 +918,17 @@ class DAGStructureDataset:
             depth = self.max_depth
 
             # Generate example
-            text, structure = self.generate_structure_example(depth, seed=seed + i)
-            seeds.append(seed + i)
+            text, structure, example = self.generate_structure_example(
+                depth, seed=seed + i, return_example=True
+            )
             texts.append(text)
             structures.append(structure)
+            examples.append(example)
 
         # Batch the structure tensors
         batched_structure = self._batch_structures(structures)
 
-        return texts, batched_structure, seeds
+        return texts, batched_structure, examples
 
     def _batch_structures(
         self, structures: List[Dict[str, torch.Tensor]]
@@ -963,7 +979,7 @@ class DAGStructureDataset:
 
     def create_dataloader(
         self, batch_size: int = 32, seed: int = 42
-    ) -> Iterator[Tuple[List[str], Dict[str, torch.Tensor]]]:
+    ) -> Iterator[Tuple[List[str], Dict[str, torch.Tensor], List["DAGExample"]]]:
         """Create an infinite dataloader for structure examples.
 
         Args:
@@ -974,9 +990,9 @@ class DAGStructureDataset:
         """
         i = 0
         while True:
-            texts, structures, seeds = self.generate_batch(batch_size, seed=seed + i)
+            texts, structures, examples = self.generate_batch(batch_size, seed=seed + i)
             i += 1
-            yield texts, structures, seeds
+            yield texts, structures, examples
 
 
 def create_dag_structure_dataloaders(

@@ -388,7 +388,7 @@ class CheckpointManager:
         self,
         config_name: str,
         iter_num: int,
-        val_acc: float = None,
+        val_acc: float | None = None,
         is_best: bool = False,
     ) -> str:
         """Generate checkpoint filename based on parameters."""

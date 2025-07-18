@@ -128,7 +128,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         and cfg.clear_previous_checkpoints
         and not getattr(cfg, "overwrite_previous", False)
     ):
-        checkpoint_manager.clean_previous_checkpoints(cfg.name, model_name)
+        checkpoint_manager.clean_previous_checkpoints(cfg.name)
 
     # W&B initialization
     if master_process:
@@ -393,7 +393,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                             rel_name = checkpoint_manager.generate_checkpoint_filename(
                                 cfg.name,
                                 iter_num,
-                                raw_model.__class__.__name__,
                                 val_acc=val_acc,
                                 is_best=True,
                             )
@@ -415,7 +414,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                             rel_name = checkpoint_manager.generate_checkpoint_filename(
                                 cfg.name,
                                 iter_num,
-                                raw_model.__class__.__name__,
                                 val_acc=val_acc,
                             )
                             checkpoint_filename = f"{safe_run_name}/{rel_name}"

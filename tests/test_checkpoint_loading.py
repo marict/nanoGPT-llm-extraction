@@ -370,11 +370,10 @@ class TestCheckpointLoading:
         cfg = DAGTrainConfig()
         cfg.name = "dag_test"
         iter_num = 1000
-        model_name = "PredictorOnlyModel"
 
         # Test without validation accuracy
         filename_no_acc = checkpoint_manager.generate_checkpoint_filename(
-            cfg.name, iter_num, model_name
+            cfg.name, iter_num
         )
         expected_no_acc = "ckpt_dag_test_1000.pt"
         assert filename_no_acc == expected_no_acc
@@ -382,7 +381,7 @@ class TestCheckpointLoading:
         # Test with validation accuracy (op_accuracy)
         val_acc = 0.7823  # 78.23%
         filename_with_acc = checkpoint_manager.generate_checkpoint_filename(
-            cfg.name, iter_num, model_name, val_acc=val_acc
+            cfg.name, iter_num, val_acc=val_acc
         )
         expected_with_acc = "ckpt_dag_test_1000_78.23acc.pt"
         assert filename_with_acc == expected_with_acc
