@@ -8,16 +8,13 @@ from data.dagset.streaming import (DAGStructureDataset, _apply_sympy_op,
                                    convert_number_to_english,
                                    format_expression_string,
                                    generate_single_dag_example,
-                                   number_to_string,
-                                   permute_additive_flat_expression,
-                                   permute_expression, plan_to_tensors)
+                                   number_to_string, plan_to_tensors)
 from models.dag_model import OP_NAMES
+
 
 # -----------------------------------------------------------------------------
 # Simple number/formatting helpers
 # -----------------------------------------------------------------------------
-
-
 def test_convert_number_to_english_basic_cases():
     cases = [
         (0, "zero"),
@@ -43,8 +40,6 @@ def test_number_to_string_integer_handling():
 # -----------------------------------------------------------------------------
 # Expression formatting & permutation helpers
 # -----------------------------------------------------------------------------
-
-
 def test_format_expression_string_conversion_and_identity():
     expr = "2+2"
     # No conversion → expression should simply gain spaces
@@ -58,37 +53,9 @@ def test_format_expression_string_conversion_and_identity():
     assert any(op in conv for op in ["plus", "added to"])
 
 
-def test_permute_expression_commutativity():
-    # Build a commutative expression with explicit ordering preserved
-    base_expr = sympy.Add(1, 2, 3, evaluate=False)
-    rng = random.Random(123)
-    permuted = permute_expression(base_expr, rng)
-
-    # Value should be the same after permutation
-    assert sympy.simplify(permuted) == 6
-    # Both expressions should contain the same operands
-    assert set(permuted.args) == {1, 2, 3}
-
-
-def test_permute_additive_flat_expression_valid_and_invalid():
-    rng = random.Random(0)
-    input_expr = "1 + 2 + 3"
-    output_expr = permute_additive_flat_expression(input_expr, rng)
-
-    # Output tokens must be a permutation of the input tokens
-    tokens_out = [t.strip() for t in output_expr.split("+")]
-    assert set(tokens_out) == {"1", "2", "3"}
-
-    # Invalid expression (contains '-') should raise
-    with pytest.raises(ValueError):
-        permute_additive_flat_expression("1 + 2 - 3", rng)
-
-
 # -----------------------------------------------------------------------------
 # SymPy operation helper
 # -----------------------------------------------------------------------------
-
-
 def test_apply_sympy_op_correctness():
     a, b = sympy.Integer(3), sympy.Integer(2)
     expected_values = {
@@ -138,6 +105,19 @@ def test_plan_to_tensors_shapes():
     # Operation one-hot should have exactly one "1" at the correct index
     assert ops_onehot.sum() == 1
     assert ops_onehot[0, OP_NAMES.index("add")].item() == 1
+
+
+def test_generate_single_dag_example_seed_50():
+    example = generate_single_dag_example(
+        depth=4,
+        seed=50,
+        max_digits=4,
+        max_decimal_places=6,
+        expression_simplification_probability=1,
+    )
+    import pdb
+
+    pdb.set_trace()
 
 
 def test_generate_single_dag_example_basic_properties():

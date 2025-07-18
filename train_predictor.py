@@ -274,7 +274,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     # Restrict dataset to the subset of ops requested by the config (defaults to all ops)
     allowed_operations = getattr(cfg, "op_names", OP_NAMES)
 
-    train_loader, val_loader = create_dag_structure_dataloaders(
+    train_loader, _ = create_dag_structure_dataloaders(
         train_batch_size=cfg.batch_size,
         val_batch_size=cfg.batch_size,
         max_depth=cfg.dag_depth,
@@ -282,6 +282,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         english_conversion_probability=cfg.english_conversion_probability,
         integer_no_decimal_probability=cfg.integer_no_decimal_probability,
         expression_simplification_probability=cfg.expression_simplification_probability,
+        expression_expansion_probability=cfg.expression_expansion_probability,
         max_digits=cfg.max_digits,
         max_decimal_places=cfg.max_decimal_places,
         allowed_operations=allowed_operations,
@@ -326,6 +327,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     english_conversion_probability=cfg.english_conversion_probability,
                     integer_no_decimal_probability=cfg.integer_no_decimal_probability,
                     expression_simplification_probability=cfg.expression_simplification_probability,
+                    expression_expansion_probability=cfg.expression_expansion_probability,
                     max_digits=cfg.max_digits,
                     max_decimal_places=cfg.max_decimal_places,
                     allowed_operations=allowed_operations,

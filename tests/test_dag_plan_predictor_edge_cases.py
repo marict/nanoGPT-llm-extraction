@@ -46,15 +46,14 @@ def test_causal_mask_invariance():
     hidden_modified[..., -1, :] += torch.randn_like(hidden_modified[..., -1, :]) * 10.0
 
     with torch.no_grad():
-        sgn_ref, log_ref, ops_ref = predictor(hidden_base)
-        sgn_mod, log_mod, ops_mod = predictor(hidden_modified)
+        sign_ref, digits_ref, ops_ref = predictor(hidden_base)
+        sign_mod, digits_mod, ops_mod = predictor(hidden_modified)
 
-    # Compare outputs for positions 0..T-2 (everything but the last token)
     assert torch.allclose(
-        sgn_ref[..., :-1, :], sgn_mod[..., :-1, :], atol=1e-5, rtol=1e-5
+        sign_ref[..., :-1, :], sign_mod[..., :-1, :], atol=1e-5, rtol=1e-5
     )
     assert torch.allclose(
-        log_ref[..., :-1, :], log_mod[..., :-1, :], atol=1e-5, rtol=1e-5
+        digits_ref[..., :-1, :, :], digits_mod[..., :-1, :, :], atol=1e-5, rtol=1e-5
     )
     assert torch.allclose(
         ops_ref[..., :-1, :, :], ops_mod[..., :-1, :, :], atol=1e-5, rtol=1e-5

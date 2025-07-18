@@ -303,27 +303,34 @@ def evaluate_dag_model(
                 # ------------------------------------------------------------------ #
                 # Execute full DAGs to obtain scalar answers and compute MSE          #
                 # ------------------------------------------------------------------ #
-                # Retrieve ground-truth initial log magnitudes (base-10) consistently
-                tgt_log = torch.log(tgt_mag + 1e-8) / math.log(10.0)
 
-                # Predicted log magnitudes derived from digit logits (already have pred_mag)
-                pred_log = torch.log(pred_mag.clamp_min(1e-8)) / math.log(10.0)  # (B,N)
+                # Target tensors --------------------------------------------------
+                tgt_sign = tgt_sgn.unsqueeze(1)  # (B,1,N)
+                tgt_digit_probs = tgt_digits.unsqueeze(1)  # (B,1,N,D,10)
+                tgt_ops_seq = tgt_ops.unsqueeze(1)  # (B,1,depth,n_ops)
 
-                # Add sequence length dimension expected by execute_stack (T=1)
-                tgt_sgn_seq = tgt_sgn.unsqueeze(1)
-                tgt_log_seq = tgt_log.unsqueeze(1)
-                tgt_ops_seq = tgt_ops.unsqueeze(1)
-
-                pred_sgn_seq = pred_sgn  # already (B,1,N)
-                pred_log_seq = pred_log.unsqueeze(1)
-                # pred_ops currently (B,1,depth,n_ops)
+                # Prediction tensors ---------------------------------------------
+                pred_sign = pred_sgn.squeeze(1).unsqueeze(1)  # (B,1,N)
+                pred_digit_probs = digit_logits.softmax(dim=-1).unsqueeze(
+                    1
+                )  # (B,1,N,D,10)
+                # pred_ops already (B,1,depth,n_ops)
 
                 # Execute stacks
                 tgt_final_sgn, tgt_final_log = execute_stack(
-                    tgt_sgn_seq, tgt_log_seq, tgt_ops_seq
+                    tgt_sign,
+                    tgt_digit_probs,
+                    tgt_ops_seq,
+                    max_digits=cfg.max_digits,
+                    max_decimal_places=cfg.max_decimal_places,
                 )
+
                 pred_final_sgn, pred_final_log = execute_stack(
-                    pred_sgn_seq, pred_log_seq, pred_ops
+                    pred_sign,
+                    pred_digit_probs,
+                    pred_ops,
+                    max_digits=cfg.max_digits,
+                    max_decimal_places=cfg.max_decimal_places,
                 )
 
                 # Convert to real numbers

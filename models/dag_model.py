@@ -420,7 +420,7 @@ class DAGPlanPredictor(nn.Module):
 
     def forward(self, original_hidden: torch.Tensor):
         """
-        Predict both initial values and operation choices for stack-based execution.
+        ƒ both initial values and operation choices for stack-based execution.
 
         Args:
             original_hidden: (B, T, H) - original hidden states
@@ -507,9 +507,8 @@ class DAGPlanPredictor(nn.Module):
         value_abs = (expected_digits * weights).sum(-1)  # (B,T,N)
         value_abs = value_abs.clamp_min(1e-6)
 
-        # Convert sign
+        # Convert sign tensor in [-1,1]
         initial_sgn = torch.tanh(sign_logits)
-        initial_log = torch.log(value_abs) / math.log(10.0)
 
         # Process operation logits
         operation_logits = operation_logits_raw.view(B, T, self.dag_depth, self.n_ops)
@@ -549,14 +548,12 @@ class DAGPlanPredictor(nn.Module):
         # Retain grad for logging.
         if initial_sgn.requires_grad and initial_sgn.grad_fn is not None:
             initial_sgn.retain_grad()
-        if initial_log.requires_grad and initial_log.grad_fn is not None:
-            initial_log.retain_grad()
         if operation_probs.requires_grad and operation_probs.grad_fn is not None:
             operation_probs.retain_grad()
 
         # Cache for logging
         self.last_operation_probs = operation_probs
-        return initial_sgn, initial_log, operation_probs
+        return initial_sgn, digit_probs, operation_probs
 
 
 def apply_op(
@@ -590,87 +587,102 @@ def apply_op(
 
 
 def execute_stack(
-    initial_values_sgn: torch.Tensor,
-    initial_values_log: torch.Tensor,
-    ops: torch.Tensor,
+    initial_sgn: torch.Tensor,  # (B,T,N) values in [-1,1] (tanh output)
+    digit_probs: torch.Tensor,  # (B,T,N,D,10) – probabilities (softmaxed)
+    ops: torch.Tensor,  # (B,T,depth,n_ops) operation probabilities per step
+    *,
+    max_digits: int,
+    max_decimal_places: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Execute stack-based DAG computation using pre-allocated buffers.
+    """Execute a differentiable stack-based DAG computation.
 
-    This avoids tensor concatenations at each step, improving memory efficiency.
-    Uses careful indexing to preserve autograd compatibility.
+    This function expects the **raw** predictor outputs: continuous sign values
+    in [-1,1] (after `tanh`) and digit probability tensors.
 
     Args:
-        initial_values_sgn: (B, T, num_initial) - initial stack signs
-        initial_values_log: (B, T, num_initial) - initial stack log magnitudes
-        ops: (B, T, depth, n_ops) - operation probabilities for each step (processed right-to-left)
+        initial_sgn:  (B,T,N) continuous sign values (range [-1,1])
+        digit_probs: (B,T,N,D,10) probabilities over each digit slot
+        ops:         (B,T,depth,n_ops) operation probabilities per step
+        max_digits:  number of integer digit slots (D_int)
+        max_decimal_places: number of fractional digit slots (D_frac)
 
     Returns:
-        final_sgn: (B, T) - final sign
-        final_log: (B, T) - final log magnitude
+        final_sgn, final_log: (B,T) tensors representing the output scalar in
+        signed–log₁₀ space.
     """
-    B, T, num_initial = initial_values_sgn.shape
+
+    # *initial_sgn* already provided in [-1,1]
+
+    # Expected digit value per slot to build absolute magnitude
+    digits_values = torch.arange(10, device=digit_probs.device, dtype=digit_probs.dtype)
+    expected_digits = (digit_probs * digits_values).sum(-1)  # (B,T,N,D)
+
+    # Positional weights: 10^{k}
+    int_weights = (
+        10 ** torch.arange(max_digits - 1, -1, -1, device=digit_probs.device)
+    ).to(digit_probs.dtype)
+    frac_weights = (
+        10 ** torch.arange(-1, -max_decimal_places - 1, -1, device=digit_probs.device)
+    ).to(digit_probs.dtype)
+    weights = torch.cat((int_weights, frac_weights))  # (D,)
+
+    value_abs = (expected_digits * weights).sum(-1).clamp_min(1e-6)  # (B,T,N)
+    initial_log = torch.log(value_abs) / math.log(10.0)
+
+    # ------------------------------------------------------------------
+    # Numerical stack execution (formerly _execute_stack_core)
+    # ------------------------------------------------------------------
+
+    B, T, num_initial = initial_sgn.shape
     depth = ops.shape[2]
 
-    # Pre-allocate buffers for the entire computation
-    # We need at most num_initial slots (starts with num_initial, reduces by 1 each step)
+    # Pre-allocate buffers
     buffer_sgn = torch.zeros(
         B,
         T,
         num_initial,
-        device=initial_values_sgn.device,
-        dtype=initial_values_sgn.dtype,
+        device=initial_sgn.device,
+        dtype=initial_sgn.dtype,
     )
     buffer_log = torch.zeros(
         B,
         T,
         num_initial,
-        device=initial_values_log.device,
-        dtype=initial_values_log.dtype,
+        device=initial_log.device,
+        dtype=initial_log.dtype,
     )
 
-    # Initialize buffers with initial values
-    buffer_sgn = buffer_sgn + initial_values_sgn  # Use addition to preserve gradients
-    buffer_log = buffer_log + initial_values_log
+    buffer_sgn = buffer_sgn + initial_sgn
+    buffer_log = buffer_log + initial_log
 
     current_size = num_initial
 
     for step in range(depth):
-        # Runtime check: ensure we have at least 2 elements to operate on
         if current_size < 2:
             raise RuntimeError(
                 f"Stack underflow at step {step}: only {current_size} elements remaining, need at least 2"
             )
 
-        # Extract top two elements (last two in current active region)
-        top_sgn = buffer_sgn[..., current_size - 1]  # (B, T)
-        second_sgn = buffer_sgn[..., current_size - 2]  # (B, T)
-        top_log = buffer_log[..., current_size - 1]  # (B, T)
-        second_log = buffer_log[..., current_size - 2]  # (B, T)
+        top_sgn = buffer_sgn[..., current_size - 1]
+        second_sgn = buffer_sgn[..., current_size - 2]
+        top_log = buffer_log[..., current_size - 1]
+        second_log = buffer_log[..., current_size - 2]
 
-        # Apply operation (process operations right-to-left like a stack)
         result_sgn, result_log = apply_op(
-            second_sgn, second_log, top_sgn, top_log, ops[:, :, depth - 1 - step]
+            second_sgn,
+            second_log,
+            top_sgn,
+            top_log,
+            ops[:, :, depth - 1 - step],
         )
 
-        # Apply RMS rescaling to keep magnitudes bounded
-        if current_size > 1:
-            prev_logs_slice = buffer_log[
-                ..., : current_size - 1
-            ]  # (B, T, current_size-1)
-
-        # Update buffer: replace second-to-last element with result
         second_idx = current_size - 2
         idx = torch.tensor([second_idx], device=buffer_sgn.device)
-
-        # Dtype-safe indexed update (no full clone)
         buffer_sgn = index_copy_like(buffer_sgn, -1, idx, result_sgn)
         buffer_log = index_copy_like(buffer_log, -1, idx, result_log)
 
-        # Reduce active size
         current_size -= 1
 
-    # Return final result (should be at position 0)
     return buffer_sgn[..., 0], buffer_log[..., 0]
 
 
@@ -738,13 +750,18 @@ class DifferentiableDAG(nn.Module):
         self.final_values = None
 
         # Generate unified plan (initial values + operations)
-        initial_sgn, initial_log, operation_probs = self.plan_predictor(original_hidden)
+        initial_sgn, digit_probs, operation_probs = self.plan_predictor(original_hidden)
 
         if ENABLE_DEBUG_NAN_CHECKS:
-            _debug_check("initial_values", initial_sgn, initial_log)
+            _debug_check("initial_values_sgn", initial_sgn)
 
-        # Execute stack-based computation
-        final_sgn, final_log = execute_stack(initial_sgn, initial_log, operation_probs)
+        final_sgn, final_log = execute_stack(
+            initial_sgn,
+            digit_probs,
+            operation_probs,
+            max_digits=self.plan_predictor.max_digits,
+            max_decimal_places=self.plan_predictor.max_decimal_places,
+        )
 
         if ENABLE_DEBUG_NAN_CHECKS:
             _debug_check("final_values", final_sgn, final_log)
@@ -758,6 +775,30 @@ class DifferentiableDAG(nn.Module):
 
         # Cache for logging
         self.final_hidden = final_hidden
+        # Convert digit_probs to magnitudes for logging purposes
+        digits_vals = (
+            digit_probs
+            * torch.arange(10, device=digit_probs.device, dtype=digit_probs.dtype)
+        ).sum(-1)
+        int_weights = (
+            10
+            ** torch.arange(
+                self.plan_predictor.max_digits - 1, -1, -1, device=digit_probs.device
+            )
+        ).to(digit_probs.dtype)
+        frac_weights = (
+            10
+            ** torch.arange(
+                -1,
+                -self.plan_predictor.max_decimal_places - 1,
+                -1,
+                device=digit_probs.device,
+            )
+        ).to(digit_probs.dtype)
+        weights = torch.cat((int_weights, frac_weights))
+        value_abs = (digits_vals * weights).sum(-1)
+        initial_log = torch.log(value_abs.clamp_min(1e-6)) / math.log(10.0)
+
         self.final_values = (
             (initial_sgn * 10**initial_log).permute(0, 2, 1).contiguous()
         )
