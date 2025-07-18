@@ -182,7 +182,7 @@ def format_expression_string(
         elif token in ["(", ")"]:
             # Keep parentheses as symbols - don't convert to English
             converted_tokens.append(token)
-        elif re.match(r"-?\d+\.?\d*", token):
+        elif re.match(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", token):
             # Randomly convert number to words based on probability
             # Handle both positive and negative numbers, int and float types
             try:
@@ -207,28 +207,63 @@ def format_expression_string(
 
 
 # --------------------------------------------------------------------------- #
-# Expression transformation helpers
+# Recursive permutation helper
 # --------------------------------------------------------------------------- #
 
 
-def permute_top_level_operands(expr: sympy.Basic, rng: random.Random) -> sympy.Basic:
-    """Shuffle the immediate operands of a commutative Add/Mul expression.
+def permute_expression(expr: sympy.Basic, rng: random.Random) -> sympy.Basic:
+    """Recursively shuffle operands of every commutative Add/Mul node.
 
-    The permutation is non-recursive and therefore safe for maintaining overall
-    expression semantics while providing surface-level variability.
+    * Every subtree is visited depth-first; children are permuted **after** they
+      themselves have been processed, guaranteeing maximal variability.
+    * Only nodes with two or more operands are shuffled.
+    * Non-commutative operations (Sub, Div, Pow, etc.) are left untouched.
     """
 
+    # Leaf node – nothing to permute
     if not isinstance(expr, (sympy.Add, sympy.Mul)):
         return expr
 
-    operands = list(expr.args)
-    rng.shuffle(operands)
+    # Recurse into children first
+    permuted_children = [permute_expression(arg, rng) for arg in expr.args]
+
+    # Shuffle operands if there are at least two
+    if len(permuted_children) > 1:
+        rng.shuffle(permuted_children)
 
     if isinstance(expr, sympy.Add):
-        return sympy.Add(*operands, evaluate=False)
+        return sympy.Add(*permuted_children, evaluate=False)
+    else:  # sympy.Mul
+        return sympy.Mul(*permuted_children, evaluate=False)
 
-    # sympy.Mul
-    return sympy.Mul(*operands, evaluate=False)
+
+def permute_additive_flat_expression(expr: str, rng: random.Random) -> str:
+    """Return a permuted additive expression string.
+
+    Preconditions (caller MUST guarantee):
+    1. *expr* contains only the '+' binary operator.
+    2. Expression is *flat* (no parentheses) and therefore commutative.
+
+    The function shuffles the numeric literals (with their leading sign) using
+    *rng* and reconstructs a canonical ``" + "``-joined string.  If either
+    pre-condition is violated an exception is raised.
+    """
+
+    if any(op in expr for op in "*/-"):
+        raise ValueError(
+            "permute_additive_flat_expression requires '+'-only expression without '-' operator"
+        )
+
+    if "(" in expr or ")" in expr:
+        raise ValueError("Expression must be flat (no parentheses)")
+
+    # Extract numeric tokens including scientific notation.
+    tokens = re.findall(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", expr)
+    if len(tokens) < 2:
+        raise ValueError("Need at least two additive operands to permute")
+
+    rng.shuffle(tokens)
+    return " + ".join(tokens)
 
 
 @dataclass
@@ -448,10 +483,6 @@ def plan_to_string_expression(
     # Create sympy symbols with unique identifiers
     stack = [sympy.Symbol(symbol) for symbol in unique_symbols]
 
-    # Track which initial values each stack position depends on for masking
-    num_initial = len(initial_values)
-    stack_dependencies = [set([i]) for i in range(num_initial)]
-
     op_name_to_symbol = {
         "add": "+",
         "subtract": "-",
@@ -475,38 +506,29 @@ def plan_to_string_expression(
         # Pop operands from both stacks
         b = stack.pop()
         a = stack.pop()
-        b_deps = stack_dependencies.pop()
-        a_deps = stack_dependencies.pop()
 
         # Create expression
         op_symbol = op_name_to_symbol[op]
         expr = op_symbol_to_expression[op_symbol](a, b)
         stack.append(expr)
 
-        # Update dependencies
-        if op == "identity":
-            # Identity keeps first operand, discards second
-            result_deps = a_deps
-        else:
-            # Binary operations use both operands
-            result_deps = a_deps.union(b_deps)
-
-        stack_dependencies.append(result_deps)
-
-    # ------------------------------------------------------------------ #
-    # Build the final SymPy expression & optional stochastic transforms
-    # ------------------------------------------------------------------ #
-
     sym_expr = stack[0]
 
-    # 1. Optional permutation (non-recursive; shuffle only the top-level operands
-    #    of commutative Add/Mul while preserving semantics).
-    if rng_perm.random() < expression_permutation_probability:
-        sym_expr = permute_top_level_operands(sym_expr, rng_perm)
+    # ------------------------------------------------------------------ #
+    # Optionally simplify then optionally permute the symbolic tree
+    # ------------------------------------------------------------------ #
+
+    if rng_simp.random() < expression_simplification_probability:
+        sym_expr = sympy.simplify(sym_expr)
+
+    if (
+        expression_permutation_probability > 0.0
+        and rng_perm.random() < expression_permutation_probability
+    ):
+        sym_expr = permute_expression(sym_expr, rng_perm)
 
     # ------------------------------------------------------------------ #
-    # Convert to string with placeholders – **after** permutation, **before**
-    # simplification so that simplification can operate on concrete numerals.
+    # Stringify and replace placeholders
     # ------------------------------------------------------------------ #
 
     expr_str = str(sym_expr)
@@ -530,35 +552,10 @@ def plan_to_string_expression(
 
         expr_str = expr_str.replace(placeholder, new_value)
 
-    # 2. Optional simplification – operate on the numeric expression after
-    #    placeholders have been substituted so that SymPy sees concrete values.
-    if rng_simp.random() < expression_simplification_probability:
-        try:
-            simplified = sympy.simplify(sympy.sympify(expr_str))
-            expr_str = str(simplified)
-        except Exception:
-            # Fallback gracefully – if SymPy chokes on the expression (should be
-            # rare), keep the original string.
-            pass
-
-    # 3. Fallback string-level permutation for additive-only expressions.  This
-    #    guarantees some visible variability even when SymPy's canonicalisation
-    #    keeps argument order unchanged.
-    if (
-        expression_permutation_probability > 0.0
-        and rng_perm.random() < expression_permutation_probability
-    ):
-        # Quick heuristic: operate only on expressions that exclusively use '+'
-        # as their binary operator (ignoring spaces and parentheses).  This is
-        # safe because addition is commutative – re-ordering operands preserves
-        # semantics.
-        op_chars = re.sub(r"[0-9\.\s+()\-]", "", expr_str)
-        if not op_chars:  # Contains only digits, '.', '+', '-', spaces, parens
-            # Extract numeric literals (including optional leading minus sign).
-            tokens = re.findall(r"-?\d+\.?\d*", expr_str)
-            if len(tokens) >= 2:
-                rng_perm.shuffle(tokens)
-                expr_str = " + ".join(tokens)
+    # Remove **all** whitespace to guarantee no stray spaces remain within
+    # numeric literals.  Spaces are unnecessary for SymPy parsing, and their
+    # removal ensures tokens like "860389 .3125" cannot occur.
+    expr_str = re.sub(r"\s+", "", expr_str)
 
     # Apply final formatting (English conversion / spacing)
     result = format_expression_string(

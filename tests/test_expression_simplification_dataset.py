@@ -33,8 +33,20 @@ def test_dataset_expression_simplification(depth):
     )
     expr_simp, _ = ds_simp.generate_structure_example(depth=depth, seed=123)
 
-    # Should simplify (remove '+')
-    assert expr_no != expr_simp, "Simplification probability did not affect expression"
+    # Simplification should remove the explicit '+' operator from the text.  If
+    # the unsimplified variant already lacks a '+', it means the plan collapsed
+    # to an identity (e.g. right operand was zero).  In that situation the two
+    # strings will legitimately be equal – the critical property is that the
+    # simplified form never *introduces* a '+'.
+
+    if "+" in expr_no:
+        # When an addition operator is present, simplification must change the
+        # expression string.
+        assert (
+            expr_no != expr_simp
+        ), "Simplification probability did not affect expression"
+
+    # In all cases the simplified expression itself should not contain a '+'.
     assert "+" not in expr_simp
 
     # Mathematical equivalence should hold
