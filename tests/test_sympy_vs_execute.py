@@ -27,6 +27,10 @@ def test_sympy_and_execute_consistency_across_seeds():
             expression_simplification_probability=0,
         )
 
+        import pdb
+
+        pdb.set_trace()
+
         sym_val = float(example.final_value_sympy)
         exec_val = example.final_value_exec
 
