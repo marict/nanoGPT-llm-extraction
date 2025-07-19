@@ -648,12 +648,11 @@ def generate_single_dag_example(
         expr=sym_expr,
     )
 
-    # Check if either final values become complex numbers
-    if math.iscomplex(example.final_value_exec):
+    if isinstance(example.final_value_exec, complex):
         raise ValueError(
             f"Final value exec is complex: {example.final_value_exec}, example: {example}"
         )
-    if math.iscomplex(example.final_value_sympy):
+    if isinstance(example.final_value_sympy, complex):
         raise ValueError(
             f"Final value sympy is complex: {example.final_value_sympy}, example: {example}"
         )
