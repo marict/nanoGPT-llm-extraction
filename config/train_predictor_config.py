@@ -13,9 +13,10 @@ clear_previous_checkpoints = False
 reload_reset_iters = True
 
 # Model initialization
-init_from = (
-    "/runpod-volume/checkpoints/6jtm4x7kn65w4m-new_losses/ckpt_predictor_pretrain.pt"
-)
+# init_from = (
+#     "/runpod-volume/checkpoints/6jtm4x7kn65w4m-new_losses/ckpt_predictor_pretrain.pt"
+# )
+init_from = "scratch"
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
