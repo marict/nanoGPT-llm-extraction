@@ -12,19 +12,19 @@ def test_sympy_and_execute_consistency_across_seeds():
     agree to within a small numerical tolerance.
     """
 
-    max_depth = 3  # keep magnitudes well within the LOG_LIM clipping range
+    max_depth = 6  # keep magnitudes well within the LOG_LIM clipping range
     n_seeds = 1000  # lightweight for CI yet provides good coverage
 
     for seed in range(n_seeds):
         example = generate_single_dag_example(
             depth=max_depth,
             seed=seed,
-            max_digits=2,
-            max_decimal_places=3,
+            max_digits=6,
+            max_decimal_places=6,
             english_conversion_probability=0,
-            integer_no_decimal_probability=0,
-            expression_expansion_probability=0,
-            expression_simplification_probability=0,
+            integer_no_decimal_probability=0.5,
+            expression_expansion_probability=0.5,
+            expression_simplification_probability=0.5,
         )
 
         sym_val = float(example.final_value_sympy)

@@ -311,8 +311,13 @@ def _generate_expression(
             for i in range(len(operations) + 1)
         ]
 
-        # Ensure we never divide by zero under the current stack evaluation semantics.
+        # Ensure we never divide by zero under the current stack evaluation semantics and catch identity operations.
         for i, op in enumerate(operations):
+            if op == "multiply":
+                # If second value is 0, then we can discard the top and replace with 0
+                if initial_values[i] == 0.0:
+                    operations[i] = "identity"
+
             if op == "divide":
                 denom_index = i + 1
                 if initial_values[denom_index] == 0.0:
@@ -638,8 +643,7 @@ def generate_single_dag_example(
     if not math.isclose(
         example.final_value_exec,
         example.final_value_sympy,
-        rel_tol=1e-4,
-        abs_tol=1e-6,
+        abs_tol=1e-3,
     ):
         logging.warning(
             f"\n\n-------------------WARNING: Final value mismatch between sympy and tensor execute: {example.final_value_exec} != {example.final_value_sympy}, \nexample: {example}\n\n-------------------"

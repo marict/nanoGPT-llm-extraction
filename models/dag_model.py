@@ -127,7 +127,7 @@ LOG_LIM = 10.0  # Bound on log-magnitudes to avoid numerical instabilities
 
 
 def _clip_log(log_t: torch.Tensor) -> torch.Tensor:
-    """Symmetric tanh clipping for log magnitudes."""
+    """Symmetric tanh clipping for log magnitudes with minimum of -1."""
     return torch.tanh(log_t / LOG_LIM) * LOG_LIM
 
 
@@ -600,6 +600,12 @@ def execute_stack(
     if max_digits + max_decimal_places != digit_probs.shape[3]:
         raise RuntimeError(
             f"max_digits + max_decimal_places ({max_digits + max_decimal_places}) must match digit_probs.shape[3]: ({digit_probs.shape[3]})"
+        )
+
+    if max_digits > 10:
+        raise RuntimeError(
+            f"max_digits ({max_digits}) must be <= 10 because numbers larger than 10¹⁰ would exceed "
+            f"LOG_LIM={LOG_LIM} and be clipped, making sympy comparisons invalid"
         )
 
     # ------------------------------------------------------------------
