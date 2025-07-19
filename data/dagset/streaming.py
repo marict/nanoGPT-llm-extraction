@@ -327,19 +327,6 @@ def _generate_expression(
                         allow_zero=False,
                     )
 
-        # We swap some operations with identity to play better with the DAG model, but this is not compatible with sympy.
-        operations = [op for op in sym_ops]
-        for i, op in enumerate(operations):
-            if op == "multiply":
-                # If second value is 0, then we can discard the top and replace with 0
-                if initial_values[i] == 0.0:
-                    operations[i] = "identity"
-
-            if op == "divide":
-                num_index = i
-                if initial_values[num_index] == 0.0:
-                    operations[num_index] = "identity"
-
     # ------------------------------------------------------------------
     # 2. Build SymPy expression from leaves + operations
     # ------------------------------------------------------------------
@@ -365,9 +352,23 @@ def _generate_expression(
 
     # Check if result is complex (nonzero imaginary part)
     if im(final_value) != 0:
-        raise ValueError(
-            f"Final value is complex: {final_value}, sym_expr: {sym_expr}, initial_values: {initial_values}, operations: {operations}, seed: {seed}"
+        logging.warning(
+            f"Final value is complex: {final_value}, sym_expr: {sym_expr}, initial_values: {initial_values}, operations: {operations}, seed: {seed}, regenerating..."
         )
+        return False, False, False, False, False, False
+
+    # We swap some operations with identity to play better with the DAG model, but this is not compatible with sympy.
+    operations = [op for op in sym_ops]
+    for i, op in enumerate(operations):
+        if op == "multiply":
+            # If second value is 0, then we can discard the top and replace with 0
+            if initial_values[i] == 0.0:
+                operations[i] = "identity"
+
+        if op == "divide":
+            num_index = i
+            if initial_values[num_index] == 0.0:
+                operations[num_index] = "identity"
 
     # Pad the rest of the operations with identity
     operations.extend(["identity"] * (depth - len(operations)))
@@ -584,28 +585,37 @@ def generate_single_dag_example(
         # For DAG with depth n, we need n+1 initial values
         num_initial_values = depth + 1
 
-    # ------------------------------------------------------------------ #
-    # Plan generation – either use caller-supplied overrides (for tests) or
-    # fall back to stochastic generation.
-    # ------------------------------------------------------------------ #
-    (
-        sym_expr,
-        initial_values,
-        operations,
-        final_value_sympy,
-        did_simplify,
-        did_expand,
-    ) = _generate_expression(
-        depth=depth,
-        seed=seed,
-        max_digits=max_digits,
-        max_decimal_places=max_decimal_places,
-        allowed_operations=allowed_operations,
-        expression_simplification_probability=expression_simplification_probability,
-        expression_expansion_probability=expression_expansion_probability,
-        override_initial_values=_initial_values_override,
-        override_operations=_operations_override,
-    )
+    # Some expressions are invalid (ex. /0), so we retry a few times.
+    valid = False
+    max_retries = 10  # Prevent infinite loops
+    attempt = 0
+    while not valid and attempt < max_retries:
+        attempt += 1
+        (
+            sym_expr,
+            initial_values,
+            operations,
+            final_value_sympy,
+            did_simplify,
+            did_expand,
+        ) = _generate_expression(
+            depth=depth,
+            seed=seed + attempt,  # Use different seed each time
+            max_digits=max_digits,
+            max_decimal_places=max_decimal_places,
+            allowed_operations=allowed_operations,
+            expression_simplification_probability=expression_simplification_probability,
+            expression_expansion_probability=expression_expansion_probability,
+            override_initial_values=_initial_values_override,
+            override_operations=_operations_override,
+        )
+        if final_value_sympy is not None:
+            valid = True
+
+    if not valid:
+        raise ValueError(
+            f"Failed to generate valid expression after {max_retries} attempts, seed: {seed}"
+        )
 
     text = _expression_to_text(
         expr=sym_expr,
