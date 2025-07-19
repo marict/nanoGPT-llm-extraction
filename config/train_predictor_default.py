@@ -36,10 +36,10 @@ train_examples_per_batch = 100
 val_examples_per_batch = 20
 
 # Preprocessing settings
-english_conversion_probability = 0
-integer_no_decimal_probability = 0
-expression_simplification_probability = 0
-expression_expansion_probability = 0
+english_conversion_probability = 0.3
+integer_no_decimal_probability = 0.5
+expression_simplification_probability = 0.5
+expression_expansion_probability = 0.5
 
 # Data generation settings
 
