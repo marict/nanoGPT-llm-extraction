@@ -338,12 +338,13 @@ def identity_log_space(
 ):
     """Identity operation for stack execution.
 
-    Behaviour: discard the *top* (``y``) and keep the *second* (``x``) so that
-    applying identity leaves the running result unchanged.  This ensures that
-    any identities introduced as padding after a shorter expression length do
-    not alter the final value.
+    Behaviour: keep the *top* (``y``) and discard the *second* (``x``). The
+    most recent computation result always resides at the top of the stack. By
+    returning ``y`` unchanged we ensure that inserting identity operations
+    (e.g. as padding to reach a fixed DAG depth) leaves the running result
+    unaffected.
     """
-    return sx, lx
+    return sy, ly
 
 
 # For DAG execution, we may use a subset of the operations

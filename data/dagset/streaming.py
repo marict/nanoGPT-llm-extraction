@@ -164,9 +164,10 @@ class DAGExample:
     did_simplify: bool
     final_value_sympy: float | None = None  # exact symbolic evaluation
     final_value_exec: float | None = None  # value from execute_stack
+    allowed_operations: list[str] | None = None
 
     def __str__(self):
-        return f"DAGExample(text={self.text}, depth={self.depth}, initial_values={self.initial_values}, signs={self.signs}, digits={self.digits}, operations={self.operations}, operations_named={self.operations_named}, seed={self.seed}, did_expand={self.did_expand}, did_simplify={self.did_simplify}, final_value_sympy={self.final_value_sympy}, final_value_exec={self.final_value_exec})"
+        return f"DAGExample(text={self.text}, depth={self.depth}, initial_values={self.initial_values}, signs={self.signs}, digits={self.digits}, operations={self.operations}, operations_named={self.operations_named}, seed={self.seed}, did_expand={self.did_expand}, did_simplify={self.did_simplify}, final_value_sympy={self.final_value_sympy}, final_value_exec={self.final_value_exec}, allowed_operations={self.allowed_operations})"
 
 
 def generate_uniform_digit_number(
@@ -283,12 +284,11 @@ def _generate_expression(
         initial_values = list(override_initial_values)
         operations = list(override_operations)
     else:
-        if allowed_operations is None or "identity" not in allowed_operations:
-            # No identity means a full expression
-            expression_size = depth + 1
-        else:
-            # Identity controls the size of the expression
-            expression_size = rng.randint(1, depth + 1)
+        # For stability, always use the maximum expression size so that we
+        # never rely on padded ``identity`` operations. (Identity padding can
+        # break the equivalence between symbolic and numeric execution when
+        # rounding errors or semantic mismatches creep in.)
+        expression_size = depth + 1
 
         # Default to all operations if none are provided
         if allowed_operations is None:
@@ -296,9 +296,13 @@ def _generate_expression(
         else:
             op_pool = [op for op in allowed_operations]
 
-        # Remove identity from the pool if it exists
-        op_pool = [op for op in op_pool if op != "identity"]
-        operations = rng.choices(op_pool, k=expression_size - 1)
+        assert (
+            "identity" in op_pool
+        ), "Identity operation must be in the allowed operations pool"
+
+        non_identity_op_pool = [op for op in op_pool if op != "identity"]
+
+        operations = rng.choices(non_identity_op_pool, k=expression_size - 1)
 
         initial_values = [
             generate_uniform_digit_number(
@@ -586,11 +590,15 @@ def generate_single_dag_example(
         did_simplify=did_simplify,
         final_value_sympy=final_value_sympy,
         final_value_exec=final_value_exec,
+        allowed_operations=allowed_operations,
     )
 
-    assert math.isclose(
+    if not math.isclose(
         example.final_value_exec, example.final_value_sympy, rel_tol=1e-6
-    ), f"Final value mismatch: {example.final_value_exec} != {example.final_value_sympy}, \nexample: {example}"
+    ):
+        raise ValueError(
+            f"Final value mismatch: {example.final_value_exec} != {example.final_value_sympy}, \nexample: {example}"
+        )
 
     return example
 

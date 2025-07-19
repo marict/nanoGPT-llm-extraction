@@ -147,7 +147,7 @@ def test_multi_step_correctness():
         elif op == "divide":
             res = x / y
         elif op == "identity":
-            res = x  # y is ignored in identity in our implementation
+            res = y  # keep top; identity discards the second (x)
         else:
             raise ValueError(op)
         stack.append(res)

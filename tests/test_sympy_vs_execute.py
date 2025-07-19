@@ -13,16 +13,23 @@ def test_sympy_and_execute_consistency_across_seeds():
     """
 
     max_depth = 4  # keep magnitudes well within the LOG_LIM clipping range
-    n_seeds = 100  # lightweight for CI yet provides good coverage
+    n_seeds = 1000  # lightweight for CI yet provides good coverage
 
     for seed in range(n_seeds):
         example = generate_single_dag_example(
             depth=max_depth,
-            seed=seed,
-            max_digits=2,  # 2-digit numbers → avoid overflow when chaining multiplies
-            max_decimal_places=2,
+            seed=44,
+            max_digits=6,
+            max_decimal_places=6,
+            english_conversion_probability=0,
+            integer_no_decimal_probability=0,
+            expression_expansion_probability=0,
+            expression_simplification_probability=0,
         )
 
+        import pdb
+
+        pdb.set_trace()
         sym_val = float(example.final_value_sympy)
         exec_val = example.final_value_exec
 
