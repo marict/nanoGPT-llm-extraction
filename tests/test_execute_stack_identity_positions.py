@@ -38,12 +38,17 @@ def test_identity_operations(test_case):
     initial_values, operations, expected = test_case
 
     # Convert plan to tensors using existing helper
-    signs, digits, ops, final_value_exec = plan_to_tensors(
+    structure_dict = plan_to_tensors(
         initial_values=initial_values,
         operations=operations,
         max_digits=2,
         max_decimal_places=3,
     )
+
+    # Extract individual tensors from structure dict
+    signs = structure_dict["initial_sgn"][: len(initial_values)]  # trim padding
+    digits = structure_dict["initial_digits"][: len(initial_values)]  # trim padding
+    ops = structure_dict["operations"]  # original operations tensor
 
     # Add batch and sequence dimensions
     sign_tensor = signs.view(1, 1, -1)

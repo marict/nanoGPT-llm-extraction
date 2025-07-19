@@ -84,6 +84,8 @@ check_nans = False
 sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
+value_loss_weight = 1.0  # MSE loss on initial values
+exec_loss_weight = 1.0  # MSE loss on final execution values
 
 # Random seeds
 seed = 42

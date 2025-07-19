@@ -20,14 +20,19 @@ def test_tensors_to_plan_round_trip():
     operations = ["add", "subtract", "multiply", "divide"]
 
     # Convert plan to tensors
-    signs, digits, ops, _ = plan_to_tensors(
+    structure_dict = plan_to_tensors(
         initial_values=initial_values,
         operations=operations,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
     )
 
-    # Convert tensors back to plan
+    # Convert tensors back to plan - extract individual tensors from structure dict
+    # Use the original tensor format that tensors_to_plan expects
+    signs = structure_dict["initial_sgn"][: len(initial_values)]  # trim padding
+    digits = structure_dict["initial_digits"][: len(initial_values)]  # trim padding
+    ops = structure_dict["operations"]  # original operations tensor
+
     recovered_values, recovered_ops = tensors_to_plan(
         signs=signs,
         digits=digits,

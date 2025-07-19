@@ -96,15 +96,36 @@ def test_float_to_digit_onehot_shape_and_properties():
 def test_plan_to_tensors_shapes():
     init_vals = [1.2, -3.4]
     operations = ["add"]
-    signs, digits_tensor, ops_onehot, _ = plan_to_tensors(
+    structure_dict = plan_to_tensors(
         init_vals, operations, max_digits=2, max_decimal_places=2
     )
-    assert torch.equal(signs, torch.tensor([1.0, -1.0]))
-    assert digits_tensor.shape == (2, 4, 10)
-    assert ops_onehot.shape == (1, len(OP_NAMES))
+
+    # Check that we get the expected structure dict keys
+    expected_keys = {
+        "initial_sgn",
+        "initial_log",
+        "initial_digits",
+        "operation_probs",
+        "depth",
+        "operations",
+        "final_value_exec",
+    }
+    assert set(structure_dict.keys()) == expected_keys
+
+    # Check tensor shapes - with depth=1 and 2 nodes, we get 2 nodes total
+    assert structure_dict["initial_sgn"].shape == (2,)  # depth + 1 = 2 nodes
+    assert structure_dict["initial_digits"].shape == (
+        2,
+        4,
+        10,
+    )  # (nodes, digits, classes)
+    assert structure_dict["operation_probs"].shape == (1, len(OP_NAMES))  # (depth, ops)
+
+    # Check signs match original values
+    assert torch.equal(structure_dict["initial_sgn"][:2], torch.tensor([1.0, -1.0]))
     # Operation one-hot should have exactly one "1" at the correct index
-    assert ops_onehot.sum() == 1
-    assert ops_onehot[0, OP_NAMES.index("add")].item() == 1
+    assert structure_dict["operation_probs"].sum() == 1
+    assert structure_dict["operation_probs"][0, OP_NAMES.index("add")].item() == 1
 
 
 def test_generate_single_dag_example_basic_properties():
@@ -127,3 +148,43 @@ def test_dag_structure_dataset_batch_shapes():
     assert len(texts) == 2
     assert batched_struct["initial_sgn"].shape == (2, 3)  # batch, nodes(depth+1)
     assert batched_struct["operation_probs"].shape == (2, 2, len(OP_NAMES))
+
+
+def test_batched_target_values_consistency():
+    """Test that batched target values match the values from examples."""
+    from data.dagset.streaming import create_dag_structure_dataloaders
+
+    # Create a small test dataset
+    train_loader, _ = create_dag_structure_dataloaders(
+        train_batch_size=3,
+        val_batch_size=3,
+        max_depth=2,
+        seed=42,
+        max_digits=3,
+        max_decimal_places=2,
+    )
+
+    # Get a batch
+    texts, structures, examples = next(iter(train_loader))
+
+    # Verify that batched target values match example values
+    batched_initial_values = structures["target_initial_values"]
+    batched_final_exec = structures["target_final_exec"]
+
+    for i, example in enumerate(examples):
+        # Check initial values
+        num_values = min(len(example.initial_values), batched_initial_values.size(1))
+        for j in range(num_values):
+            expected = example.initial_values[j]
+            actual = batched_initial_values[i, j].item()
+            assert (
+                abs(expected - actual) < 1e-5
+            ), f"Initial value mismatch at [{i},{j}]: {expected} vs {actual}"
+
+        # Check final execution value
+        if example.final_value_exec is not None:
+            expected_final = example.final_value_exec
+            actual_final = batched_final_exec[i].item()
+            assert (
+                abs(expected_final - actual_final) < 1e-5
+            ), f"Final exec value mismatch at [{i}]: {expected_final} vs {actual_final}"

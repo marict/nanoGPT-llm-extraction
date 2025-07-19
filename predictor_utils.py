@@ -48,51 +48,34 @@ def tokenize_texts(texts: List[str], sequence_length: int, device: str) -> torch
 
 
 # --------------------------------------------------------------------------- #
-# Loss
+# Loss computation helpers
 # --------------------------------------------------------------------------- #
 
 
-# Updated function to handle digit distributions instead of log magnitudes
-def compute_dag_structure_loss(
-    pred_sgn: torch.Tensor,  # (B,T,N)
-    pred_digits: torch.Tensor,  # (B,T,N,D,10) logits or probs
-    pred_ops: torch.Tensor,  # (B,T,depth,n_ops)
-    target_sgn: torch.Tensor,  # (B,T,N)
-    target_digits: torch.Tensor,  # (B,T,N,D,10) one-hot
-    target_ops: torch.Tensor,
-    cfg,
-) -> Dict[str, torch.Tensor]:
-    """Compute robust DAG-structure prediction loss.
-
-    The formulation is identical to the previous implementation: BCE for sign,
-    log-cosh for magnitude, and NLL for the operation category.
-    """
-    # Determine device type once for proper autocast context switching
-    device_type = pred_sgn.device.type if isinstance(pred_sgn, torch.Tensor) else "cuda"
-
-    # Sign (BCE on ±1 → {0,1})
-    # Disable autocast to ensure computations are carried out in full precision
-    # regardless of any surrounding mixed-precision context.
+def _compute_sign_loss(
+    pred_sgn: torch.Tensor,
+    target_sgn: torch.Tensor,
+    device_type: str,
+) -> torch.Tensor:
+    """Compute binary cross-entropy loss for sign prediction."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
         sign_target = (target_sgn > 0).float().to(torch.float32)
         sign_pred = ((pred_sgn + 1.0) * 0.5).to(torch.float32)
         sign_loss = F.binary_cross_entropy(
             sign_pred, sign_target, reduction="none"
         ).mean()
+    return sign_loss
 
-    # Digit prediction (cross entropy over 10-way classification per digit slot)
-    # ``pred_digits`` can be either raw logits **or** probabilities depending on
-    # the caller (training code passes logits, some tests pass one-hot probs).
-    # We convert to log-probabilities in a way that supports both cases.
+
+def _compute_digit_loss(
+    pred_digits: torch.Tensor,
+    target_digits: torch.Tensor,
+    device_type: str,
+) -> torch.Tensor:
+    """Compute cross-entropy loss for digit prediction."""
     B, T, N, D, _ = pred_digits.shape
 
-    # ------------------------------------------------------------------
-    # Sanity-check: the model and dataset must agree on the number of digit
-    # slots (integer + fractional). The vast majority of silent shape errors
-    # later on – e.g. index mismatches inside the loss – come from this being
-    # out of sync (for instance after increasing ``max_digits`` without
-    # propagating the change to the model).
-    # ------------------------------------------------------------------
+    # Sanity check: model and dataset must agree on digit slots
     if target_digits.shape[-2] != D:
         raise ValueError(
             "Shape mismatch between model-predicted digits and target digits: "
@@ -101,6 +84,7 @@ def compute_dag_structure_loss(
             "*same* values for both the dataset and the model (these values are "
             "propagated via the training config)."
         )
+
     with torch.amp.autocast(device_type=device_type, enabled=False):
         # Use reshape to handle potential non-contiguous tensors (view can fail)
         pred_flat = pred_digits.reshape(-1, 10).to(torch.float32)  # (B*T*N*D, 10)
@@ -119,27 +103,162 @@ def compute_dag_structure_loss(
         if valid_mask.any():
             digit_loss = F.nll_loss(log_probs[valid_mask], target_idx[valid_mask])
         else:
-            digit_loss = torch.tensor(0.0, device=pred_sgn.device)
+            digit_loss = torch.tensor(0.0, device=pred_digits.device)
 
-    # Operation (NLL over one-hot targets)
-    # Convert probabilities to float32 before taking log to prevent log(0) -> -inf in FP16 when probs are tiny.
+    return digit_loss
+
+
+def _compute_op_loss(
+    pred_ops: torch.Tensor,
+    target_ops: torch.Tensor,
+    device_type: str,
+) -> torch.Tensor:
+    """Compute negative log-likelihood loss for operation prediction."""
     b, t, d, n_ops = pred_ops.shape
     with torch.amp.autocast(device_type=device_type, enabled=False):
         pred_ops_flat = pred_ops.view(-1, n_ops).to(torch.float32)
         target_idx = target_ops.view(-1, n_ops).argmax(dim=-1)
         op_loss = F.nll_loss(torch.log(pred_ops_flat + 1e-8), target_idx).mean()
+    return op_loss
 
+
+def _compute_value_loss(
+    pred_sgn: torch.Tensor,
+    pred_digits: torch.Tensor,
+    target_initial_values: torch.Tensor,
+    cfg,
+    device_type: str,
+) -> torch.Tensor:
+    """Compute MSE loss between predicted and target initial values."""
+    with torch.amp.autocast(device_type=device_type, enabled=False):
+        # Convert predicted digits to probabilities if they're logits
+        if pred_digits.min() < 0 or pred_digits.max() > 1:
+            pred_digit_probs = F.softmax(pred_digits, dim=-1)
+        else:
+            pred_digit_probs = pred_digits
+
+        # Compute predicted magnitudes from digit distributions
+        pred_magnitudes = digits_to_magnitude(
+            pred_digit_probs,
+            cfg.max_digits,
+            cfg.max_decimal_places,
+        )  # (B,T,N)
+
+        # Combine signs and magnitudes to get predicted initial values
+        pred_initial_values = torch.sign(pred_sgn) * pred_magnitudes
+
+        # Compute MSE loss
+        value_loss = F.mse_loss(
+            pred_initial_values.to(torch.float32),
+            target_initial_values.to(torch.float32),
+        )
+    return value_loss
+
+
+def _compute_exec_loss(
+    pred_sgn: torch.Tensor,
+    pred_digits: torch.Tensor,
+    pred_ops: torch.Tensor,
+    target_final_exec: torch.Tensor,
+    cfg,
+    device_type: str,
+) -> torch.Tensor:
+    """Compute MSE loss between predicted and target final execution values."""
+    with torch.amp.autocast(device_type=device_type, enabled=False):
+        # Convert predicted digits to probabilities if they're logits
+        if pred_digits.min() < 0 or pred_digits.max() > 1:
+            pred_digit_probs = F.softmax(pred_digits, dim=-1)
+        else:
+            pred_digit_probs = pred_digits
+
+        # Execute the predicted DAG to get final values
+        # Use ignore_clip=False so model learns to predict clipped values
+        pred_final_sgn, pred_final_log = execute_stack(
+            pred_sgn,
+            pred_digit_probs,
+            pred_ops,
+            max_digits=cfg.max_digits,
+            max_decimal_places=cfg.max_decimal_places,
+            ignore_clip=False,  # Learn to handle clipping!
+        )
+
+        # Convert to real numbers
+        pred_final_val = pred_final_sgn * torch.pow(
+            torch.tensor(10.0, device=pred_sgn.device, dtype=pred_final_log.dtype),
+            pred_final_log,
+        )
+
+        # Squeeze to match target dimensions: (B,T) -> (B*T,)
+        pred_final_val = pred_final_val.squeeze(-1).reshape(-1)
+        target_final_flat = target_final_exec.reshape(-1)
+
+        # Compute MSE loss
+        exec_loss = F.mse_loss(
+            pred_final_val.to(torch.float32), target_final_flat.to(torch.float32)
+        )
+    return exec_loss
+
+
+# --------------------------------------------------------------------------- #
+# Main loss function
+# --------------------------------------------------------------------------- #
+
+
+# Updated function to handle digit distributions instead of log magnitudes
+def compute_dag_structure_loss(
+    pred_sgn: torch.Tensor,  # (B,T,N)
+    pred_digits: torch.Tensor,  # (B,T,N,D,10) logits or probs
+    pred_ops: torch.Tensor,  # (B,T,depth,n_ops)
+    target_sgn: torch.Tensor,  # (B,T,N)
+    target_digits: torch.Tensor,  # (B,T,N,D,10) one-hot
+    target_ops: torch.Tensor,
+    cfg,
+    target_initial_values: torch.Tensor,  # (B,T,N) - target initial values as floats
+    target_final_exec: torch.Tensor,  # (B,T) - target final execution values as floats
+) -> Dict[str, torch.Tensor]:
+    """Compute robust DAG-structure prediction loss.
+
+    The formulation includes BCE for sign, cross-entropy for digits, NLL for operations,
+    MSE for initial values, and MSE for final execution values.
+
+    All target tensors are required parameters.
+    """
+    # Determine device type once for proper autocast context switching
+    device_type = pred_sgn.device.type if isinstance(pred_sgn, torch.Tensor) else "cuda"
+
+    # Compute individual loss components
+    sign_loss = _compute_sign_loss(pred_sgn, target_sgn, device_type)
+    digit_loss = _compute_digit_loss(pred_digits, target_digits, device_type)
+    op_loss = _compute_op_loss(pred_ops, target_ops, device_type)
+
+    # Compute new loss components (always computed now)
+    value_loss = _compute_value_loss(
+        pred_sgn, pred_digits, target_initial_values, cfg, device_type
+    )
+    exec_loss = _compute_exec_loss(
+        pred_sgn, pred_digits, pred_ops, target_final_exec, cfg, device_type
+    )
+
+    # Combine all losses with their respective weights
     total_loss = (
         cfg.sign_loss_weight * sign_loss
         + cfg.digit_loss_weight * digit_loss
         + cfg.op_loss_weight * op_loss
     )
 
+    # Add new loss terms if weights are configured
+    if hasattr(cfg, "value_loss_weight"):
+        total_loss += cfg.value_loss_weight * value_loss
+    if hasattr(cfg, "exec_loss_weight"):
+        total_loss += cfg.exec_loss_weight * exec_loss
+
     return {
         "total_loss": total_loss,
         "sign_loss": sign_loss,
         "digit_loss": digit_loss,
         "op_loss": op_loss,
+        "value_loss": value_loss,
+        "exec_loss": exec_loss,
     }
 
 
@@ -217,7 +336,15 @@ def evaluate_dag_model(
     _eval_random.seed(seed)
 
     total_losses = {
-        k: 0.0 for k in ("total_loss", "sign_loss", "digit_loss", "op_loss")
+        k: 0.0
+        for k in (
+            "total_loss",
+            "sign_loss",
+            "digit_loss",
+            "op_loss",
+            "value_loss",
+            "exec_loss",
+        )
     }
     total_metrics = {
         "op_accuracy": 0.0,
@@ -288,6 +415,14 @@ def evaluate_dag_model(
                 last_digit_logits = last_digit_logits.unsqueeze(1)
                 pred_ops = pred_ops.unsqueeze(1)
 
+                # Extract target initial values and final execution values from structures
+                target_initial_values = (
+                    structures["target_initial_values"].to(device).unsqueeze(1)
+                )  # Add sequence dim
+                target_final_exec = (
+                    structures["target_final_exec"].to(device).unsqueeze(1)
+                )  # Add sequence dim
+
                 losses = compute_dag_structure_loss(
                     pred_sgn,
                     last_digit_logits,
@@ -296,6 +431,8 @@ def evaluate_dag_model(
                     tgt_digits.unsqueeze(1),
                     tgt_ops.unsqueeze(1),
                     cfg,
+                    target_initial_values=target_initial_values,
+                    target_final_exec=target_final_exec,
                 )
 
                 # Metrics
@@ -334,14 +471,14 @@ def evaluate_dag_model(
                 pred_digit_probs = last_digit_logits.softmax(dim=-1)  # (B,1,N,D,10)
                 # pred_ops already (B,1,depth,n_ops)
 
-                # Execute stacks
+                # Execute stacks - use clipping for consistency with training
                 tgt_final_sgn, tgt_final_log = execute_stack(
                     tgt_sign,
                     tgt_digit_probs,
                     tgt_ops_seq,
                     max_digits=cfg.max_digits,
                     max_decimal_places=cfg.max_decimal_places,
-                    ignore_clip=True,
+                    ignore_clip=False,  # Consistent with training behavior
                 )
 
                 pred_final_sgn, pred_final_log = execute_stack(
@@ -350,7 +487,7 @@ def evaluate_dag_model(
                     pred_ops,
                     max_digits=cfg.max_digits,
                     max_decimal_places=cfg.max_decimal_places,
-                    ignore_clip=True,
+                    ignore_clip=False,  # Consistent with training behavior
                 )
 
                 # Convert to real numbers

@@ -99,6 +99,7 @@ class DAGExample:
     final_value_exec: float | None = None  # value from execute_stack
     allowed_operations: list[str] | None = None
     expr: sympy.Basic | None = None
+    structure_dict: dict[str, torch.Tensor] | None = None  # structure format tensors
 
     def __repr__(self):
         return self.__str__()
@@ -196,8 +197,8 @@ def _generate_expression(
     expression_expansion_probability: float,
     override_initial_values: list[float] | None = None,
     override_operations: list[str] | None = None,
-    execute: bool = True,
-) -> tuple[sympy.Basic, list[float], list[str], bool, bool, bool]:
+    execute_sympy: bool = True,
+) -> tuple[sympy.Basic, list[float], list[str], float | None, bool, bool, bool]:
     """Create a random SymPy expression of exactly *depth* operations.
 
     Returns (expr, initial_values, operations, did_simplify, did_expand).
@@ -280,7 +281,7 @@ def _generate_expression(
 
     is_complex = False
     final_value = None
-    if execute:
+    if execute_sympy:
         # Execute the sympy expression and store the final value for validation purposes.
         value_map = {symbols[i]: initial_values[i] for i in range(len(initial_values))}
         final_value = sympy.N(sym_expr.subs(value_map))
@@ -421,9 +422,10 @@ def plan_to_tensors(
     *,
     max_digits: int,
     max_decimal_places: int,
-    execute: bool = True,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float | None]:
-    """Convert a DAG plan to tensors for training."""
+    depth: int | None = None,
+    allowed_operations: list[str] | None = None,
+) -> dict[str, torch.Tensor]:
+    """Convert a DAG plan to structure tensors for training."""
     # Convert initial values to signs and digit one-hots
     signs = torch.tensor([1.0 if v >= 0.0 else -1.0 for v in initial_values])
 
@@ -436,36 +438,87 @@ def plan_to_tensors(
 
     # Convert operations to one-hot encoded tensors
     operation_to_index = {op: i for i, op in enumerate(OP_NAMES)}
-    depth = len(operations)
-    operations_one_hot = torch.zeros(depth, len(OP_NAMES))
+    op_depth = len(operations)
+    operations_one_hot = torch.zeros(op_depth, len(OP_NAMES))
 
     for i, op in enumerate(operations):
         op_idx = operation_to_index[op]
         operations_one_hot[i, op_idx] = 1.0
 
-    final_value_exec = None
-    if execute:
-        with torch.no_grad():
-            # Use double precision during reference execution to minimize numerical errors
-            sign_tensor = signs.view(1, 1, -1).to(torch.float64)
-            digit_probs = digits_tensor.unsqueeze(0).unsqueeze(0).to(torch.float64)
-            op_probs = operations_one_hot.unsqueeze(0).unsqueeze(0).to(torch.float64)
+    # Execute the DAG to get the final value
+    with torch.no_grad():
+        # Use double precision during reference execution to minimize numerical errors
+        sign_tensor = signs.view(1, 1, -1).to(torch.float64)
+        digit_probs = digits_tensor.unsqueeze(0).unsqueeze(0).to(torch.float64)
+        op_probs = operations_one_hot.unsqueeze(0).unsqueeze(0).to(torch.float64)
 
-            final_sgn, final_log = execute_stack(
-                sign_tensor,
-                digit_probs,
-                op_probs,
-                max_digits=max_digits,
-                max_decimal_places=max_decimal_places,
-                ignore_clip=True,
-            )
+        final_sgn, final_log = execute_stack(
+            sign_tensor,
+            digit_probs,
+            op_probs,
+            max_digits=max_digits,
+            max_decimal_places=max_decimal_places,
+            ignore_clip=True,
+        )
 
-            final_value_exec = (
-                final_sgn
-                * torch.pow(torch.tensor(10.0, dtype=final_log.dtype), final_log)
-            ).item()
+        final_value_exec = (
+            final_sgn * torch.pow(torch.tensor(10.0, dtype=final_log.dtype), final_log)
+        ).item()
 
-    return signs, digits_tensor, operations_one_hot, final_value_exec
+    # Return structure dict format for predictor training
+    if depth is None:
+        depth = len(operations)
+
+    num_scratch_nodes = depth + 1  # Following DAG model convention
+
+    # Create padded initial values tensors
+    initial_sgn = torch.zeros(num_scratch_nodes)
+    initial_log = torch.zeros(num_scratch_nodes)
+    digits_template = torch.zeros(
+        num_scratch_nodes, max_digits + max_decimal_places, 10
+    )
+
+    # Fill tensors from the computed values up to the available nodes
+    copy_len = min(len(signs), num_scratch_nodes)
+    initial_sgn[:copy_len] = signs[:copy_len]
+    digits_template[:copy_len] = digits_tensor[:copy_len]
+
+    # Compute log magnitudes (natural log) on-the-fly
+    for i in range(copy_len):
+        v = abs(initial_values[i]) if initial_values[i] != 0 else 1e-6
+        log_val = math.log(v)
+        # Clip to LOG_LIM for safety
+        log_val = max(min(log_val, LOG_LIM), -LOG_LIM)
+        initial_log[i] = log_val
+
+    # Pad or trim the operation tensor so that it always has *depth* rows
+    operation_probs = torch.zeros(depth, len(OP_NAMES))
+    rows_to_copy = min(op_depth, depth)
+    operation_probs[:rows_to_copy] = operations_one_hot[:rows_to_copy]
+
+    # For rows beyond the generated length, explicitly mark them as identity
+    identity_idx = OP_NAMES.index("identity")
+    if rows_to_copy < depth:
+        operation_probs[rows_to_copy:, identity_idx] = 1.0
+
+    # Filter allowed operations if specified
+    if allowed_operations is not None:
+        allowed_op_indices = [OP_NAMES.index(op) for op in allowed_operations]
+        disallowed_idx = [
+            i for i in range(len(OP_NAMES)) if i not in allowed_op_indices
+        ]
+        if disallowed_idx:
+            operation_probs[:, disallowed_idx] = 0.0
+
+    return {
+        "initial_sgn": initial_sgn,
+        "initial_log": initial_log,
+        "initial_digits": digits_template,
+        "operation_probs": operation_probs,
+        "depth": torch.tensor(depth, dtype=torch.long),
+        "operations": operations_one_hot,  # keep original for debugging
+        "final_value_exec": torch.tensor(final_value_exec, dtype=torch.float32),
+    }
 
 
 def tensors_to_plan(
@@ -528,7 +581,7 @@ def generate_single_dag_example(
     max_digits: int = 4,
     max_decimal_places: int = 6,
     allowed_operations: list[str] | None = None,
-    execute: bool = True,
+    execute_sympy: bool = True,
     # Test-only overrides – callers should provide **both** or **neither**
     _operations_override: list[str] | None = None,
     _initial_values_override: list[float] | None = None,
@@ -557,7 +610,7 @@ def generate_single_dag_example(
         expression_expansion_probability=expression_expansion_probability,
         override_initial_values=_initial_values_override,
         override_operations=_operations_override,
-        execute=execute,
+        execute_sympy=execute_sympy,
     )
 
     text = _expression_to_text(
@@ -568,34 +621,37 @@ def generate_single_dag_example(
         integer_no_decimal_probability=integer_no_decimal_probability,
         max_decimal_places=max_decimal_places,
     )
-    signs, digits_tensor, operations_tensor, final_value_exec = plan_to_tensors(
+    # Use plan_to_tensors to get the structure dict directly
+    structure_dict = plan_to_tensors(
         initial_values=initial_values,
         operations=operations,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
-        execute=execute,
+        depth=depth,
+        allowed_operations=allowed_operations,
     )
 
     example = DAGExample(
         text=text,
         depth=depth,
         initial_values=initial_values,
-        signs=signs,
-        digits=digits_tensor,
-        operations=operations_tensor,
+        structure_dict=structure_dict,
+        signs=structure_dict["initial_sgn"],
+        digits=structure_dict["initial_digits"],
+        operations=structure_dict["operation_probs"],
+        final_value_exec=structure_dict["final_value_exec"].item(),
         operations_named=operations,
         seed=seed,
         did_expand=did_expand,
         did_simplify=did_simplify,
         final_value_sympy=final_value_sympy,
-        final_value_exec=final_value_exec,
         allowed_operations=allowed_operations,
         expr=sym_expr,
     )
 
     if (
         not is_complex
-        and execute
+        and execute_sympy
         and not math.isclose(
             example.final_value_exec,
             example.final_value_sympy,
@@ -675,116 +731,6 @@ class DAGStructureDataset:
         self.op_name_to_idx = {name: i for i, name in enumerate(OP_NAMES)}
         self.op_idx_to_name = {i: name for i, name in enumerate(OP_NAMES)}
 
-    def generate_structure_example(
-        self,
-        depth: int,
-        seed: int = 42,
-        execute: bool = True,
-    ) -> Tuple[
-        str, Dict[str, torch.Tensor] | Tuple[str, Dict[str, torch.Tensor], "DAGExample"]
-    ]:
-        """Generate a single (text, structure) pair.
-
-        Args:
-            depth: DAG depth for this example
-
-        Returns:
-            Tuple of (text_description, structure_tensors)
-        """
-        # Generate a random state using the data loader seed
-        # Generate the DAG example (structure-only, no execution needed)
-        example = generate_single_dag_example(
-            depth=depth,
-            num_initial_values=self.num_initial_values,
-            seed=seed + self.num_generated,
-            english_conversion_probability=self.english_conversion_probability,
-            integer_no_decimal_probability=self.integer_no_decimal_probability,
-            expression_simplification_probability=self.expression_simplification_probability,
-            expression_expansion_probability=self.expression_expansion_probability,
-            max_digits=self.max_digits,
-            max_decimal_places=self.max_decimal_places,
-            allowed_operations=self.allowed_operations,
-            execute=execute,
-        )
-
-        self.num_generated += 1
-        # Extract text
-        text = example.text
-
-        # Create structure tensors
-        structure = self._create_structure_tensors(example)
-
-        return text, structure, example
-
-    def _create_structure_tensors(self, example: DAGExample) -> Dict[str, torch.Tensor]:
-        """Convert DAG example to structure tensors matching DAGPlanPredictor format.
-
-        Args:
-            example: DAG computation example
-
-        Returns:
-            Dictionary with structure tensors
-        """
-        depth = example.depth
-        num_scratch_nodes = depth + 1  # Following DAG model convention
-
-        # Create initial values tensors
-        initial_sgn = torch.zeros(num_scratch_nodes)
-        # digits tensor shape (num_nodes, D, 10)
-        digits_template = torch.zeros_like(example.digits)
-        # log-magnitude tensor (consistent with historical interface)
-        initial_log = torch.zeros(num_scratch_nodes)
-
-        # Fill tensors from the example up to the available nodes
-        signs_tensor = example.signs
-        digits_tensor = example.digits
-        copy_len = min(len(signs_tensor), num_scratch_nodes)
-
-        initial_sgn[:copy_len] = signs_tensor[:copy_len]
-        digits_template[:copy_len] = digits_tensor[:copy_len]
-
-        # Compute log magnitudes (natural log) on-the-fly
-        for i in range(copy_len):
-            v = (
-                abs(example.initial_values[i])
-                if example.initial_values[i] != 0
-                else 1e-6
-            )
-            log_val = math.log(v)
-            # Clip to LOG_LIM for safety
-            log_val = max(min(log_val, LOG_LIM), -LOG_LIM)
-            initial_log[i] = log_val
-
-        # Pad or trim the example's operation tensor so that it always has
-        # *depth* rows.  This guarantees consistent tensor shapes downstream
-        # even when an early identity truncates the plan length.
-
-        op_len = example.operations.shape[0]
-        operation_probs = torch.zeros(depth, len(OP_NAMES))
-        rows_to_copy = min(op_len, depth)
-        operation_probs[:rows_to_copy] = example.operations[:rows_to_copy]
-
-        # For rows beyond the generated length, explicitly mark them as identity
-        identity_idx = OP_NAMES.index("identity")
-        if rows_to_copy < depth:
-            operation_probs[rows_to_copy:, identity_idx] = 1.0
-
-        if self.allowed_operations is not None:
-            disallowed_idx = [
-                i for i in range(len(OP_NAMES)) if i not in self.allowed_op_indices
-            ]
-            if disallowed_idx:
-                operation_probs[:, disallowed_idx] = 0.0
-
-        return {
-            "initial_sgn": initial_sgn,
-            "initial_log": initial_log,
-            "initial_digits": digits_template,
-            "operation_probs": operation_probs,
-            "depth": torch.tensor(depth, dtype=torch.long),
-            "operations": example.operations,  # raw list (for debugging)
-        }
-
     def generate_batch(
         self, batch_size: int, seed: int = 42
     ) -> Tuple[List[str], Dict[str, torch.Tensor], List["DAGExample"]]:
@@ -805,26 +751,41 @@ class DAGStructureDataset:
             # The identity function allows us to handle cases with effective depth < max_depth naturally
             depth = self.max_depth
 
-            # Generate example
-            text, structure, example = self.generate_structure_example(
-                depth, seed=seed + i, execute=False
+            # Generate example directly with structure tensors
+            example = generate_single_dag_example(
+                depth=depth,
+                num_initial_values=self.num_initial_values,
+                seed=seed + self.num_generated + i,
+                english_conversion_probability=self.english_conversion_probability,
+                integer_no_decimal_probability=self.integer_no_decimal_probability,
+                expression_simplification_probability=self.expression_simplification_probability,
+                expression_expansion_probability=self.expression_expansion_probability,
+                max_digits=self.max_digits,
+                max_decimal_places=self.max_decimal_places,
+                allowed_operations=self.allowed_operations,
+                execute_sympy=False,
             )
-            texts.append(text)
-            structures.append(structure)
+
+            texts.append(example.text)
+            structures.append(example.structure_dict)
             examples.append(example)
 
+        # Update generation counter
+        self.num_generated += batch_size
+
         # Batch the structure tensors
-        batched_structure = self._batch_structures(structures)
+        batched_structure = self._batch_structures(structures, examples)
 
         return texts, batched_structure, examples
 
     def _batch_structures(
-        self, structures: List[Dict[str, torch.Tensor]]
+        self, structures: List[Dict[str, torch.Tensor]], examples: List["DAGExample"]
     ) -> Dict[str, torch.Tensor]:
         """Batch structure tensors with proper padding.
 
         Args:
             structures: List of structure dictionaries
+            examples: List of DAGExample objects for extracting target values
 
         Returns:
             Batched structure tensors
@@ -841,8 +802,12 @@ class DAGStructureDataset:
         batched_operation_probs = torch.zeros(batch_size, max_depth, len(OP_NAMES))
         batched_depths = torch.zeros(batch_size, dtype=torch.long)
 
+        # Initialize target tensors for the new loss terms
+        batched_target_initial_values = torch.zeros(batch_size, max_nodes)
+        batched_target_final_exec = torch.zeros(batch_size)
+
         # Fill batched tensors
-        for i, structure in enumerate(structures):
+        for i, (structure, example) in enumerate(zip(structures, examples)):
             depth = structure["depth"].item()
             nodes = depth + 1
 
@@ -857,12 +822,26 @@ class DAGStructureDataset:
             # Store depth
             batched_depths[i] = depth
 
+            # Extract target initial values from example
+            num_values = min(len(example.initial_values), max_nodes)
+            batched_target_initial_values[i, :num_values] = torch.tensor(
+                example.initial_values[:num_values], dtype=torch.float32
+            )
+
+            # Extract target final execution value from example
+            if example.final_value_exec is not None:
+                batched_target_final_exec[i] = torch.tensor(
+                    example.final_value_exec, dtype=torch.float32
+                )
+
         return {
             "initial_sgn": batched_initial_sgn,
             "initial_log": batched_initial_log,
             "initial_digits": batched_initial_digits,
             "operation_probs": batched_operation_probs,
             "depths": batched_depths,
+            "target_initial_values": batched_target_initial_values,
+            "target_final_exec": batched_target_final_exec,
         }
 
     def create_dataloader(

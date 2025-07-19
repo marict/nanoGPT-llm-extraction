@@ -40,6 +40,8 @@ def _empty_metrics() -> dict[str, float]:
         "sign_loss": 0.0,
         "digit_loss": 0.0,
         "op_loss": 0.0,
+        "value_loss": 0.0,  # MSE loss on initial values
+        "exec_loss": 0.0,  # MSE loss on final execution values
         "op_accuracy": 0.0,
         "full_dag_op_match": 0.0,
         "sign_accuracy": 0.0,
@@ -438,6 +440,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
             target_sgn = structures["initial_sgn"].to(device)
             target_digits = structures["initial_digits"].to(device)
             target_ops = structures["operation_probs"].to(device)
+            target_initial_values = structures["target_initial_values"].to(device)
+            target_final_exec = structures["target_final_exec"].to(device)
 
             loss_accum = _empty_metrics()
 
@@ -527,6 +531,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     target_digits_seq = target_digits.unsqueeze(1)
                     target_ops_seq = target_ops.unsqueeze(1)
 
+                    # Add sequence dimension to new target values
+                    target_initial_values_seq = target_initial_values.unsqueeze(1)
+                    target_final_exec_seq = target_final_exec.unsqueeze(1)
+
                     # Compute loss
                     losses = compute_dag_structure_loss(
                         pred_sgn_seq,
@@ -536,6 +544,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         target_digits_seq,
                         target_ops_seq,
                         cfg,
+                        target_initial_values=target_initial_values_seq,
+                        target_final_exec=target_final_exec_seq,
                     )
 
                     loss = losses["total_loss"] / cfg.gradient_accumulation_steps
