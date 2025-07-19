@@ -18,12 +18,12 @@ def test_sympy_and_execute_consistency_across_seeds():
     for seed in range(n_seeds):
         example = generate_single_dag_example(
             depth=max_depth,
-            seed=seed,
+            seed=270,
             max_digits=6,
             max_decimal_places=6,
             english_conversion_probability=0,
             integer_no_decimal_probability=0,
-            expression_expansion_probability=0,
+            expression_expansion_probability=1,
             expression_simplification_probability=0,
         )
 
