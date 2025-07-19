@@ -34,7 +34,7 @@ def test_sympy_and_execute_consistency_across_seeds():
         assert math.isfinite(sym_val)
         assert math.isfinite(exec_val)
 
-        # They should match closely (exact equality aside from fp rounding).
+        # They should match closely (exact equality aside from fp rounding). Note that we have to have pretty relaxed tolerances due to the DAG model's fp precision.
         assert math.isclose(
             exec_val, sym_val, rel_tol=1e-3, abs_tol=1e-3
         ), f"Seed {seed}: SymPy {sym_val} vs execute_stack {exec_val} differ too much"
