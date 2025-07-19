@@ -416,6 +416,10 @@ def evaluate_dag_model(
                     print(f"Text: {sample_text}")
                     print(f"Did expand: {did_expand}")
                     print(f"Did simplify: {did_simplify}")
+                    print(f"Sympy execution value: {sample_obj.final_value_sympy}")
+                    print(
+                        f"Execute stack execution value: {sample_obj.final_value_exec}"
+                    )
                     # Print number of tokens in the sample text to check context length
                     enc = get_encoding("gpt2")
                     token_count = len(enc.encode_ordinary(sample_text))

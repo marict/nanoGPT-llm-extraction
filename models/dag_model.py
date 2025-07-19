@@ -329,22 +329,15 @@ def subtract_log_space(
     return s_out, l_out
 
 
-def identity_log_space(
-    sx: torch.Tensor,
-    lx: torch.Tensor,
-    sy: torch.Tensor,
-    ly: torch.Tensor,
+def identity_log_space(  # Return the second operand, discard the first operand
+    sx: torch.Tensor,  # Second operand
+    lx: torch.Tensor,  # Second operand
+    sy: torch.Tensor,  # First operand
+    ly: torch.Tensor,  # First operand
     ignore_clip: bool = False,
 ):
-    """Identity operation for stack execution.
-
-    Behaviour: keep the *top* (``y``) and discard the *second* (``x``). The
-    most recent computation result always resides at the top of the stack. By
-    returning ``y`` unchanged we ensure that inserting identity operations
-    (e.g. as padding to reach a fixed DAG depth) leaves the running result
-    unaffected.
-    """
-    return sy, ly
+    """Identity operation for stack execution."""
+    return sx, lx
 
 
 # For DAG execution, we may use a subset of the operations
@@ -604,7 +597,10 @@ def execute_stack(
         signed–log₁₀ space.
     """
 
-    # *initial_sgn* already provided in [-1,1]
+    if max_digits + max_decimal_places != digit_probs.shape[3]:
+        raise RuntimeError(
+            f"max_digits + max_decimal_places ({max_digits + max_decimal_places}) must match digit_probs.shape[3]: ({digit_probs.shape[3]})"
+        )
 
     # ------------------------------------------------------------------
     # Digit probabilities tensor must be 5-D: (B, T, N, D, 10)
@@ -634,10 +630,6 @@ def execute_stack(
 
     value_abs = (expected_digits * weights).sum(-1).clamp_min(1e-6)  # (B,T,N)
     initial_log = torch.log(value_abs) / math.log(10.0)
-
-    # ------------------------------------------------------------------
-    # Numerical stack execution (formerly _execute_stack_core)
-    # ------------------------------------------------------------------
 
     B, T, num_initial = initial_sgn.shape
     depth = ops.shape[2]
@@ -674,12 +666,14 @@ def execute_stack(
         top_log = buffer_log[..., current_size - 1]
         second_log = buffer_log[..., current_size - 2]
 
+        # Apply the operation in Reverse Polish Notation
+        # Ex. ['add','identity'] will apply identity operation first, and then add
         result_sgn, result_log = apply_op(
             second_sgn,
             second_log,
             top_sgn,
             top_log,
-            ops[:, :, step],
+            ops[:, :, depth - 1 - step],
             ignore_clip=ignore_clip,
         )
 

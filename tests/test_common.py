@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from dag_logger import DAGLogger
+from data.dagset.streaming import plan_to_tensors, tensors_to_plan
 from models.dag_model import GPT, GPTConfig
 
 # Set random seeds for reproducible tests

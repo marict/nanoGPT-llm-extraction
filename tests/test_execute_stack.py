@@ -12,8 +12,6 @@ from models.dag_model import LOG_LIM, OP_FUNCS, OP_NAMES, execute_stack
 
 def float_to_digit_onehot(value: float, max_digits: int, max_decimal_places: int):
     """Return (D,10) one-hot tensor for the absolute value of *value*."""
-    import math
-
     import torch
 
     limit = 10**max_digits - 10 ** (-max_decimal_places)
