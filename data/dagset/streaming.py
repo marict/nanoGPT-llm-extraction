@@ -4,21 +4,17 @@ streaming.py
 On-the-fly DAG dataset generation for training.
 """
 
-import io
 import logging
 import math
 import random
 import re
 import sys
-import tokenize
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Dict, Iterator, List, Tuple
 
 import sympy
 import torch
-from num2words import num2words
 from sympy import im
 from sympy.printing.str import StrPrinter
 from tiktoken import get_encoding
@@ -41,23 +37,8 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from models.dag_model import LOG_LIM, OP_NAMES
 
-
-def convert_number_to_english(number: float, max_decimal_places: int = 6) -> str:
-    """Convert *number* to its English word equivalent using *num2words*.
-
-    The value is first rounded (half-up) to *max_decimal_places* decimal digits to
-    avoid extremely long fractional strings, then converted.  Negatives are
-    rendered with the "negative" prefix to preserve the previous output style.
-    """
-
-    # Quantise using Decimal to avoid floating-point surprises (e.g. 0.1+0.2)
-    quantised = Decimal(str(number)).quantize(
-        Decimal(10) ** -max_decimal_places, rounding=ROUND_HALF_UP
-    )
-
-    words = num2words(abs(quantised))
-    return f"negative {words}" if quantised < 0 else words
-
+# Import the convert function for backward compatibility
+from .expression_formatter import convert_number_to_english
 
 # --------------------------------------------------------------------------- #
 # Helper utilities
@@ -88,65 +69,15 @@ def format_expression_string(
     seed: int = 42,
     max_decimal_places: int = 6,
 ) -> str:
-    """Pretty-print *expression* with optional English replacements.
+    """Converts a string representation of an arithmetic expression into english.
 
-    The built-in *tokenize* module is used for lexing, which eliminates the
-    bespoke scanner and correctly handles numbers, parentheses and operator
-    tokens (including disambiguating unary minus).
+    Ex. "-1.2 + (5 / 3)" to a string of the form "negative one point two plus five divided by three"
     """
+    from .expression_formatter import format_expression_string as _format_expr
 
-    rng = random.Random(seed)
-
-    # Operator → english synonyms
-    symbol_to_english = {
-        "+": ["plus", "added to"],
-        "-": ["minus", "subtract", "less"],
-        "*": ["times", "multiplied by", "times"],
-        "/": ["divided by", "over", "divide by"],
-    }
-
-    converted: list[str] = []
-
-    for tok_type, tok_str, *_ in tokenize.generate_tokens(
-        io.StringIO(expression).readline
-    ):
-        if tok_type == tokenize.ENDMARKER:
-            break
-
-        # ------------------------------------------------------------------
-        # 1. Numeric literals
-        # ------------------------------------------------------------------
-        if tok_type == tokenize.NUMBER:
-            if rng.random() < english_conversion_probability:
-                # Convert to int where possible for nicer wording ("three" vs "three point zero")
-                try:
-                    val = int(tok_str)
-                except ValueError:
-                    val = float(tok_str)
-                converted.append(convert_number_to_english(val, max_decimal_places))
-            else:
-                converted.append(tok_str)
-            continue
-
-        # ------------------------------------------------------------------
-        # 2. Operators (including parentheses)
-        # ------------------------------------------------------------------
-        if tok_type == tokenize.OP:
-            if (
-                tok_str in symbol_to_english
-                and rng.random() < english_conversion_probability
-            ):
-                converted.append(rng.choice(symbol_to_english[tok_str]))
-            else:
-                converted.append(tok_str)
-            continue
-
-        # ------------------------------------------------------------------
-        # 3. Everything else (identifiers, whitespace, etc.)
-        # ------------------------------------------------------------------
-        converted.append(tok_str)
-
-    return " ".join(converted).strip()
+    return _format_expr(
+        expression, english_conversion_probability, seed, max_decimal_places
+    )
 
 
 @dataclass

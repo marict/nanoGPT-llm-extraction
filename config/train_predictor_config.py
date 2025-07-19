@@ -13,7 +13,9 @@ clear_previous_checkpoints = False
 reload_reset_iters = True
 
 # Model initialization
-init_from = "/runpod-volume/checkpoints/fsuecj60uipdwg-fixpermuteandsimplify/ckpt_predictor_pretrain.pt"
+init_from = (
+    "/runpod-volume/checkpoints/r268bgx1d4ngla-sympyrefactor/ckpt_predictor_pretrain.pt"
+)
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
