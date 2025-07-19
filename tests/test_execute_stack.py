@@ -126,7 +126,6 @@ def test_single_op_correctness(op_name):
 
     # Apply the same soft_zero logic that run_execute_stack uses
     max_digits, max_decimal_places = 4, 6
-    from models.dag_model import MIN_CLAMP
 
     soft_zero = max_digits + max_decimal_places - math.log10(MIN_CLAMP)
     if ref_log - soft_zero < 1e-6:
