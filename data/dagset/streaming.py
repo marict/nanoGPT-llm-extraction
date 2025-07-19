@@ -7,7 +7,6 @@ On-the-fly DAG dataset generation for training.
 import logging
 import math
 import random
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,47 +36,11 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from models.dag_model import LOG_LIM, OP_NAMES
 
-# Import the convert function for backward compatibility
-from .expression_formatter import convert_number_to_english
+from .expression_to_string import format_expression_string
 
 # --------------------------------------------------------------------------- #
 # Helper utilities
 # --------------------------------------------------------------------------- #
-
-
-def number_to_string(
-    num: float,
-    rng: random.Random,
-    integer_no_decimal_probability: float = 0.0,
-) -> str:
-    """Return a compact human-readable string for *num*."""
-
-    # Handle integer case with optional probability to drop ".0"
-    if float(num).is_integer():
-        if rng.random() < integer_no_decimal_probability:
-            return f"{int(num)}"
-        return f"{int(num)}.0"
-
-    # For non-integers fall back to a general format that trims needless zeros
-    # while keeping enough precision to round-trip typical binary64 floats.
-    return format(num, ".15g")
-
-
-def format_expression_string(
-    expression: str,
-    english_conversion_probability: float = 0.0,
-    seed: int = 42,
-    max_decimal_places: int = 6,
-) -> str:
-    """Converts a string representation of an arithmetic expression into english.
-
-    Ex. "-1.2 + (5 / 3)" to a string of the form "negative one point two plus five divided by three"
-    """
-    from .expression_formatter import format_expression_string as _format_expr
-
-    return _format_expr(
-        expression, english_conversion_probability, seed, max_decimal_places
-    )
 
 
 @dataclass
@@ -330,43 +293,6 @@ def _generate_expression(
     )
 
 
-def _expression_to_text(
-    *,
-    expr: sympy.Basic,
-    initial_values: list[float],
-    seed: int,
-    english_conversion_probability: float,
-    integer_no_decimal_probability: float,
-    max_decimal_places: int,
-) -> str:
-    """Convert *expr* into a pretty-printed, optionally English-augmented string."""
-    expr_str = sympy.sstr(expr)
-
-    # Replace placeholders with formatted numbers
-    rng_int = random.Random(seed + 12345)
-
-    for idx, val in enumerate(initial_values):
-        placeholder = f"VAL_{idx}"
-        formatted_abs = number_to_string(
-            abs(val),
-            rng=rng_int,
-            integer_no_decimal_probability=integer_no_decimal_probability,
-        )
-        replacement = formatted_abs if val >= 0 else f"-{formatted_abs}"
-        expr_str = expr_str.replace(placeholder, replacement)
-
-    # Collapse spaces that might appear inside numeric literals
-    expr_str = re.sub(r"\s+", "", expr_str)
-
-    # Final English / spacing formatting
-    return format_expression_string(
-        expr_str,
-        english_conversion_probability,
-        seed,
-        max_decimal_places,
-    )
-
-
 def float_to_digit_onehot(
     value: float, max_digits: int, max_decimal_places: int
 ) -> torch.Tensor:
@@ -613,8 +539,8 @@ def generate_single_dag_example(
         execute_sympy=execute_sympy,
     )
 
-    text = _expression_to_text(
-        expr=sym_expr,
+    text = format_expression_string(
+        expression=sym_expr,
         initial_values=initial_values,
         seed=seed,
         english_conversion_probability=english_conversion_probability,

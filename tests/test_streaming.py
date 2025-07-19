@@ -4,11 +4,12 @@ import pytest
 import sympy
 import torch
 
+from data.dagset.expression_to_string import (convert_number_to_english,
+                                              format_expression_string,
+                                              number_to_string)
 from data.dagset.streaming import (DAGStructureDataset, _apply_sympy_op,
-                                   convert_number_to_english,
-                                   format_expression_string,
                                    generate_single_dag_example,
-                                   number_to_string, plan_to_tensors)
+                                   plan_to_tensors)
 from models.dag_model import OP_NAMES
 
 
