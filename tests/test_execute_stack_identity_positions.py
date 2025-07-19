@@ -38,7 +38,7 @@ def test_identity_operations(test_case):
     initial_values, operations, expected = test_case
 
     # Convert plan to tensors using existing helper
-    signs, digits, ops = plan_to_tensors(
+    signs, digits, ops, final_value_exec = plan_to_tensors(
         initial_values=initial_values,
         operations=operations,
         max_digits=2,

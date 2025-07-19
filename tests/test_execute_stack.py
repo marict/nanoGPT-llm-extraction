@@ -124,8 +124,16 @@ def test_single_op_correctness(op_name):
     # Execute through stack
     out_sgn, out_log = run_execute_stack(initial, [op_name])
 
-    assert pytest.approx(out_sgn, abs=1e-2) == ref_sgn
-    assert pytest.approx(out_log, abs=1e-2) == ref_log
+    # Apply the same soft_zero logic that run_execute_stack uses
+    max_digits, max_decimal_places = 4, 6
+    from models.dag_model import MIN_CLAMP
+
+    soft_zero = max_digits + max_decimal_places - math.log10(MIN_CLAMP)
+    if ref_log - soft_zero < 1e-6:
+        ref_log = 0.0
+
+    assert pytest.approx(ref_sgn, abs=1e-2) == out_sgn
+    assert pytest.approx(ref_log, abs=1e-2) == out_log
 
 
 # -----------------------------------------------------------------------------

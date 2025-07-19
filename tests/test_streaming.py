@@ -96,7 +96,7 @@ def test_float_to_digit_onehot_shape_and_properties():
 def test_plan_to_tensors_shapes():
     init_vals = [1.2, -3.4]
     operations = ["add"]
-    signs, digits_tensor, ops_onehot = plan_to_tensors(
+    signs, digits_tensor, ops_onehot, _ = plan_to_tensors(
         init_vals, operations, max_digits=2, max_decimal_places=2
     )
     assert torch.equal(signs, torch.tensor([1.0, -1.0]))

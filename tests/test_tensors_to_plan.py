@@ -20,7 +20,7 @@ def test_tensors_to_plan_round_trip():
     operations = ["add", "subtract", "multiply", "divide"]
 
     # Convert plan to tensors
-    signs, digits, ops = plan_to_tensors(
+    signs, digits, ops, _ = plan_to_tensors(
         initial_values=initial_values,
         operations=operations,
         max_digits=max_digits,
