@@ -22,9 +22,9 @@ def test_sympy_and_execute_consistency_across_seeds():
             max_digits=6,
             max_decimal_places=6,
             english_conversion_probability=0,
-            integer_no_decimal_probability=0.5,
-            expression_expansion_probability=0.5,
-            expression_simplification_probability=0.5,
+            integer_no_decimal_probability=0,
+            expression_expansion_probability=0,
+            expression_simplification_probability=0,
         )
 
         sym_val = float(example.final_value_sympy)

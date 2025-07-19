@@ -284,7 +284,7 @@ def _generate_expression(
             raise ValueError("override_initial_values must have depth+1 elements")
 
         initial_values = list(override_initial_values)
-        operations = list(override_operations)
+        sym_ops = list(override_operations)
     else:
         expression_size = rng.randint(1, depth + 1)
 
@@ -300,7 +300,7 @@ def _generate_expression(
 
         non_identity_op_pool = [op for op in op_pool if op != "identity"]
 
-        operations = rng.choices(non_identity_op_pool, k=expression_size - 1)
+        sym_ops = rng.choices(non_identity_op_pool, k=expression_size - 1)
 
         initial_values = [
             generate_uniform_digit_number(
@@ -308,16 +308,11 @@ def _generate_expression(
                 max_digits=max_digits,
                 max_decimal_places=max_decimal_places,
             )
-            for i in range(len(operations) + 1)
+            for i in range(len(sym_ops) + 1)
         ]
 
-        # Ensure we never divide by zero under the current stack evaluation semantics and catch identity operations.
-        for i, op in enumerate(operations):
-            if op == "multiply":
-                # If second value is 0, then we can discard the top and replace with 0
-                if initial_values[i] == 0.0:
-                    operations[i] = "identity"
-
+        # Ensure we never divide by zero under the current stack evaluation semantics.
+        for i, op in enumerate(sym_ops):
             if op == "divide":
                 denom_index = i + 1
                 if initial_values[denom_index] == 0.0:
@@ -328,6 +323,19 @@ def _generate_expression(
                         allow_zero=False,
                     )
 
+        # We swap some operations with identity to play better with the DAG model, but this is not compatible with sympy.
+        operations = [op for op in sym_ops]
+        for i, op in enumerate(operations):
+            if op == "multiply":
+                # If second value is 0, then we can discard the top and replace with 0
+                if initial_values[i] == 0.0:
+                    operations[i] = "identity"
+
+            if op == "divide":
+                num_index = i
+                if initial_values[num_index] == 0.0:
+                    operations[num_index] = "identity"
+
     # ------------------------------------------------------------------
     # 2. Build SymPy expression from leaves + operations
     # ------------------------------------------------------------------
@@ -337,7 +345,7 @@ def _generate_expression(
     ops_map: dict[sympy.Basic, str] = {}
 
     # Apply the operations in Reverse Polish Notation
-    for op_name in reversed(operations):
+    for op_name in reversed(sym_ops):
         top = nodes.pop()
         second = nodes.pop()
         expr = _apply_sympy_op(op_name, second, top)

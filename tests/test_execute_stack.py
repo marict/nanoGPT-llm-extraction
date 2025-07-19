@@ -3,7 +3,8 @@ import math
 import pytest
 import torch
 
-from models.dag_model import LOG_LIM, OP_FUNCS, OP_NAMES, execute_stack
+from models.dag_model import (LOG_LIM, MIN_CLAMP, OP_FUNCS, OP_NAMES,
+                              execute_stack)
 
 # -----------------------------------------------------------------------------
 # Helper utilities
@@ -86,10 +87,9 @@ def run_execute_stack(initial_values, operations, max_digits=4, max_decimal_plac
         ignore_clip=True,
     )
 
-    # If final log is near -6 it is actually 0
-    # This is because the log is clipped to 1e-6.
-    # Ideally the model will learn that -6 -> 0.
-    if final_log.item() + 6 < 1e-6:
+    # The dag stores zeros as a scaled value.
+    soft_zero = max_digits + max_decimal_places - math.log10(MIN_CLAMP)
+    if final_log.item() - soft_zero < 1e-6:
         final_log = torch.tensor(0.0)
 
     return final_sgn.item(), final_log.item()

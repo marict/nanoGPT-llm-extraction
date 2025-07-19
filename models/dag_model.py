@@ -124,6 +124,7 @@ class Block(nn.Module):
 
 # Log-space arithmetic utilities
 LOG_LIM = 10.0  # Bound on log-magnitudes to avoid numerical instabilities
+MIN_CLAMP = 1e-6
 
 
 def _clip_log(log_t: torch.Tensor) -> torch.Tensor:
@@ -620,22 +621,21 @@ def execute_stack(
     digits_values = torch.arange(10, device=digit_probs.device, dtype=digit_probs.dtype)
     expected_digits = (digit_probs * digits_values).sum(-1)  # (B,T,N,D)
 
-    # Positional weights: 10^{k}
-    # Use floating point base to ensure negative exponents produce fractional weights
-    int_weights = 10.0 ** torch.arange(
-        max_digits - 1, -1, -1, device=digit_probs.device, dtype=digit_probs.dtype
-    )
-    frac_weights = 10.0 ** torch.arange(
+    # Convert expected digits to log magnitude
+    # for operations.
+    powers = torch.arange(
+        max_digits + max_decimal_places - 1,
         -1,
-        -max_decimal_places - 1,
         -1,
         device=digit_probs.device,
         dtype=digit_probs.dtype,
     )
-    weights = torch.cat((int_weights, frac_weights))  # (D,)
-
-    value_abs = (expected_digits * weights).sum(-1).clamp_min(1e-6)  # (B,T,N)
-    initial_log = torch.log(value_abs) / math.log(10.0)
+    # Non-negative exponents for mantissa
+    mantissa = (expected_digits * (10.0**powers)).sum(-1)  # (B,T,N)
+    # Separate fixed scale (constant)
+    scale = max_decimal_places
+    mantissa = mantissa.clamp_min(MIN_CLAMP)
+    initial_log = torch.log10(mantissa) - scale
 
     B, T, num_initial = initial_sgn.shape
     depth = ops.shape[2]
