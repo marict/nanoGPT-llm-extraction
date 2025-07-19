@@ -353,9 +353,9 @@ def _generate_expression(
     # Check if result is complex (nonzero imaginary part)
     if im(final_value) != 0:
         logging.warning(
-            f"Generated complex expression,sym_expr: {sym_expr}, initial_values: {initial_values}, seed: {seed}, regenerating..."
+            f"Generated complex expression, sym_expr: {sym_expr}, initial_values: {initial_values}, seed: {seed}, regenerating..."
         )
-        return False, False, False, False, False, False
+        return None, None, None, None, None, None
 
     # We swap some operations with identity to play better with the DAG model, but this is not compatible with sympy.
     operations = [op for op in sym_ops]
