@@ -353,7 +353,7 @@ def _generate_expression(
     # Check if result is complex (nonzero imaginary part)
     if im(final_value) != 0:
         logging.warning(
-            f"Final value is complex: {final_value}, sym_expr: {sym_expr}, initial_values: {initial_values}, operations: {operations}, seed: {seed}, regenerating..."
+            f"Generated complex expression,sym_expr: {sym_expr}, initial_values: {initial_values}, seed: {seed}, regenerating..."
         )
         return False, False, False, False, False, False
 
