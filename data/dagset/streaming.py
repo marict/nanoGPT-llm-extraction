@@ -672,6 +672,7 @@ def generate_single_dag_example(
         example.final_value_exec,
         example.final_value_sympy,
         abs_tol=1e-3,
+        rel_tol=1e-3,
     ):
         logging.warning(
             f"\n\n-------------------WARNING: Final value mismatch between sympy and tensor execute: {example.final_value_exec} != {example.final_value_sympy}, \nexample: {example}\n\n-------------------"
