@@ -341,6 +341,7 @@ def evaluate_dag_model(
                     tgt_ops_seq,
                     max_digits=cfg.max_digits,
                     max_decimal_places=cfg.max_decimal_places,
+                    ignore_clip=True,
                 )
 
                 pred_final_sgn, pred_final_log = execute_stack(
@@ -349,6 +350,7 @@ def evaluate_dag_model(
                     pred_ops,
                     max_digits=cfg.max_digits,
                     max_decimal_places=cfg.max_decimal_places,
+                    ignore_clip=True,
                 )
 
                 # Convert to real numbers

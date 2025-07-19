@@ -265,7 +265,8 @@ def _generate_expression(
     expression_expansion_probability: float,
     override_initial_values: list[float] | None = None,
     override_operations: list[str] | None = None,
-) -> tuple[sympy.Basic, list[float], list[str], bool, bool]:
+    execute: bool = True,
+) -> tuple[sympy.Basic, list[float], list[str], bool, bool, bool]:
     """Create a random SymPy expression of exactly *depth* operations.
 
     Returns (expr, initial_values, operations, did_simplify, did_expand).
@@ -346,16 +347,14 @@ def _generate_expression(
     assert len(nodes) == 1
     sym_expr: sympy.Basic = nodes[0]
 
-    # Execute the sympy expression and store the final value for validation purposes.
-    value_map = {symbols[i]: initial_values[i] for i in range(len(initial_values))}
-    final_value = sympy.N(sym_expr.subs(value_map))
+    is_complex = False
+    final_value = None
+    if execute:
+        # Execute the sympy expression and store the final value for validation purposes.
+        value_map = {symbols[i]: initial_values[i] for i in range(len(initial_values))}
+        final_value = sympy.N(sym_expr.subs(value_map))
 
-    # Check if result is complex (nonzero imaginary part)
-    if im(final_value) != 0:
-        logging.warning(
-            f"Generated complex expression, sym_expr: {sym_expr}, initial_values: {initial_values}, seed: {seed}, regenerating..."
-        )
-        return None, None, None, None, None, None
+        is_complex = im(final_value) != 0
 
     # We swap some operations with identity to play better with the DAG model, but this is not compatible with sympy.
     operations = [op for op in sym_ops]
@@ -388,7 +387,15 @@ def _generate_expression(
         sym_expr = sympy.expand(sym_expr)
         did_expand = True
 
-    return sym_expr, initial_values, operations, final_value, did_simplify, did_expand
+    return (
+        sym_expr,
+        initial_values,
+        operations,
+        final_value,
+        did_simplify,
+        did_expand,
+        is_complex,
+    )
 
 
 def _expression_to_text(
@@ -483,16 +490,9 @@ def plan_to_tensors(
     *,
     max_digits: int,
     max_decimal_places: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Convert a DAG plan to tensors for training.
-
-    Args:
-        initial_values: List of initial values
-        operations: List of operations
-
-    Returns:
-        Tuple of (signs, digits_tensor, operations_one_hot)
-    """
+    execute: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float | None]:
+    """Convert a DAG plan to tensors for training."""
     # Convert initial values to signs and digit one-hots
     signs = torch.tensor([1.0 if v >= 0.0 else -1.0 for v in initial_values])
 
@@ -512,7 +512,29 @@ def plan_to_tensors(
         op_idx = operation_to_index[op]
         operations_one_hot[i, op_idx] = 1.0
 
-    return signs, digits_tensor, operations_one_hot
+    final_value_exec = None
+    if execute:
+        with torch.no_grad():
+            # Use double precision during reference execution to minimize numerical errors
+            sign_tensor = signs.view(1, 1, -1).to(torch.float64)
+            digit_probs = digits_tensor.unsqueeze(0).unsqueeze(0).to(torch.float64)
+            op_probs = operations_one_hot.unsqueeze(0).unsqueeze(0).to(torch.float64)
+
+            final_sgn, final_log = execute_stack(
+                sign_tensor,
+                digit_probs,
+                op_probs,
+                max_digits=max_digits,
+                max_decimal_places=max_decimal_places,
+                ignore_clip=True,
+            )
+
+            final_value_exec = (
+                final_sgn
+                * torch.pow(torch.tensor(10.0, dtype=final_log.dtype), final_log)
+            ).item()
+
+    return signs, digits_tensor, operations_one_hot, final_value_exec
 
 
 def tensors_to_plan(
@@ -575,6 +597,7 @@ def generate_single_dag_example(
     max_digits: int = 4,
     max_decimal_places: int = 6,
     allowed_operations: list[str] | None = None,
+    execute: bool = True,
     # Test-only overrides – callers should provide **both** or **neither**
     _operations_override: list[str] | None = None,
     _initial_values_override: list[float] | None = None,
@@ -585,37 +608,26 @@ def generate_single_dag_example(
         # For DAG with depth n, we need n+1 initial values
         num_initial_values = depth + 1
 
-    # Some expressions are invalid (ex. /0), so we retry a few times.
-    valid = False
-    max_retries = 10  # Prevent infinite loops
-    attempt = 0
-    while not valid and attempt < max_retries:
-        attempt += 1
-        (
-            sym_expr,
-            initial_values,
-            operations,
-            final_value_sympy,
-            did_simplify,
-            did_expand,
-        ) = _generate_expression(
-            depth=depth,
-            seed=seed + attempt,  # Use different seed each time
-            max_digits=max_digits,
-            max_decimal_places=max_decimal_places,
-            allowed_operations=allowed_operations,
-            expression_simplification_probability=expression_simplification_probability,
-            expression_expansion_probability=expression_expansion_probability,
-            override_initial_values=_initial_values_override,
-            override_operations=_operations_override,
-        )
-        if final_value_sympy is not None:
-            valid = True
-
-    if not valid:
-        raise ValueError(
-            f"Failed to generate valid expression after {max_retries} attempts, seed: {seed}"
-        )
+    (
+        sym_expr,
+        initial_values,
+        operations,
+        final_value_sympy,
+        did_simplify,
+        did_expand,
+        is_complex,
+    ) = _generate_expression(
+        depth=depth,
+        seed=seed,
+        max_digits=max_digits,
+        max_decimal_places=max_decimal_places,
+        allowed_operations=allowed_operations,
+        expression_simplification_probability=expression_simplification_probability,
+        expression_expansion_probability=expression_expansion_probability,
+        override_initial_values=_initial_values_override,
+        override_operations=_operations_override,
+        execute=execute,
+    )
 
     text = _expression_to_text(
         expr=sym_expr,
@@ -625,31 +637,13 @@ def generate_single_dag_example(
         integer_no_decimal_probability=integer_no_decimal_probability,
         max_decimal_places=max_decimal_places,
     )
-    signs, digits_tensor, operations_tensor = plan_to_tensors(
+    signs, digits_tensor, operations_tensor, final_value_exec = plan_to_tensors(
         initial_values=initial_values,
         operations=operations,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
+        execute=execute,
     )
-
-    with torch.no_grad():
-        # Use double precision during reference execution to minimize numerical errors
-        sign_tensor = signs.view(1, 1, -1).to(torch.float64)
-        digit_probs = digits_tensor.unsqueeze(0).unsqueeze(0).to(torch.float64)
-        op_probs = operations_tensor.unsqueeze(0).unsqueeze(0).to(torch.float64)
-
-        final_sgn, final_log = execute_stack(
-            sign_tensor,
-            digit_probs,
-            op_probs,
-            max_digits=max_digits,
-            max_decimal_places=max_decimal_places,
-            ignore_clip=True,
-        )
-
-        final_value_exec = (
-            final_sgn * torch.pow(torch.tensor(10.0, dtype=final_log.dtype), final_log)
-        ).item()
 
     example = DAGExample(
         text=text,
@@ -668,11 +662,15 @@ def generate_single_dag_example(
         expr=sym_expr,
     )
 
-    if not math.isclose(
-        example.final_value_exec,
-        example.final_value_sympy,
-        abs_tol=1e-3,
-        rel_tol=1e-3,
+    if (
+        not is_complex
+        and execute
+        and not math.isclose(
+            example.final_value_exec,
+            example.final_value_sympy,
+            abs_tol=1e-3,
+            rel_tol=1e-3,
+        )
     ):
         logging.warning(
             f"\n\n-------------------WARNING: Final value mismatch between sympy and tensor execute: {example.final_value_exec} != {example.final_value_sympy}, \nexample: {example}\n\n-------------------"
@@ -750,6 +748,7 @@ class DAGStructureDataset:
         self,
         depth: int,
         seed: int = 42,
+        execute: bool = True,
     ) -> Tuple[
         str, Dict[str, torch.Tensor] | Tuple[str, Dict[str, torch.Tensor], "DAGExample"]
     ]:
@@ -774,6 +773,7 @@ class DAGStructureDataset:
             max_digits=self.max_digits,
             max_decimal_places=self.max_decimal_places,
             allowed_operations=self.allowed_operations,
+            execute=execute,
         )
 
         self.num_generated += 1
@@ -876,7 +876,7 @@ class DAGStructureDataset:
 
             # Generate example
             text, structure, example = self.generate_structure_example(
-                depth, seed=seed + i
+                depth, seed=seed + i, execute=False
             )
             texts.append(text)
             structures.append(structure)
