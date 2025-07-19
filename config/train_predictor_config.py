@@ -13,7 +13,7 @@ clear_previous_checkpoints = False
 reload_reset_iters = True
 
 # Model initialization
-init_from = "resume"
+init_from = "/runpod-volume/checkpoints/fsuecj60uipdwg-fixpermuteandsimplify/ckpt_predictor_pretrain.pt"
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
@@ -69,7 +69,6 @@ check_nans = False  # Check for NaNs in cloud training
 sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
-# op_names = ["add", "identity"]
 
 # Random seeds
 seed = 42
