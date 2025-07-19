@@ -13,8 +13,6 @@ from models.dag_model import (LOG_LIM, MIN_CLAMP, OP_FUNCS, OP_NAMES,
 
 def float_to_digit_onehot(value: float, max_digits: int, max_decimal_places: int):
     """Return (D,10) one-hot tensor for the absolute value of *value*."""
-    import torch
-
     limit = 10**max_digits - 10 ** (-max_decimal_places)
     abs_val = min(abs(value), limit)
 
@@ -165,10 +163,6 @@ def test_multi_step_correctness():
             raise ValueError(op)
         stack.append(res)
     assert len(stack) == 1
-    expected = stack[0]
-    ref_sign = math.copysign(1.0, expected) if expected != 0 else 0.0
-    ref_log = 0.0 if expected == 0 else math.log10(abs(expected))
-
     out_sgn, out_log = run_execute_stack(initial, operations)
 
     # The RMS-rescaling step intentionally alters magnitudes (and can affect
