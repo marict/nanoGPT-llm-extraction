@@ -14,7 +14,7 @@ reload_reset_iters = True
 
 # Model initialization
 init_from = (
-    "/runpod-volume/checkpoints/r268bgx1d4ngla-sympyrefactor/ckpt_predictor_pretrain.pt"
+    "/runpod-volume/checkpoints/yig7rus81st0dv-better_eng/ckpt_predictor_pretrain.pt"
 )
 
 # Dataset configuration
@@ -71,8 +71,8 @@ check_nans = False  # Check for NaNs in cloud training
 sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
-value_loss_weight = 1.0  # MSE loss on initial values
-exec_loss_weight = 1.0  # MSE loss on final execution values
+value_loss_weight = 1.0
+exec_loss_weight = 0.1
 
 # Random seeds
 seed = 42

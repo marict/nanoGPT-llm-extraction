@@ -31,11 +31,15 @@ def _build_common_tensors(batch: int, seq: int, nodes: int, depth: int):
 
 
 def _dummy_cfg():
-    """Minimal namespace carrying the three loss weights."""
+    """Minimal namespace carrying the loss weights and config parameters."""
     return types.SimpleNamespace(
         sign_loss_weight=0.0,
         digit_loss_weight=1.0,
         op_loss_weight=0.0,
+        value_loss_weight=1.0,
+        exec_loss_weight=1.0,
+        max_digits=4,
+        max_decimal_places=2,
     )
 
 
@@ -52,6 +56,10 @@ def test_digit_shape_match_no_error():
     tgt_digits = _make_one_hot(tgt_digit_idx)
     pred_digits = tgt_digits.clone()
 
+    # Add dummy targets for the new losses
+    target_initial_values = torch.ones(batch, seq, nodes)
+    target_final_exec = torch.ones(batch, seq, 1)
+
     # Should not raise
     compute_dag_structure_loss(
         pred_sgn,
@@ -60,6 +68,8 @@ def test_digit_shape_match_no_error():
         tgt_sgn,
         tgt_digits,
         tgt_ops,
+        target_initial_values,
+        target_final_exec,
         _dummy_cfg(),
     )
 
@@ -80,6 +90,10 @@ def test_digit_shape_mismatch_raises_error():
     pred_digit_idx = torch.randint(0, 10, (batch, seq, nodes, pred_digits_count))
     pred_digits = _make_one_hot(pred_digit_idx)
 
+    # Add dummy targets for the new losses
+    target_initial_values = torch.ones(batch, seq, nodes)
+    target_final_exec = torch.ones(batch, seq, 1)
+
     with pytest.raises(ValueError):
         compute_dag_structure_loss(
             pred_sgn,
@@ -88,5 +102,7 @@ def test_digit_shape_mismatch_raises_error():
             tgt_sgn,
             tgt_digits,
             tgt_ops,
+            target_initial_values,
+            target_final_exec,
             _dummy_cfg(),
         )

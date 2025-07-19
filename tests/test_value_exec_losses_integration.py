@@ -107,12 +107,12 @@ def test_value_exec_losses_with_real_data():
             tgt_sgn.unsqueeze(1),
             tgt_digits.unsqueeze(1),
             tgt_ops.unsqueeze(1),
+            target_initial_values,
+            target_final_exec,
             cfg,
-            target_initial_values=target_initial_values,
-            target_final_exec=target_final_exec,
         )
 
-    # Verify all loss components are present and non-negative
+        # Verify all loss components are present and non-negative
     assert "value_loss" in losses
     assert "exec_loss" in losses
     assert "total_loss" in losses
@@ -288,12 +288,12 @@ def test_zero_weights_exclude_from_total():
             tgt_sgn.unsqueeze(1),
             tgt_digits.unsqueeze(1),
             tgt_ops.unsqueeze(1),
+            target_initial_values,
+            target_final_exec,
             cfg,
-            target_initial_values=target_initial_values,
-            target_final_exec=target_final_exec,
         )
 
-    # Total loss should only include the non-zero weighted losses
+        # Total loss should only include the non-zero weighted losses
     expected_total = (
         cfg.sign_loss_weight * losses["sign_loss"]
         + cfg.digit_loss_weight * losses["digit_loss"]

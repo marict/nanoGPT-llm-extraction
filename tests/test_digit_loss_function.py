@@ -29,14 +29,20 @@ def _build_dummy_tensors(batch: int, seq: int, nodes: int, digits: int, depth: i
     tgt_ops = _make_one_hot(tgt_op_idx, n_ops)
     pred_ops = tgt_ops.clone()
 
-    return pred_sgn, pred_ops, tgt_sgn, tgt_ops
+    # Target initial values and final execution values (dummy values)
+    tgt_initial_values = torch.ones(batch, seq, nodes, device=device)
+    tgt_final_exec = torch.ones(
+        batch, seq, 1, device=device
+    )  # Single final execution result
+
+    return pred_sgn, pred_ops, tgt_sgn, tgt_ops, tgt_initial_values, tgt_final_exec
 
 
 @pytest.mark.parametrize("batch,seq,nodes,digits,depth", [(2, 1, 3, 4, 2)])
 def test_digit_loss_zero_and_nonzero(batch, seq, nodes, digits, depth):
     """Digit loss should be zero for perfect predictions and >0 for completely wrong ones."""
-    pred_sgn, pred_ops, tgt_sgn, tgt_ops = _build_dummy_tensors(
-        batch, seq, nodes, digits, depth
+    pred_sgn, pred_ops, tgt_sgn, tgt_ops, tgt_initial_values, tgt_final_exec = (
+        _build_dummy_tensors(batch, seq, nodes, digits, depth)
     )
 
     # Build target digit indices randomly, then one-hot encode
@@ -50,6 +56,10 @@ def test_digit_loss_zero_and_nonzero(batch, seq, nodes, digits, depth):
         sign_loss_weight=0.0,
         digit_loss_weight=1.0,
         op_loss_weight=0.0,
+        value_loss_weight=1.0,
+        exec_loss_weight=1.0,
+        max_digits=3,
+        max_decimal_places=1,
     )
 
     losses_correct = compute_dag_structure_loss(
@@ -59,6 +69,8 @@ def test_digit_loss_zero_and_nonzero(batch, seq, nodes, digits, depth):
         tgt_sgn,
         tgt_digits,
         tgt_ops,
+        tgt_initial_values,
+        tgt_final_exec,
         cfg,
     )
 
@@ -75,6 +87,8 @@ def test_digit_loss_zero_and_nonzero(batch, seq, nodes, digits, depth):
         tgt_sgn,
         tgt_digits,
         tgt_ops,
+        tgt_initial_values,
+        tgt_final_exec,
         cfg,
     )
 

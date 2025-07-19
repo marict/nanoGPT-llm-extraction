@@ -134,6 +134,12 @@ class TestDigitPrediction(unittest.TestCase):
         cfg.dag_depth = model.config.dag_depth
         cfg.max_digits = max_digits
         cfg.max_decimal_places = max_decimals
+        cfg.value_loss_weight = 1.0
+        cfg.exec_loss_weight = 1.0
+
+        # Add dummy targets for the new losses
+        target_initial_values = torch.ones(B, T, N)
+        target_final_exec = torch.ones(B, T, 1)
 
         losses = compute_dag_structure_loss(
             pred_sgn,
@@ -142,6 +148,8 @@ class TestDigitPrediction(unittest.TestCase):
             sign_target,
             target_digits,
             target_ops,
+            target_initial_values,
+            target_final_exec,
             cfg,
         )
         total_loss = losses["total_loss"]

@@ -768,7 +768,6 @@ class DifferentiableDAG(nn.Module):
             operation_probs,
             max_digits=self.plan_predictor.max_digits,
             max_decimal_places=self.plan_predictor.max_decimal_places,
-            ignore_clip=False,  # Default to False for final execution
         )
 
         if ENABLE_DEBUG_NAN_CHECKS:

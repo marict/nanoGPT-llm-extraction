@@ -19,6 +19,10 @@ class TestLossRegressions(unittest.TestCase):
         cfg.sign_loss_weight = 1.0
         cfg.digit_loss_weight = 1.0
         cfg.op_loss_weight = 1.0
+        cfg.value_loss_weight = 1.0
+        cfg.exec_loss_weight = 1.0
+        cfg.max_digits = 4
+        cfg.max_decimal_places = 2
         return cfg
 
     def test_negative_log_magnitude_support(self):
@@ -30,7 +34,7 @@ class TestLossRegressions(unittest.TestCase):
         pred_sgn = target_sgn.clone()
 
         # Digits tensor – all zeros except one example digit 3
-        D_total = cfg.max_digits + (cfg.max_decimal_places or 6)
+        D_total = cfg.max_digits + cfg.max_decimal_places
         target_digits = torch.zeros(B, T, nodes, D_total, 10)
         target_digits[..., 0, 3] = 1.0  # first slot digit 3
         pred_digits = target_digits.clone()
@@ -39,6 +43,10 @@ class TestLossRegressions(unittest.TestCase):
         target_ops[..., 0] = 1.0
         pred_ops = target_ops.clone()
 
+        # Add dummy targets for the new losses
+        target_initial_values = torch.ones(B, T, nodes)
+        target_final_exec = torch.ones(B, T, 1)
+
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_digits,
@@ -46,6 +54,8 @@ class TestLossRegressions(unittest.TestCase):
             target_sgn,
             target_digits,
             target_ops,
+            target_initial_values,
+            target_final_exec,
             cfg,
         )
 
@@ -59,7 +69,7 @@ class TestLossRegressions(unittest.TestCase):
         # Dummy signs/logs (not used for this test)
         pred_sgn = torch.ones(B, T, nodes)
         target_sgn = pred_sgn.clone()
-        D_total = cfg.max_digits + (cfg.max_decimal_places or 6)
+        D_total = cfg.max_digits + cfg.max_decimal_places
         pred_digits = torch.zeros(B, T, nodes, D_total, 10)
         target_digits = pred_digits.clone()
 
@@ -71,6 +81,10 @@ class TestLossRegressions(unittest.TestCase):
         pred_ops = torch.zeros(B, T, depth, n_ops)
         pred_ops[..., 0] = 1.0  # correct op gets prob=1; others zero
 
+        # Add dummy targets for the new losses
+        target_initial_values = torch.ones(B, T, nodes)
+        target_final_exec = torch.ones(B, T, 1)
+
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_digits,
@@ -78,6 +92,8 @@ class TestLossRegressions(unittest.TestCase):
             target_sgn,
             target_digits,
             target_ops,
+            target_initial_values,
+            target_final_exec,
             cfg,
         )
 

@@ -114,9 +114,9 @@ def test_value_loss_perfect_prediction(batch, seq, nodes, digits, depth):
         tgt_sgn,
         tgt_digits,
         tgt_ops,
+        target_values,
+        target_final_exec,
         cfg,
-        target_initial_values=target_values,
-        target_final_exec=target_final_exec,
     )
 
     assert pytest.approx(losses["value_loss"].item(), abs=1e-5) == 0.0
@@ -175,9 +175,9 @@ def test_value_loss_wrong_prediction(batch, seq, nodes, digits, depth):
         tgt_sgn,
         tgt_digits,
         tgt_ops,
+        target_values,
+        target_final_exec,
         cfg,
-        target_initial_values=target_values,
-        target_final_exec=target_final_exec,
     )
 
     assert losses["value_loss"].item() > 0.0
@@ -227,9 +227,9 @@ def test_exec_loss_perfect_prediction(batch, seq, depth):
         tgt_sgn,
         tgt_digits,
         tgt_ops,
+        target_initial_values,
+        target_final_exec,
         cfg,
-        target_initial_values=target_initial_values,
-        target_final_exec=target_final_exec,
     )
 
     assert pytest.approx(losses["exec_loss"].item(), abs=1e-4) == 0.0
@@ -285,9 +285,9 @@ def test_exec_loss_wrong_prediction(batch, seq, depth):
         tgt_sgn,
         tgt_digits,
         tgt_ops,
+        target_initial_values,
+        target_final_exec,
         cfg,
-        target_initial_values=target_initial_values,
-        target_final_exec=target_final_exec,
     )
 
     # Should have non-zero exec loss since predictions differ
@@ -325,9 +325,9 @@ def test_value_exec_losses_computed():
         tgt_sgn,
         tgt_digits,
         tgt_ops,
+        target_initial_values,
+        target_final_exec,
         cfg,
-        target_initial_values=target_initial_values,
-        target_final_exec=target_final_exec,
     )
 
     # Should compute both losses
@@ -381,9 +381,9 @@ def test_loss_weights_applied():
         tgt_sgn,
         tgt_digits,
         tgt_ops,
+        target_values,
+        target_final_exec,
         cfg1,
-        target_initial_values=target_values,
-        target_final_exec=target_final_exec,
     )
 
     losses2 = compute_dag_structure_loss(
@@ -393,9 +393,9 @@ def test_loss_weights_applied():
         tgt_sgn,
         tgt_digits,
         tgt_ops,
+        target_values,
+        target_final_exec,
         cfg2,
-        target_initial_values=target_values,
-        target_final_exec=target_final_exec,
     )
 
     # The weighted losses should differ
@@ -403,58 +403,6 @@ def test_loss_weights_applied():
     # We can't test exact ratios due to the complexity of the loss computation,
     # but we can verify that the total losses differ when weights differ
     assert losses1["total_loss"].item() != losses2["total_loss"].item()
-
-
-def test_missing_weights_handled():
-    """Test that missing loss weights are handled gracefully."""
-    batch, seq, nodes, digits, depth = 1, 1, 2, 5, 1
-    max_digits = 3
-    max_decimal_places = 2
-
-    pred_sgn, pred_ops, tgt_sgn, tgt_ops = _build_dummy_tensors(
-        batch, seq, nodes, digits, depth
-    )
-
-    tgt_digits = torch.rand(batch, seq, nodes, digits, 10)
-    tgt_digits = tgt_digits / tgt_digits.sum(dim=-1, keepdim=True)
-    pred_digits = tgt_digits.clone()
-
-    target_values = torch.tensor([[[1.23, 4.56]]], dtype=torch.float32)
-    target_final_exec = torch.tensor([[7.89]], dtype=torch.float32)
-
-    # Config without the new loss weights
-    cfg = types.SimpleNamespace(
-        sign_loss_weight=1.0,
-        digit_loss_weight=1.0,
-        op_loss_weight=1.0,
-        max_digits=max_digits,
-        max_decimal_places=max_decimal_places,
-        # No value_loss_weight or exec_loss_weight
-    )
-
-    # Should not raise an error
-    losses = compute_dag_structure_loss(
-        pred_sgn,
-        pred_digits,
-        pred_ops,
-        tgt_sgn,
-        tgt_digits,
-        tgt_ops,
-        cfg,
-        target_initial_values=target_values,
-        target_final_exec=target_final_exec,
-    )
-
-    # Should still compute the individual losses but not add them to total
-    assert "value_loss" in losses
-    assert "exec_loss" in losses
-    # Total loss should only include the base losses
-    expected_total = (
-        cfg.sign_loss_weight * losses["sign_loss"]
-        + cfg.digit_loss_weight * losses["digit_loss"]
-        + cfg.op_loss_weight * losses["op_loss"]
-    )
-    assert pytest.approx(losses["total_loss"].item(), abs=1e-5) == expected_total.item()
 
 
 def test_exec_loss_uses_clipping():
@@ -509,9 +457,9 @@ def test_exec_loss_uses_clipping():
         tgt_sgn,
         tgt_digits,
         tgt_ops,
+        target_initial_values,
+        target_final_exec,
         cfg,
-        target_initial_values=target_initial_values,
-        target_final_exec=target_final_exec,
     )
 
     # The exec loss should be computed without errors

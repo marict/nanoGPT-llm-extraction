@@ -437,6 +437,10 @@ class TestLossFunctions(unittest.TestCase):
         self.cfg.sign_loss_weight = 1.0
         self.cfg.digit_loss_weight = 1.0
         self.cfg.op_loss_weight = 1.0
+        self.cfg.value_loss_weight = 1.0
+        self.cfg.exec_loss_weight = 1.0
+        self.cfg.max_digits = 4
+        self.cfg.max_decimal_places = 2
 
     def test_compute_dag_structure_loss_shapes(self):
         """Test loss computation with various tensor shapes."""
@@ -447,7 +451,7 @@ class TestLossFunctions(unittest.TestCase):
 
         # Create test tensors
         pred_sgn = torch.tanh(torch.randn(B, T, num_nodes))
-        D_total = self.cfg.max_digits + (self.cfg.max_decimal_places or 6)
+        D_total = self.cfg.max_digits + self.cfg.max_decimal_places
         pred_digits = torch.softmax(torch.randn(B, T, num_nodes, D_total, 10), dim=-1)
         pred_ops = torch.softmax(torch.randn(B, T, depth, n_ops), dim=-1)
 
@@ -458,6 +462,10 @@ class TestLossFunctions(unittest.TestCase):
         target_ops = torch.zeros(B, T, depth, n_ops)
         target_ops[:, :, :, 0] = 1
 
+        # Add dummy targets for the new losses
+        target_initial_values = torch.ones(B, T, num_nodes)
+        target_final_exec = torch.ones(B, T, 1)
+
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_digits,
@@ -465,11 +473,20 @@ class TestLossFunctions(unittest.TestCase):
             target_sgn,
             target_digits,
             target_ops,
+            target_initial_values,
+            target_final_exec,
             self.cfg,
         )
 
         # Check return format
-        expected_keys = {"total_loss", "sign_loss", "digit_loss", "op_loss"}
+        expected_keys = {
+            "total_loss",
+            "sign_loss",
+            "digit_loss",
+            "op_loss",
+            "value_loss",
+            "exec_loss",
+        }
         self.assertEqual(set(losses.keys()), expected_keys)
 
         # Check loss values are reasonable
@@ -488,7 +505,7 @@ class TestLossFunctions(unittest.TestCase):
 
         # Create test tensors
         pred_sgn = torch.tanh(torch.randn(B, T, num_nodes))
-        D_total = self.cfg.max_digits + (self.cfg.max_decimal_places or 6)
+        D_total = self.cfg.max_digits + self.cfg.max_decimal_places
         pred_digits = torch.softmax(torch.randn(B, T, num_nodes, D_total, 10), dim=-1)
         pred_ops = torch.softmax(torch.randn(B, T, depth, n_ops), dim=-1)
 
@@ -499,6 +516,10 @@ class TestLossFunctions(unittest.TestCase):
         target_ops = torch.zeros(B, T, depth, n_ops)
         target_ops[:, :, :, 0] = 1
 
+        # Add dummy targets for the new losses
+        target_initial_values = torch.ones(B, T, num_nodes)
+        target_final_exec = torch.ones(B, T, 1)
+
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_digits,
@@ -506,11 +527,20 @@ class TestLossFunctions(unittest.TestCase):
             target_sgn,
             target_digits,
             target_ops,
+            target_initial_values,
+            target_final_exec,
             self.cfg,
         )
 
         # Should have the basic loss components
-        expected_keys = {"total_loss", "sign_loss", "digit_loss", "op_loss"}
+        expected_keys = {
+            "total_loss",
+            "sign_loss",
+            "digit_loss",
+            "op_loss",
+            "value_loss",
+            "exec_loss",
+        }
 
         self.assertEqual(set(losses.keys()), expected_keys)
 
@@ -528,7 +558,7 @@ class TestLossFunctions(unittest.TestCase):
         n_ops = N_OPS
 
         pred_sgn = torch.tanh(torch.randn(B, T, num_nodes))
-        D_total = self.cfg.max_digits + (self.cfg.max_decimal_places or 6)
+        D_total = self.cfg.max_digits + self.cfg.max_decimal_places
         pred_digits = torch.softmax(torch.randn(B, T, num_nodes, D_total, 10), dim=-1)
         pred_ops = torch.softmax(torch.randn(B, T, depth, n_ops), dim=-1)
 
@@ -545,6 +575,14 @@ class TestLossFunctions(unittest.TestCase):
         cfg_weighted.sign_loss_weight = 2.0
         cfg_weighted.digit_loss_weight = 0.5
         cfg_weighted.op_loss_weight = 1.5
+        cfg_weighted.value_loss_weight = 0.8
+        cfg_weighted.exec_loss_weight = 1.2
+        cfg_weighted.max_digits = self.cfg.max_digits
+        cfg_weighted.max_decimal_places = self.cfg.max_decimal_places
+
+        # Add dummy targets for the new losses
+        target_initial_values = torch.ones(B, T, num_nodes)
+        target_final_exec = torch.ones(B, T, 1)
 
         losses = compute_dag_structure_loss(
             pred_sgn,
@@ -553,6 +591,8 @@ class TestLossFunctions(unittest.TestCase):
             target_sgn,
             target_digits,
             target_ops,
+            target_initial_values,
+            target_final_exec,
             cfg_weighted,
         )
 
@@ -561,6 +601,8 @@ class TestLossFunctions(unittest.TestCase):
             cfg_weighted.sign_loss_weight * losses["sign_loss"]
             + cfg_weighted.digit_loss_weight * losses["digit_loss"]
             + cfg_weighted.op_loss_weight * losses["op_loss"]
+            + cfg_weighted.value_loss_weight * losses["value_loss"]
+            + cfg_weighted.exec_loss_weight * losses["exec_loss"]
         )
         self.assertTrue(torch.allclose(losses["total_loss"], expected_total, atol=1e-5))
 
@@ -572,7 +614,7 @@ class TestLossFunctions(unittest.TestCase):
         n_ops = N_OPS
 
         target_sgn = torch.randint(0, 2, (B, T, num_nodes)).float() * 2 - 1  # ±1
-        D_total = self.cfg.max_digits + (self.cfg.max_decimal_places or 6)
+        D_total = self.cfg.max_digits + self.cfg.max_decimal_places
         target_digits = torch.nn.functional.one_hot(
             torch.randint(0, 10, (B, T, num_nodes, D_total)), num_classes=10
         ).float()
@@ -586,6 +628,10 @@ class TestLossFunctions(unittest.TestCase):
         pred_digits = target_digits.clone()
         pred_ops = target_ops.clone()
 
+        # Add dummy targets for the new losses
+        target_initial_values = torch.ones(B, T, num_nodes)
+        target_final_exec = torch.ones(B, T, 1)
+
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_digits,
@@ -593,6 +639,8 @@ class TestLossFunctions(unittest.TestCase):
             target_sgn,
             target_digits,
             target_ops,
+            target_initial_values,
+            target_final_exec,
             self.cfg,
         )
 
@@ -933,6 +981,8 @@ class TestModelSetup(unittest.TestCase):
         cfg.n_head = 2
         cfg.n_embd = 32
         cfg.sequence_length = 16
+        cfg.max_digits = 4
+        cfg.max_decimal_places = 2
 
         model_args = dict(
             n_layer=2,  # Fixed for test - predictor doesn't use n_layer
@@ -943,6 +993,8 @@ class TestModelSetup(unittest.TestCase):
             vocab_size=1000,
             dropout=cfg.dropout,
             dag_depth=cfg.dag_depth,
+            max_digits=cfg.max_digits,
+            max_decimal_places=cfg.max_decimal_places,
         )
 
         gptconf = GPTConfig(**model_args)

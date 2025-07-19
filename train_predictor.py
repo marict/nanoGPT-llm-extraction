@@ -543,9 +543,9 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         target_sgn_seq,
                         target_digits_seq,
                         target_ops_seq,
+                        target_initial_values_seq,
+                        target_final_exec_seq,
                         cfg,
-                        target_initial_values=target_initial_values_seq,
-                        target_final_exec=target_final_exec_seq,
                     )
 
                     loss = losses["total_loss"] / cfg.gradient_accumulation_steps
@@ -615,7 +615,9 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     f"iter {iter_num}: loss {loss_accum['total_loss']:.4f}, "
                     f"sign {loss_accum['sign_loss']:.4f}, "
                     f"digit {loss_accum['digit_loss']:.4f}, "
-                    f"op {loss_accum['op_loss']:.4f}"
+                    f"op {loss_accum['op_loss']:.4f}, "
+                    f"value {loss_accum['value_loss']:.4f}, "
+                    f"exec {loss_accum['exec_loss']:.4f}"
                     f", op_acc {loss_accum['op_accuracy']:.4f}, "
                     f"full_op_match {loss_accum['full_dag_op_match']:.4f}, "
                     f"sign_acc {loss_accum['sign_accuracy']:.4f}, "
@@ -655,6 +657,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "train/sign_loss": loss_accum["sign_loss"],
                         "train/digit_loss": loss_accum["digit_loss"],
                         "train/op_loss": loss_accum["op_loss"],
+                        "train/value_loss": loss_accum["value_loss"],
+                        "train/exec_loss": loss_accum["exec_loss"],
                         "lr": current_lr,
                         "train/op_accuracy": loss_accum["op_accuracy"],
                         "train/full_dag_op_match": loss_accum["full_dag_op_match"],

@@ -172,7 +172,6 @@ def _compute_exec_loss(
             pred_digit_probs = pred_digits
 
         # Execute the predicted DAG to get final values
-        # Use ignore_clip=False so model learns to predict clipped values
         pred_final_sgn, pred_final_log = execute_stack(
             pred_sgn,
             pred_digit_probs,
@@ -202,9 +201,6 @@ def _compute_exec_loss(
 # --------------------------------------------------------------------------- #
 # Main loss function
 # --------------------------------------------------------------------------- #
-
-
-# Updated function to handle digit distributions instead of log magnitudes
 def compute_dag_structure_loss(
     pred_sgn: torch.Tensor,  # (B,T,N)
     pred_digits: torch.Tensor,  # (B,T,N,D,10) logits or probs
@@ -212,9 +208,9 @@ def compute_dag_structure_loss(
     target_sgn: torch.Tensor,  # (B,T,N)
     target_digits: torch.Tensor,  # (B,T,N,D,10) one-hot
     target_ops: torch.Tensor,
-    cfg,
     target_initial_values: torch.Tensor,  # (B,T,N) - target initial values as floats
     target_final_exec: torch.Tensor,  # (B,T) - target final execution values as floats
+    cfg,
 ) -> Dict[str, torch.Tensor]:
     """Compute robust DAG-structure prediction loss.
 
@@ -230,8 +226,6 @@ def compute_dag_structure_loss(
     sign_loss = _compute_sign_loss(pred_sgn, target_sgn, device_type)
     digit_loss = _compute_digit_loss(pred_digits, target_digits, device_type)
     op_loss = _compute_op_loss(pred_ops, target_ops, device_type)
-
-    # Compute new loss components (always computed now)
     value_loss = _compute_value_loss(
         pred_sgn, pred_digits, target_initial_values, cfg, device_type
     )
@@ -244,13 +238,9 @@ def compute_dag_structure_loss(
         cfg.sign_loss_weight * sign_loss
         + cfg.digit_loss_weight * digit_loss
         + cfg.op_loss_weight * op_loss
+        + cfg.value_loss_weight * value_loss
+        + cfg.exec_loss_weight * exec_loss
     )
-
-    # Add new loss terms if weights are configured
-    if hasattr(cfg, "value_loss_weight"):
-        total_loss += cfg.value_loss_weight * value_loss
-    if hasattr(cfg, "exec_loss_weight"):
-        total_loss += cfg.exec_loss_weight * exec_loss
 
     return {
         "total_loss": total_loss,
@@ -289,26 +279,6 @@ def digits_to_magnitude(
     )  # (..., D)
 
     int_weights = 10 ** torch.arange(max_digits - 1, -1, -1, device=device, dtype=dtype)
-
-    # ------------------------------------------------------------------
-    # Allow callers to pass ``max_decimal_places=None`` which is the default
-    # in several configuration classes. In that case we *infer* the number of
-    # fractional digit slots from the digits tensor itself (last-but-one
-    # dimension) instead of raising a TypeError. This makes the helper
-    # backward-compatible with existing test suites that assume the parameter
-    # can be omitted.  When *max_decimal_places* is provided explicitly we
-    # keep the original behaviour for full determinism.
-    # ------------------------------------------------------------------
-
-    if max_decimal_places is None:
-        total_slots = digits.shape[-2]
-        max_decimal_places = total_slots - max_digits
-        if max_decimal_places < 0:
-            raise ValueError(
-                "Inferred a negative number of decimal places. "
-                "Check that *max_digits* is correct or provide *max_decimal_places* explicitly."
-            )
-
     frac_weights = 10 ** torch.arange(
         -1, -max_decimal_places - 1, -1, device=device, dtype=dtype
     )
@@ -430,9 +400,9 @@ def evaluate_dag_model(
                     tgt_sgn.unsqueeze(1),
                     tgt_digits.unsqueeze(1),
                     tgt_ops.unsqueeze(1),
+                    target_initial_values,
+                    target_final_exec,
                     cfg,
-                    target_initial_values=target_initial_values,
-                    target_final_exec=target_final_exec,
                 )
 
                 # Metrics
