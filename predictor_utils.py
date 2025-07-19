@@ -239,8 +239,12 @@ def compute_dag_structure_loss(
         + cfg.digit_loss_weight * digit_loss
         + cfg.op_loss_weight * op_loss
         + cfg.value_loss_weight * value_loss
-        + cfg.exec_loss_weight * exec_loss
     )
+
+    # Only allow exec loss if all values are finite
+    # since somtimes it will blow up.
+    if torch.isfinite(exec_loss).all():
+        total_loss += cfg.exec_loss_weight * exec_loss
 
     return {
         "total_loss": total_loss,
