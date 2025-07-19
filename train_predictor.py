@@ -40,12 +40,11 @@ def _empty_metrics() -> dict[str, float]:
         "sign_loss": 0.0,
         "digit_loss": 0.0,
         "op_loss": 0.0,
-        "value_loss": 0.0,  # MSE loss on initial values
-        "exec_loss": 0.0,  # MSE loss on final execution values
+        "value_loss": 0.0,  # Robust loss on initial values
+        "exec_loss": 0.0,  # Robust loss on final execution values
         "op_accuracy": 0.0,
         "full_dag_op_match": 0.0,
         "sign_accuracy": 0.0,
-        "log_magnitude_mape": 0.0,
     }
 
 
@@ -343,11 +342,11 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     eval_msg = (
                         f"[val] iter {iter_num}: total_loss {eval_losses['total_loss']:.4f}, "
                         f"sign_loss {eval_losses['sign_loss']:.4f}, digit_loss {eval_losses['digit_loss']:.4f}, "
-                        f"op_loss {eval_losses['op_loss']:.4f}, op_acc {eval_losses['op_accuracy']:.4f}, "
+                        f"op_loss {eval_losses['op_loss']:.4f}, value_loss {eval_losses['value_loss']:.4f}, "
+                        f"exec_loss {eval_losses['exec_loss']:.4f}, op_acc {eval_losses['op_accuracy']:.4f}, "
                         f"full_op_match {eval_losses['full_dag_op_match']:.4f}, "
                         f"sign_acc {eval_losses['sign_accuracy']:.4f}, "
-                        f"log_mape {eval_losses['log_magnitude_mape']:.4f}"
-                        f", executed_mse {eval_losses['final_mse']:.4f}"
+                        f"executed_mse {eval_losses['final_mse']:.4f}"
                     )
                     print(eval_msg)
 
@@ -359,10 +358,11 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "val/sign_loss": eval_losses["sign_loss"],
                         "val/digit_loss": eval_losses["digit_loss"],
                         "val/op_loss": eval_losses["op_loss"],
+                        "val/value_loss": eval_losses["value_loss"],
+                        "val/exec_loss": eval_losses["exec_loss"],
                         "val/op_accuracy": eval_losses["op_accuracy"],
                         "val/full_dag_op_match": eval_losses["full_dag_op_match"],
                         "val/sign_accuracy": eval_losses["sign_accuracy"],
-                        "val/log_magnitude_mape": eval_losses["log_magnitude_mape"],
                         "val/executed_mse": eval_losses["final_mse"],
                     }
                     # Store validation metrics for combined logging with training metrics
@@ -577,23 +577,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         / cfg.gradient_accumulation_steps
                     )
 
-                    pred_mag = digits_to_magnitude(
-                        digit_logits_avg.softmax(dim=-1),
-                        cfg.max_digits,
-                        cfg.max_decimal_places,
-                    )
-                    target_mag = digits_to_magnitude(
-                        target_digits,
-                        cfg.max_digits,
-                        cfg.max_decimal_places,
-                    )
-                    log_mape = (
-                        (pred_mag - target_mag).abs() / target_mag.clamp_min(1e-8)
-                    ).mean()
-                    loss_accum["log_magnitude_mape"] += (
-                        log_mape.item() / cfg.gradient_accumulation_steps
-                    )
-
                 # Backward pass
                 scaler.scale(loss).backward()
 
@@ -620,8 +603,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     f"exec {loss_accum['exec_loss']:.4f}"
                     f", op_acc {loss_accum['op_accuracy']:.4f}, "
                     f"full_op_match {loss_accum['full_dag_op_match']:.4f}, "
-                    f"sign_acc {loss_accum['sign_accuracy']:.4f}, "
-                    f"log_mape {loss_accum['log_magnitude_mape']:.4f}"
+                    f"sign_acc {loss_accum['sign_accuracy']:.4f}"
                 )
 
                 # Add internal losses if present
@@ -663,7 +645,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "train/op_accuracy": loss_accum["op_accuracy"],
                         "train/full_dag_op_match": loss_accum["full_dag_op_match"],
                         "train/sign_accuracy": loss_accum["sign_accuracy"],
-                        "train/log_magnitude_mape": loss_accum["log_magnitude_mape"],
                     }
 
                     # Add internal losses to wandb logging

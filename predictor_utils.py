@@ -122,6 +122,22 @@ def _compute_op_loss(
     return op_loss
 
 
+def safe_big_loss(
+    pred: torch.Tensor, target: torch.Tensor, norm_factor: float = 1e5
+) -> torch.Tensor:
+    """Compute robust execution loss with normalization, log scale, and Huber loss."""
+    # Normalize
+    pred_norm = pred / norm_factor
+    target_norm = target / norm_factor
+
+    # Apply log1p to stabilize large magnitudes (log1p handles near-zero smoothly)
+    pred_log = torch.log1p(pred_norm.abs())
+    target_log = torch.log1p(target_norm.abs())
+
+    # Use Huber loss (smooth L1) on log-scaled values
+    return F.smooth_l1_loss(pred_log, target_log, beta=1.0)
+
+
 def _compute_value_loss(
     pred_sgn: torch.Tensor,
     pred_digits: torch.Tensor,
@@ -129,7 +145,7 @@ def _compute_value_loss(
     cfg,
     device_type: str,
 ) -> torch.Tensor:
-    """Compute MSE loss between predicted and target initial values."""
+    """Compute robust loss between predicted and target initial values."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
         # Convert predicted digits to probabilities if they're logits
         if pred_digits.min() < 0 or pred_digits.max() > 1:
@@ -147,8 +163,7 @@ def _compute_value_loss(
         # Combine signs and magnitudes to get predicted initial values
         pred_initial_values = torch.sign(pred_sgn) * pred_magnitudes
 
-        # Compute MSE loss
-        value_loss = F.mse_loss(
+        value_loss = safe_big_loss(
             pred_initial_values.to(torch.float32),
             target_initial_values.to(torch.float32),
         )
@@ -163,7 +178,7 @@ def _compute_exec_loss(
     cfg,
     device_type: str,
 ) -> torch.Tensor:
-    """Compute MSE loss between predicted and target final execution values."""
+    """Compute robust loss between predicted and target final execution values."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
         # Convert predicted digits to probabilities if they're logits
         if pred_digits.min() < 0 or pred_digits.max() > 1:
@@ -191,8 +206,7 @@ def _compute_exec_loss(
         pred_final_val = pred_final_val.squeeze(-1).reshape(-1)
         target_final_flat = target_final_exec.reshape(-1)
 
-        # Compute MSE loss
-        exec_loss = F.mse_loss(
+        exec_loss = safe_big_loss(
             pred_final_val.to(torch.float32), target_final_flat.to(torch.float32)
         )
     return exec_loss
@@ -324,7 +338,6 @@ def evaluate_dag_model(
         "op_accuracy": 0.0,
         "full_dag_op_match": 0.0,
         "sign_accuracy": 0.0,
-        "log_magnitude_mape": 0.0,
         # Mean-squared-error between executed DAG outputs (target vs prediction)
         "final_mse": 0.0,
     }
@@ -418,18 +431,6 @@ def evaluate_dag_model(
 
                 sign_correct = torch.sign(pred_sgn.squeeze(1)).eq(torch.sign(tgt_sgn))
                 sign_acc = sign_correct.float().mean()
-
-                pred_mag = digits_to_magnitude(
-                    last_digit_logits.squeeze(1).softmax(dim=-1),
-                    cfg.max_digits,
-                    cfg.max_decimal_places,
-                )
-                tgt_mag = digits_to_magnitude(
-                    tgt_digits.squeeze(1),
-                    cfg.max_digits,
-                    cfg.max_decimal_places,
-                )
-                log_mape = ((pred_mag - tgt_mag).abs() / tgt_mag.clamp_min(1e-8)).mean()
 
                 # ------------------------------------------------------------------ #
                 # Execute full DAGs to obtain scalar answers and compute MSE          #
@@ -555,7 +556,6 @@ def evaluate_dag_model(
             total_metrics["op_accuracy"] += op_acc.item()
             total_metrics["full_dag_op_match"] += full_match.item()
             total_metrics["sign_accuracy"] += sign_acc.item()
-            total_metrics["log_magnitude_mape"] += log_mape.item()
             total_metrics["final_mse"] += final_mse.item()
             num_batches += 1
 
