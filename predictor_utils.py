@@ -5,7 +5,6 @@ Moving these functions into their own module drastically reduces the size of
 `train_predictor.py` while keeping behaviour unchanged.
 """
 
-import math  # For log10 computations
 import random as _eval_random
 from typing import Dict, List
 
@@ -14,6 +13,7 @@ import torch.nn.functional as F
 from tiktoken import get_encoding
 
 from models.dag_model import OP_NAMES, execute_stack
+from predictor_config import DAGTrainConfig
 
 __all__ = [
     "tokenize_texts",
@@ -210,7 +210,7 @@ def compute_dag_structure_loss(
     target_ops: torch.Tensor,
     target_initial_values: torch.Tensor,  # (B,T,N) - target initial values as floats
     target_final_exec: torch.Tensor,  # (B,T) - target final execution values as floats
-    cfg,
+    cfg: DAGTrainConfig,
 ) -> Dict[str, torch.Tensor]:
     """Compute robust DAG-structure prediction loss.
 
