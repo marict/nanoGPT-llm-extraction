@@ -19,6 +19,7 @@ from typing import Dict, Iterator, List, Tuple
 import sympy
 import torch
 from num2words import num2words
+from sympy import im
 from sympy.printing.str import StrPrinter
 from tiktoken import get_encoding
 
@@ -359,6 +360,12 @@ def _generate_expression(
     value_map = {symbols[i]: initial_values[i] for i in range(len(initial_values))}
     final_value = sympy.N(sym_expr.subs(value_map))
 
+    # Check if result is complex (nonzero imaginary part)
+    if im(final_value) != 0:
+        raise ValueError(
+            f"Final value is complex: {final_value}, sym_expr: {sym_expr}, initial_values: {initial_values}, operations: {operations}"
+        )
+
     # Pad the rest of the operations with identity
     operations.extend(["identity"] * (depth - len(operations)))
     # Pad the rest of initial values with 1.0
@@ -647,15 +654,6 @@ def generate_single_dag_example(
         allowed_operations=allowed_operations,
         expr=sym_expr,
     )
-
-    if isinstance(example.final_value_exec, complex):
-        raise ValueError(
-            f"Final value exec is complex: {example.final_value_exec}, example: {example}"
-        )
-    if isinstance(example.final_value_sympy, complex):
-        raise ValueError(
-            f"Final value sympy is complex: {example.final_value_sympy}, example: {example}"
-        )
 
     if not math.isclose(
         example.final_value_exec,
