@@ -14,7 +14,7 @@ reload_reset_iters = True
 
 # Model initialization
 init_from = (
-    "/runpod-volume/checkpoints/yig7rus81st0dv-better_eng/ckpt_predictor_pretrain.pt"
+    "/runpod-volume/checkpoints/6jtm4x7kn65w4m-new_losses/ckpt_predictor_pretrain.pt"
 )
 
 # Dataset configuration
@@ -72,7 +72,7 @@ sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
 value_loss_weight = 1.0
-exec_loss_weight = 0.001
+exec_loss_weight = 0
 
 # Random seeds
 seed = 42
