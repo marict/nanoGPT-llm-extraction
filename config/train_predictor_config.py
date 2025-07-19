@@ -9,11 +9,11 @@ eval_interval = 100  # We don't need to do this very often because train is seei
 log_interval = 1  # Log every iteration for better monitoring
 eval_iters = 10  # Reduced from 5 - each eval iter is much more informative
 eval_only = False
-always_save_checkpoint = False
-clear_previous_checkpoints = True  # Save space on RunPod
+clear_previous_checkpoints = False
+reload_reset_iters = True
 
 # Model initialization
-init_from = "/runpod-volume/checkpoints/0p3ba0hopdeuri-nodivideby0indag/ckpt_predictor_pretrain.pt"
+init_from = "resume"
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
@@ -29,9 +29,9 @@ val_examples_per_batch = 1600  # Increased from 800 - match larger batch sizes
 
 # English conversion settings
 english_conversion_probability = 0.3
-integer_no_decimal_probability = 0.7
-expression_simplification_probability = 0.1
-expression_permutation_probability = 0.2
+integer_no_decimal_probability = 0.5
+expression_simplification_probability = 0.5
+expression_expansion_probability = 0.5
 
 # Model configuration
 gradient_accumulation_steps = 16  # Updated from 8
