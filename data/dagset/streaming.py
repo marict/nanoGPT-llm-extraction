@@ -169,8 +169,11 @@ class DAGExample:
     allowed_operations: list[str] | None = None
     expr: sympy.Basic | None = None
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
-        return f"DAGExample(text={self.text}, depth={self.depth}, initial_values={self.initial_values}, signs={self.signs.shape}, digits={self.digits.shape}, operations={self.operations.shape}, operations_named={self.operations_named}, seed={self.seed}, did_expand={self.did_expand}, did_simplify={self.did_simplify}, final_value_sympy={self.final_value_sympy}, final_value_exec={self.final_value_exec}, allowed_operations={self.allowed_operations}, expr={self.expr})"
+        return f"DAGExample(seed={self.seed}, text={self.text}, depth={self.depth}, initial_values={self.initial_values}, signs={self.signs.shape}, digits={self.digits.shape}, operations={self.operations.shape}, operations_named={self.operations_named}, did_expand={self.did_expand}, did_simplify={self.did_simplify}, final_value_sympy={self.final_value_sympy}, final_value_exec={self.final_value_exec}, allowed_operations={self.allowed_operations}, expr={self.expr})"
 
 
 def generate_uniform_digit_number(
@@ -363,7 +366,7 @@ def _generate_expression(
     # Check if result is complex (nonzero imaginary part)
     if im(final_value) != 0:
         raise ValueError(
-            f"Final value is complex: {final_value}, sym_expr: {sym_expr}, initial_values: {initial_values}, operations: {operations}"
+            f"Final value is complex: {final_value}, sym_expr: {sym_expr}, initial_values: {initial_values}, operations: {operations}, seed: {seed}"
         )
 
     # Pad the rest of the operations with identity

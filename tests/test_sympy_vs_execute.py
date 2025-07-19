@@ -18,7 +18,7 @@ def test_sympy_and_execute_consistency_across_seeds():
     for seed in range(n_seeds):
         example = generate_single_dag_example(
             depth=max_depth,
-            seed=270,
+            seed=seed,
             max_digits=6,
             max_decimal_places=6,
             english_conversion_probability=0,
@@ -26,10 +26,6 @@ def test_sympy_and_execute_consistency_across_seeds():
             expression_expansion_probability=1,
             expression_simplification_probability=0,
         )
-
-        import pdb
-
-        pdb.set_trace()
 
         sym_val = float(example.final_value_sympy)
         exec_val = example.final_value_exec
