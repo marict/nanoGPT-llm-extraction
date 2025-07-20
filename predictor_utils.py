@@ -143,8 +143,9 @@ def safe_big_loss(
       C) Sign penalty if apply_sign_penalty (weight 0.1)
       D) Overflow penalty if |log10(pred)| > 12 (weight 0.05)
     """
-    pred_f = pred.reshape(-1)
-    tgt_f = target.reshape(-1)
+    # Cast inputs to float32 at the beginning to ensure consistent precision
+    pred_f = pred.reshape(-1).to(torch.float32)
+    tgt_f = target.reshape(-1).to(torch.float32)
 
     if assume_log10:
         pred_log10 = pred_f
@@ -207,8 +208,8 @@ def _compute_value_loss(
         pred_initial_values = torch.sign(pred_sgn) * pred_magnitudes
 
         value_loss = safe_big_loss(
-            pred_initial_values.to(torch.float32),
-            target_initial_values.to(torch.float32),
+            pred_initial_values,
+            target_initial_values,
             apply_sign_penalty=True,
         )
     return value_loss
