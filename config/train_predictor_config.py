@@ -21,14 +21,15 @@ init_from = "scratch"
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
 
+
+train_examples_per_batch = 4000
+val_examples_per_batch = 800
+
 # DAG dataset parameters
 max_dag_depth = 6  # Match the model dag_depth for consistency
 # Choose 4 to match the NALU paper
 max_digits = 4
 max_decimal_places = 4
-
-train_examples_per_batch = 4000
-val_examples_per_batch = 800
 
 # Expression generation settings
 english_conversion_probability = 0.5

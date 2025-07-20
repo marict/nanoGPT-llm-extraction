@@ -189,7 +189,7 @@ def generate_expression(
         # Choose a random number of operations between 0 and depth.
         # That we generate expressions with a variety of depths.
         # Weight higher depths more heavily.
-        weights = [1.0 / (i + 1) for i in range(depth)]
+        weights = [i + 1 for i in range(depth)]
         num_ops = rng.choices(range(depth), weights=weights, k=1)[0]
         # Generate random operations.
         for i in range(num_ops):

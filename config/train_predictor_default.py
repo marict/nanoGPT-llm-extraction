@@ -27,15 +27,16 @@ init_from = "scratch"  # or "resume"
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
 
-# DAG dataset parameters
-max_dag_depth = 6
-max_digits = 4  # Maximum number of integer digits for uniform digit distribution
-max_decimal_places = 4
-
 train_examples_per_batch = 100
 val_examples_per_batch = 20
 
-# Preprocessing settings
+# DAG dataset parameters
+max_dag_depth = 6  # Match the model dag_depth for consistency
+# Choose 4 to match the NALU paper
+max_digits = 4
+max_decimal_places = 4
+
+# Expression generation settings
 english_conversion_probability = 0.5
 integer_no_decimal_probability = 0.5
 expression_simplification_probability = 0.5
@@ -46,7 +47,6 @@ printing_style_probs = {
     "ascii": 0.25,
     "latex": 0.25,
 }
-
 # Data generation settings
 
 # Training hyperparameters

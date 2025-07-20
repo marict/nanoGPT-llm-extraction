@@ -22,8 +22,8 @@ def parse_args():
         type=float,
         default=pred_config.integer_no_decimal_probability,
     )
-    parser.add_argument("--simplify", action="store_true")
-    parser.add_argument("--expand", action="store_true")
+    parser.add_argument("--simplify", default=False, action="store_true")
+    parser.add_argument("--expand", default=False, action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-digits", type=int, default=pred_config.max_digits)
     parser.add_argument(
