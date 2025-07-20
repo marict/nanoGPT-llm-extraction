@@ -291,9 +291,40 @@ def add_log_space(
     small_log = torch.where(bigger_is_x, ly, lx)
     big_sgn = torch.where(bigger_is_x, sx, sy)
 
-    # Work in double precision to minimise error during the ``log1p`` call.
+    # Work in double precision to minimise error during calculations
     target_dtype = torch.float64 if lx.device.type != "mps" else torch.float32
 
+    # Detect near-cancellation cases where log magnitudes are very close
+    # In these cases, log-space arithmetic becomes numerically unstable
+    log_diff = torch.abs(big_log - small_log)
+    near_cancellation = log_diff < 1e-3  # Threshold for switching to linear arithmetic
+
+    # For near-cancellation cases: use direct linear arithmetic
+    # Convert back to linear space, compute difference, then back to log space
+    big_val = torch.pow(
+        torch.tensor(10.0, dtype=target_dtype, device=big_log.device),
+        big_log.to(target_dtype),
+    )
+    small_val = torch.pow(
+        torch.tensor(10.0, dtype=target_dtype, device=small_log.device),
+        small_log.to(target_dtype),
+    )
+
+    # Compute linear difference with correct signs
+    big_signed = torch.where(
+        bigger_is_x, big_val * sx.to(target_dtype), big_val * sy.to(target_dtype)
+    )
+    small_signed = torch.where(
+        bigger_is_x, small_val * sy.to(target_dtype), small_val * sx.to(target_dtype)
+    )
+    linear_result = big_signed + small_signed
+
+    # Convert back to log space
+    linear_abs = torch.abs(linear_result)
+    linear_sgn = torch.sign(linear_result).to(sx.dtype)
+    linear_log = torch.log10(linear_abs.clamp_min(MIN_CLAMP)).to(lx.dtype)
+
+    # For non-near-cancellation cases: use original log-space approach
     delta_n = (small_log.to(target_dtype) - big_log.to(target_dtype)).clamp(
         max=-1e-3, min=-LOG_LIM
     ) * LN10
@@ -302,8 +333,12 @@ def add_log_space(
 
     # Perfect cancellation case
     zero_res = small_log == big_log
-    new_log = torch.where(zero_res, torch.zeros_like(big_log), big_log + diff)
-    new_sgn = torch.where(zero_res, torch.zeros_like(big_sgn), big_sgn)
+    log_space_log = torch.where(zero_res, torch.zeros_like(big_log), big_log + diff)
+    log_space_sgn = torch.where(zero_res, torch.zeros_like(big_sgn), big_sgn)
+
+    # Choose between linear and log-space results based on near_cancellation flag
+    new_sgn = torch.where(near_cancellation, linear_sgn, log_space_sgn)
+    new_log = torch.where(near_cancellation, linear_log, log_space_log)
 
     s_out = torch.where(opp_branch, new_sgn, s_out)
     l_out = torch.where(opp_branch, new_log, l_out)
@@ -584,6 +619,20 @@ def apply_op(
     return result_sgn, result_log
 
 
+def _debug_apply_op(op_name: str, second: float, top: float) -> float:
+    """Apply an operation to two floats and return the result."""
+    if op_name == "add":
+        return second + top
+    if op_name == "subtract":
+        return second - top
+    if op_name == "multiply":
+        return second * top
+    if op_name == "divide":
+        return second / top
+    if op_name == "identity":
+        return second
+
+
 def execute_stack(
     initial_sgn: torch.Tensor,  # (B,T,N) values in [-1,1] (tanh output)
     digit_probs: torch.Tensor,  # (B,T,N,D,10) – probabilities (softmaxed)
@@ -716,8 +765,9 @@ def execute_stack(
             top_val = _log_to_value(top_sgn[0, 0], top_log[0, 0])
 
             print(f"Step {step}: Applying '{op_name}' (prob={op_prob:.4f})")
-            print(f"  Operands: second={second_val}, top={top_val}")
-            print(f"  Stack indices: [{current_size-2}] op [{current_size-1}]")
+            print(f"Operands: second={second_val}, top={top_val}")
+            print(f"Stack indices: [{current_size-2}] op [{current_size-1}]")
+            print(f"Correct Result: {_debug_apply_op(op_name, second_val, top_val)}")
 
         # Apply the operation in Reverse Polish Notation
         # Ex. ['add','identity'] will apply identity operation first, and then add

@@ -57,16 +57,6 @@ def debug_execute_stack_directly(example):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.float64
 
-    # Get digit configuration
-    digit_shape = structure["initial_digits"].shape
-    total_digit_slots = digit_shape[-2] if len(digit_shape) > 1 else 0
-    max_digits_adj = total_digit_slots // 2
-    max_decimal_places_adj = total_digit_slots - max_digits_adj
-
-    print(
-        f"Using max_digits={max_digits_adj}, max_decimal_places={max_decimal_places_adj}"
-    )
-
     # Convert to appropriate device and dtype with batch/sequence dimensions
     initial_sgn = (
         structure["initial_sgn"]
@@ -100,8 +90,9 @@ def debug_execute_stack_directly(example):
             initial_sgn=initial_sgn,
             digit_probs=initial_digits,
             ops=operation_probs,
-            max_digits=max_digits_adj,
-            max_decimal_places=max_decimal_places_adj,
+            max_digits=example.max_digits,
+            max_decimal_places=example.max_decimal_places,
+            ignore_clip=True,
             _print_exec_intermediates=True,
         )
 
