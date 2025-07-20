@@ -42,6 +42,8 @@ class DAGExample:
     depth: int
     max_digits: int
     max_decimal_places: int
+    english_conversion_probability: float
+    integer_no_decimal_probability: float
     printing_style: str
     initial_values: list[float]  # for logging
     signs: torch.Tensor  # (D+1)
@@ -62,7 +64,7 @@ class DAGExample:
         return self.__str__()
 
     def __str__(self):
-        return f"DAGExample(seed={self.seed}, text={self.text}, depth={self.depth}, initial_values={self.initial_values}, signs={self.signs.shape}, digits={self.digits.shape}, operations={self.operations.shape}, operations_named={self.operations_named}, did_expand={self.did_expand}, did_simplify={self.did_simplify}, final_value_sympy={self.final_value_sympy}, final_value_exec={self.final_value_exec}, allowed_operations={self.allowed_operations}, expr={self.expr})"
+        return f"DAGExample(seed={self.seed}, text={self.text}, depth={self.depth}, initial_values={self.initial_values}, signs={self.signs.shape}, digits={self.digits.shape}, operations={self.operations.shape}, operations_named={self.operations_named}, did_expand={self.did_expand}, did_simplify={self.did_simplify}, final_value_sympy={self.final_value_sympy}, final_value_exec={self.final_value_exec}, allowed_operations={self.allowed_operations}, expr={self.expr}, english_conversion_probability={self.english_conversion_probability}, integer_no_decimal_probability={self.integer_no_decimal_probability}, printing_style={self.printing_style})"
 
 
 def generate_uniform_digit_number(
@@ -569,6 +571,8 @@ def generate_single_dag_example(
         depth=depth,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
+        english_conversion_probability=english_conversion_probability,
+        integer_no_decimal_probability=integer_no_decimal_probability,
         printing_style=printing_style,
         initial_values=initial_values,
         structure_dict=structure_dict,
