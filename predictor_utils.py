@@ -576,6 +576,10 @@ def evaluate_dag_model(
 
                     print("\n=== Validation Sample ===")
                     print(f"Sample RNG seed: {sample_seed}")
+                    print(f"Depth: {sample_obj.depth}")
+                    print(f"Max digits: {sample_obj.max_digits}")
+                    print(f"Max decimal places: {sample_obj.max_decimal_places}")
+                    print(f"Printing style: {sample_obj.printing_style}")
                     print(f"Text:\n-------\n{sample_text}\n-------\n")
                     print(f"Sympy expression: {sample_obj.expr}")
                     print(f"Did expand: {did_expand}")
@@ -602,6 +606,7 @@ def evaluate_dag_model(
                     print(tgt_op_names)
                     print("Operations (predicted):")
                     print(pred_op_names)
+                    print(f"Allowed operations: {sample_obj.allowed_operations}")
                     print("==========================\n")
 
             # Aggregate

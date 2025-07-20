@@ -48,24 +48,11 @@ def convert_number_to_english(number: float, max_decimal_places: int = 6) -> str
 
 def format_expression_string(
     expression: sympy.Basic,
-    initial_values: List[float],
     english_conversion_probability: float = 0.0,
     seed: int = 42,
-    max_decimal_places: int = 6,
-    integer_no_decimal_probability: float = 0.0,
     printing_style_probs: Dict[str, float] | None = None,
-) -> str:
+) -> tuple[str, str]:
     """Enhanced expression formatting with probabilistic style selection.
-
-    Args:
-        expression: SymPy expression to format (values may already be in English if english_conversion_probability > 0)
-        initial_values: List of values used in the expression
-        english_conversion_probability: Probability of converting operations to English
-        seed: Random seed for consistent conversions
-        max_decimal_places: Maximum decimal places to show in formatted numbers
-        integer_no_decimal_probability: Probability of dropping ".0" from integer values
-        printing_style_probs: Dictionary mapping style names to probabilities.
-                             If None, defaults to {"sstr": 1.0}
 
     Returns:
         Formatted expression string
@@ -98,7 +85,7 @@ def format_expression_string(
                 expr_str, english_conversion_probability, seed
             )
 
-    return expr_str
+    return expr_str, style
 
 
 # --------------------------------------------------------------------------- #

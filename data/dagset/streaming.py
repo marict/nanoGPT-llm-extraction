@@ -40,6 +40,9 @@ class DAGExample:
 
     text: str
     depth: int
+    max_digits: int
+    max_decimal_places: int
+    printing_style: str
     initial_values: list[float]  # for logging
     signs: torch.Tensor  # (D+1)
     digits: torch.Tensor  # (D+1, digits_total, 10)
@@ -183,7 +186,9 @@ def generate_expression(
         ops_set_no_identity = [op for op in ops_set if op != "identity"]
         # Choose a random number of operations between 0 and depth.
         # That we generate expressions with a variety of depths.
-        num_ops = rng.randint(0, depth)
+        # Weight higher depths more heavily.
+        weights = [1.0 / (i + 1) for i in range(depth)]
+        num_ops = rng.choices(range(depth), weights=weights, k=1)[0]
         # Generate random operations.
         for i in range(num_ops):
             op_name = rng.choice(ops_set_no_identity)
@@ -197,7 +202,7 @@ def generate_expression(
         # Generate random values.
         for i in range(num_ops + 1):
             value = generate_uniform_digit_number(
-                seed=seed * 7919 + i,
+                seed=seed + i,
                 max_digits=max_digits,
                 max_decimal_places=max_decimal_places,
                 allow_zero=False,
@@ -502,7 +507,6 @@ def tensors_to_plan(
 
 def generate_single_dag_example(
     depth: int,
-    num_initial_values: int = None,
     seed: int = 42,
     english_conversion_probability: float = 0.0,
     integer_no_decimal_probability: float = 0.0,
@@ -518,10 +522,6 @@ def generate_single_dag_example(
     _initial_values_override: list[float] | None = None,
 ) -> DAGExample:
     """Generate a single DAG computation example as a simple math expression."""
-    # Determine number of initial values to match DAG predictor expectations
-    if num_initial_values is None:
-        # For DAG with depth n, we need n+1 initial values
-        num_initial_values = depth + 1
 
     (
         sym_expr,
@@ -548,13 +548,10 @@ def generate_single_dag_example(
 
     # Now we render the expression - no need for English conversion of operands
     # since they're already converted if needed
-    text = format_expression_string(
+    text, printing_style = format_expression_string(
         expression=sym_expr,
-        initial_values=initial_values,
         seed=seed,
         english_conversion_probability=english_conversion_probability,
-        integer_no_decimal_probability=integer_no_decimal_probability,
-        max_decimal_places=max_decimal_places,
         printing_style_probs=printing_style_probs,
     )
     # Use plan_to_tensors to get the structure dict directly
@@ -570,6 +567,9 @@ def generate_single_dag_example(
     example = DAGExample(
         text=text,
         depth=depth,
+        max_digits=max_digits,
+        max_decimal_places=max_decimal_places,
+        printing_style=printing_style,
         initial_values=initial_values,
         structure_dict=structure_dict,
         signs=structure_dict["initial_sgn"],
@@ -611,7 +611,6 @@ class DAGStructureDataset:
     def __init__(
         self,
         max_depth: int = 8,
-        num_initial_values: int = None,
         seed: int = 42,
         tokenizer: str = "gpt2",
         max_seq_length: int = 512,
@@ -626,10 +625,8 @@ class DAGStructureDataset:
     ):
         """Initialize the DAG structure dataset."""
         self.max_depth = max_depth
-        # Set num_initial_values to match DAG predictor expectations
-        self.num_initial_values = (
-            num_initial_values if num_initial_values is not None else max_depth + 1
-        )
+        # For DAG with depth n, we need n+1 initial values
+        self.num_initial_values = max_depth + 1
         self.seed = seed
         self.num_generated = 0
         self.tokenizer = tokenizer
@@ -693,7 +690,6 @@ class DAGStructureDataset:
                 # Generate example directly with structure tensors
                 example = generate_single_dag_example(
                     depth=depth,
-                    num_initial_values=self.num_initial_values,
                     seed=seed + self.num_generated + i,
                     english_conversion_probability=self.english_conversion_probability,
                     integer_no_decimal_probability=self.integer_no_decimal_probability,

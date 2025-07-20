@@ -28,7 +28,7 @@ init_from = "scratch"  # or "resume"
 dataset = "dagset"  # Use DAG dataset for predictor training
 
 # DAG dataset parameters
-max_dag_depth = 4
+max_dag_depth = 6
 max_digits = 2  # Maximum number of integer digits for uniform digit distribution
 max_decimal_places = 2
 
