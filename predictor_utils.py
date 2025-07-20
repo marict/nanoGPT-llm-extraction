@@ -542,10 +542,14 @@ def evaluate_dag_model(
                     print(f"Token count: {token_count}")
                     # If we have the raw DAGExample, use its original floats for nicer printing
                     true_vals = sample_obj.initial_values
-                    print("Target initial values:")
-                    print(true_vals)
-                    print("Predicted initial values (rounded to 10 dp):")
-                    print([round(v, 10) for v in pred_real_vals])
+                    print(
+                        f"Target initial values (rounded to {cfg.max_decimal_places} dp):"
+                    )
+                    print([round(v, cfg.max_decimal_places) for v in true_vals])
+                    print(
+                        f"Predicted initial values (rounded to {cfg.max_decimal_places} dp):"
+                    )
+                    print([round(v, cfg.max_decimal_places) for v in pred_real_vals])
                     print("Operations (ground truth):")
                     print(tgt_op_names)
                     print("Operations (predicted):")

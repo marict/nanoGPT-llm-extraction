@@ -23,20 +23,18 @@ dataset = "dagset"  # Use DAG dataset for predictor training
 
 # DAG dataset parameters
 max_dag_depth = 6  # Match the model dag_depth for consistency
-max_digits = 6  # Maximum number of integer digits for uniform digit distribution
-max_decimal_places = 6  # Seems like a reasonable rounding for the numbers initially
+# Choose 4 to match the NALU paper
+max_digits = 4
+max_decimal_places = 4
 
-# OPTIMIZED: Significantly increase data generation for better GPU utilization
-train_examples_per_batch = 8000  # Increased from 4000 - match larger batch sizes
-val_examples_per_batch = 1600  # Increased from 800 - match larger batch sizes
+train_examples_per_batch = 4000
+val_examples_per_batch = 800
 
-# English conversion settings
+# Expression generation settings
 english_conversion_probability = 0.3
 integer_no_decimal_probability = 0.5
 expression_simplification_probability = 0.5
 expression_expansion_probability = 0.5
-
-# Expression rendering style probabilities - showcasing diverse styles for RunPod training
 printing_style_probs = {
     "sstr": 0.4,
     "pretty": 0.2,
@@ -46,8 +44,8 @@ printing_style_probs = {
 }
 
 # Model configuration
-gradient_accumulation_steps = 16  # Updated from 8
-batch_size = 512  # Updated from 128
+gradient_accumulation_steps = 16
+batch_size = 256
 sequence_length = 128
 
 # Model architecture (larger for RunPod training)

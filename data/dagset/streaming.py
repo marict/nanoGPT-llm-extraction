@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterator, List, Tuple
 
+import numpy as np
 import sympy
 import torch
 from sympy import im
@@ -157,7 +158,7 @@ def _apply_sympy_op(op_name: str, second: sympy.Basic, top: sympy.Basic) -> symp
     raise ValueError(f"Unknown operation: {op_name}")
 
 
-def _generate_expression(
+def generate_expression(
     *,
     depth: int,
     seed: int,
@@ -215,6 +216,7 @@ def _generate_expression(
     # ------------------------------------------------------------------
     # Convert values to symbols (possibly with English names based on probability)
     symbols = []
+    symbol_names = []
     for val in initial_values:
         # Determine if this value should be converted to English
         should_convert = rng.random() < english_conversion_probability
@@ -226,6 +228,7 @@ def _generate_expression(
             symbol_name = str(val)
 
         symbols.append(sympy.Symbol(symbol_name))
+        symbol_names.append(symbol_name)
 
     nodes: list[sympy.Basic] = symbols.copy()
     ops_map: dict[sympy.Basic, str] = {}
@@ -241,14 +244,22 @@ def _generate_expression(
     assert len(nodes) == 1
     sym_expr: sympy.Basic = nodes[0]
 
-    is_complex = False
+    # For logging purposes, create a version of the sym_expr with the initial values replaced with VAL_0, VAL_1, etc.
+    sym_expr_with_vals = sym_expr.subs(
+        [
+            (sympy.Symbol(name), sympy.Symbol(f"VAL_{i}"))
+            for i, name in enumerate(symbol_names)
+        ]
+    )
+
     final_value = None
     if execute_sympy:
         # Execute the sympy expression and store the final value for validation purposes.
         value_map = {symbols[i]: initial_values[i] for i in range(len(initial_values))}
         final_value = sympy.N(sym_expr.subs(value_map))
 
-        is_complex = im(final_value) != 0
+        if im(final_value) != 0:
+            final_value = np.inf
 
     # We swap some operations with identity to play better with the DAG model, but this is not compatible with sympy.
     operations = [op for op in sym_ops]
@@ -283,12 +294,12 @@ def _generate_expression(
 
     return (
         sym_expr,
+        sym_expr_with_vals,
         initial_values,
         operations,
         final_value,
         did_simplify,
         did_expand,
-        is_complex,
     )
 
 
@@ -520,13 +531,13 @@ def generate_single_dag_example(
 
     (
         sym_expr,
+        sym_expr_with_vals,
         initial_values,
         operations,
         final_value_sympy,
         did_simplify,
         did_expand,
-        is_complex,
-    ) = _generate_expression(
+    ) = generate_expression(
         depth=depth,
         seed=seed,
         max_digits=max_digits,
@@ -577,11 +588,11 @@ def generate_single_dag_example(
         did_simplify=did_simplify,
         final_value_sympy=final_value_sympy,
         allowed_operations=allowed_operations,
-        expr=sym_expr,
+        expr=sym_expr_with_vals,
     )
 
     if (
-        not is_complex
+        final_value_sympy != np.inf
         and execute_sympy
         and not math.isclose(
             example.final_value_exec,
@@ -665,7 +676,7 @@ class DAGStructureDataset:
         self.op_idx_to_name = {i: name for i, name in enumerate(OP_NAMES)}
 
     def generate_batch(
-        self, batch_size: int, seed: int = 42
+        self, batch_size: int, seed: int = 42, execute_sympy: bool = True
     ) -> Tuple[List[str], Dict[str, torch.Tensor], List["DAGExample"]]:
         """Generate a batch of structure examples.
 
@@ -696,7 +707,7 @@ class DAGStructureDataset:
                 max_digits=self.max_digits,
                 max_decimal_places=self.max_decimal_places,
                 allowed_operations=self.allowed_operations,
-                execute_sympy=False,
+                execute_sympy=execute_sympy,
                 printing_style_probs=self.printing_style_probs,
             )
 
@@ -779,7 +790,7 @@ class DAGStructureDataset:
         }
 
     def create_dataloader(
-        self, batch_size: int = 32, seed: int = 42
+        self, batch_size: int = 32, seed: int = 42, execute_sympy: bool = True
     ) -> Iterator[Tuple[List[str], Dict[str, torch.Tensor], List["DAGExample"]]]:
         """Create an infinite dataloader for structure examples.
 
@@ -791,7 +802,9 @@ class DAGStructureDataset:
         """
         i = 0
         while True:
-            texts, structures, examples = self.generate_batch(batch_size, seed=seed + i)
+            texts, structures, examples = self.generate_batch(
+                batch_size, seed=seed + i, execute_sympy=execute_sympy
+            )
             i += 1
             yield texts, structures, examples
 
@@ -855,8 +868,12 @@ def create_dag_structure_dataloaders(
     )
 
     # Create dataloaders
-    train_loader = train_dataset.create_dataloader(train_batch_size, seed=seed)
-    val_loader = val_dataset.create_dataloader(val_batch_size, seed=seed)
+    train_loader = train_dataset.create_dataloader(
+        train_batch_size, seed=seed, execute_sympy=False
+    )
+    val_loader = val_dataset.create_dataloader(
+        val_batch_size, seed=seed, execute_sympy=True
+    )
 
     return train_loader, val_loader
 

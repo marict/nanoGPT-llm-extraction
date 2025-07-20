@@ -29,20 +29,20 @@ dataset = "dagset"  # Use DAG dataset for predictor training
 
 # DAG dataset parameters
 max_dag_depth = 4
-max_digits = 6  # Maximum number of integer digits for uniform digit distribution
-max_decimal_places = 6
+max_digits = 2  # Maximum number of integer digits for uniform digit distribution
+max_decimal_places = 2
 
 train_examples_per_batch = 100
 val_examples_per_batch = 20
 
 # Preprocessing settings
-english_conversion_probability = 0
+english_conversion_probability = 1
 integer_no_decimal_probability = 0
 expression_simplification_probability = 0
 expression_expansion_probability = 0
 
 # Expression rendering style probabilities - default style for fast testing
-printing_style_probs = {"sstr": 0, "pretty": 0.5, "ascii": 0.5, "latex": 0}
+printing_style_probs = {"sstr": 0.25, "pretty": 0.25, "ascii": 0.25, "latex": 0.25}
 
 # Data generation settings
 

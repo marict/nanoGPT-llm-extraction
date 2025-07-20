@@ -258,10 +258,6 @@ def test_exec_loss_wrong_prediction(batch, seq, depth):
         execute_sympy=True,
     )
 
-    # Use first example as target, second as prediction
-    nodes = len(example1.initial_values)
-    digits = max_digits + max_decimal_places
-
     tgt_sgn = example1.signs.unsqueeze(0).unsqueeze(0)
     tgt_digits = example1.digits.unsqueeze(0).unsqueeze(0)
     tgt_ops = example1.operations.unsqueeze(0).unsqueeze(0)
