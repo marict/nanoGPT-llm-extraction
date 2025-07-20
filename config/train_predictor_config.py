@@ -10,13 +10,11 @@ log_interval = 1  # Log every iteration for better monitoring
 eval_iters = 10  # Reduced from 5 - each eval iter is much more informative
 eval_only = False
 clear_previous_checkpoints = False
-reload_reset_iters = True
+reload_reset_iters = False
 
 # Model initialization
-# init_from = (
-#     "/runpod-volume/checkpoints/6jtm4x7kn65w4m-new_losses/ckpt_predictor_pretrain.pt"
-# )
-init_from = "scratch"
+init_from = "/runpod-volume/checkpoints/wujclmlklb90c6-fixdepthweight/ckpt_predictor_pretrain.pt"
+# init_from = "scratch"
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
