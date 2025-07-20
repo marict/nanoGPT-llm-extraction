@@ -287,6 +287,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         max_digits=cfg.max_digits,
         max_decimal_places=cfg.max_decimal_places,
         allowed_operations=allowed_operations,
+        printing_style_probs=cfg.printing_style_probs,
     )
 
     # --------------------------------------------------------------------- #
@@ -332,6 +333,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     max_digits=cfg.max_digits,
                     max_decimal_places=cfg.max_decimal_places,
                     allowed_operations=allowed_operations,
+                    printing_style_probs=cfg.printing_style_probs,
                 )
 
                 model.eval()

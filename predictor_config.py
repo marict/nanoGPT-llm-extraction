@@ -37,6 +37,11 @@ class DAGTrainConfig(BaseConfig):
     expression_expansion_probability: float = 0.0
     expression_simplification_probability: float = 0.0
 
+    # Expression rendering style probabilities
+    printing_style_probs: dict[str, float] = field(
+        default_factory=lambda: {"sstr": 1.0}
+    )
+
     # Batching / sequence
     gradient_accumulation_steps: int = 4
     batch_size: int = 32

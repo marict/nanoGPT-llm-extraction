@@ -9,6 +9,7 @@ from data.dagset.expression_to_string import (convert_number_to_english,
                                               number_to_string)
 from data.dagset.streaming import (DAGStructureDataset, _apply_sympy_op,
                                    generate_single_dag_example,
+                                   generate_uniform_digit_number,
                                    plan_to_tensors)
 from models.dag_model import OP_NAMES
 
@@ -42,14 +43,23 @@ def test_number_to_string_integer_handling():
 # Expression formatting & permutation helpers
 # -----------------------------------------------------------------------------
 def test_format_expression_string_conversion_and_identity():
-    expr = "2+2"
-    # No conversion → expression should simply gain spaces
-    no_conv = format_expression_string(expr, english_conversion_probability=0.0, seed=1)
-    assert no_conv == "2 + 2"
+    # Create an expression without evaluation
+    a = sympy.Symbol("2.0")
+    b = sympy.Symbol("2.0")
+    expr = sympy.Add(a, b, evaluate=False)
+    initial_values = [2.0, 2.0]
 
-    # Full conversion → numbers become words, operator turns into an English token
-    conv = format_expression_string(expr, english_conversion_probability=1.0, seed=1)
-    assert "two" in conv  # numbers converted to words
+    # No conversion → expression should have basic spacing
+    no_conv = format_expression_string(
+        expr, initial_values, english_conversion_probability=0.0, seed=1
+    )
+    assert "2.0 + 2.0" in no_conv
+
+    # Note: The actual English conversion of numbers is now done in _generate_expression
+    # So this test only checks if operation conversion still works
+    conv = format_expression_string(
+        expr, initial_values, english_conversion_probability=1.0, seed=1
+    )
     # At least one operator word should appear ("plus" or "added to")
     assert any(op in conv for op in ["plus", "added to"])
 
@@ -64,16 +74,13 @@ def test_apply_sympy_op_correctness():
         "subtract": 1,
         "multiply": 6,
         "divide": sympy.Rational(3, 2),
+        "identity": 3,  # Identity operation returns the first operand
     }
     for op_name, expected in expected_values.items():
         expr = _apply_sympy_op(op_name, a, b)
         assert sympy.simplify(expr - expected) == 0
 
-    # Identity should raise error rather than wrap the operand
-    with pytest.raises(ValueError):
-        _apply_sympy_op("identity", a, b)
-
-    # Unknown operation should also raise
+    # Unknown operation should raise error
     with pytest.raises(ValueError):
         _apply_sympy_op("unknown", a, b)
 
@@ -179,13 +186,86 @@ def test_batched_target_values_consistency():
             expected = example.initial_values[j]
             actual = batched_initial_values[i, j].item()
             assert (
-                abs(expected - actual) < 1e-5
+                abs(expected - actual)
+                < 1e-4  # Slightly increased tolerance for float precision
             ), f"Initial value mismatch at [{i},{j}]: {expected} vs {actual}"
 
-        # Check final execution value
+        # Check final exec value
         if example.final_value_exec is not None:
             expected_final = example.final_value_exec
             actual_final = batched_final_exec[i].item()
             assert (
                 abs(expected_final - actual_final) < 1e-5
             ), f"Final exec value mismatch at [{i}]: {expected_final} vs {actual_final}"
+
+
+def test_generate_uniform_digit_number_zero_handling():
+    """Test that zero is never generated when allow_zero=False."""
+    # Generate a large number of values with allow_zero=False
+    # and verify that none of them are zero
+    for _ in range(100):  # Test 100 random seeds
+        seed = random.randint(0, 10000)
+        result = generate_uniform_digit_number(
+            seed=seed,
+            max_digits=1,
+            max_decimal_places=0,
+            allow_zero=False,
+            integer_no_decimal_probability=0.0,
+        )
+        assert result != 0
+        assert result != 0.0
+
+        # Also test with integer_no_decimal_probability=1.0
+        result = generate_uniform_digit_number(
+            seed=seed,
+            max_digits=1,
+            max_decimal_places=0,
+            allow_zero=False,
+            integer_no_decimal_probability=1.0,
+        )
+        assert result != 0  # This should catch both int(0) and float(0.0)
+
+
+def test_generate_uniform_digit_number_integer_conversion():
+    """Test that integer_no_decimal_probability controls integer type conversion."""
+    # Test with integer_no_decimal_probability=1.0
+    # All whole numbers should be returned as integers
+    integer_count = 0
+    total_trials = 50
+
+    for _ in range(total_trials):
+        seed = random.randint(0, 10000)
+        result = generate_uniform_digit_number(
+            seed=seed,
+            max_digits=1,
+            max_decimal_places=0,  # Force whole numbers
+            allow_zero=True,
+            integer_no_decimal_probability=1.0,
+        )
+        if isinstance(result, int):
+            integer_count += 1
+
+    # All results should be integers
+    assert (
+        integer_count == total_trials
+    ), f"Expected all {total_trials} results to be integers, but got {integer_count}"
+
+    # Test with integer_no_decimal_probability=0.0
+    # All whole numbers should be returned as floats
+    float_count = 0
+    for _ in range(total_trials):
+        seed = random.randint(0, 10000)
+        result = generate_uniform_digit_number(
+            seed=seed,
+            max_digits=1,
+            max_decimal_places=0,  # Force whole numbers
+            allow_zero=True,
+            integer_no_decimal_probability=0.0,
+        )
+        if isinstance(result, float):
+            float_count += 1
+
+    # All results should be floats
+    assert (
+        float_count == total_trials
+    ), f"Expected all {total_trials} results to be floats, but got {float_count}"

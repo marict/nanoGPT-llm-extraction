@@ -12,6 +12,7 @@ import torch
 import torch.nn.functional as F
 from tiktoken import get_encoding
 
+from data.dagset.streaming import DAGExample
 from models.dag_model import OP_NAMES, execute_stack
 from predictor_config import DAGTrainConfig
 
@@ -484,7 +485,7 @@ def evaluate_dag_model(
                     batch_size = tgt_sgn.size(0)
                     sample_idx = _eval_random.randrange(batch_size)
                     sample_text = texts[sample_idx]
-                    sample_obj = examples[sample_idx]
+                    sample_obj: DAGExample = examples[sample_idx]
                     sample_seed = sample_obj.seed
                     did_expand = sample_obj.did_expand
                     did_simplify = sample_obj.did_simplify
@@ -527,7 +528,8 @@ def evaluate_dag_model(
 
                     print("\n=== Validation Sample ===")
                     print(f"Sample RNG seed: {sample_seed}")
-                    print(f"Text: {sample_text}")
+                    print(f"Text:\n-------\n{sample_text}\n-------\n")
+                    print(f"Sympy expression: {sample_obj.expr}")
                     print(f"Did expand: {did_expand}")
                     print(f"Did simplify: {did_simplify}")
                     print(f"Sympy execution value: {sample_obj.final_value_sympy}")

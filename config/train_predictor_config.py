@@ -36,6 +36,15 @@ integer_no_decimal_probability = 0.5
 expression_simplification_probability = 0.5
 expression_expansion_probability = 0.5
 
+# Expression rendering style probabilities - showcasing diverse styles for RunPod training
+printing_style_probs = {
+    "sstr": 0.4,
+    "pretty": 0.2,
+    "ascii": 0.1,
+    "latex": 0.2,
+    "str": 0.1,
+}
+
 # Model configuration
 gradient_accumulation_steps = 16  # Updated from 8
 batch_size = 512  # Updated from 128

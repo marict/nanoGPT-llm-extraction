@@ -3,19 +3,17 @@
 Expression formatting utilities for converting arithmetic expressions to English.
 """
 
-import io
 import random
 import re
-import tokenize
 from decimal import ROUND_HALF_UP, Decimal
-from typing import List, Tuple, Union
+from typing import Dict, List
 
 import sympy
 from num2words import num2words
 
 
 def number_to_string(
-    num: float,
+    num: float | int,
     rng: random.Random,
     integer_no_decimal_probability: float = 0.0,
 ) -> str:
@@ -48,166 +46,237 @@ def convert_number_to_english(number: float, max_decimal_places: int = 6) -> str
     return f"negative {words}" if quantised < 0 else words
 
 
-class ExpressionFormatter:
-    """Handles conversion of arithmetic expressions to English with proper negative number handling."""
-
-    def __init__(self, seed: int = 42):
-        self.rng = random.Random(seed)
-        self.symbol_to_english = {
-            "+": ["plus", "added to"],
-            "-": ["minus", "subtract", "less"],
-            "*": ["times", "multiplied by"],
-            "/": ["divided by", "over", "divide by"],
-        }
-
-    def _tokenize_expression(self, expression: str) -> List[Tuple[int, str]]:
-        """Tokenize the expression into (token_type, token_string) pairs."""
-        tokens = []
-        for tok_type, tok_str, *_ in tokenize.generate_tokens(
-            io.StringIO(expression).readline
-        ):
-            if tok_type == tokenize.ENDMARKER:
-                break
-            tokens.append((tok_type, tok_str))
-        return tokens
-
-    def _is_unary_minus(self, tokens: List[Tuple[int, str]], index: int) -> bool:
-        """Determine if the minus at the given index is unary (negative) or binary (subtraction)."""
-        if tokens[index][1] != "-" or index + 1 >= len(tokens):
-            return False
-
-        # Must be followed by a number and either at start or after opening paren/operator
-        return tokens[index + 1][0] == tokenize.NUMBER and (
-            index == 0 or tokens[index - 1][1] in "(-+*/"
-        )
-
-    def _convert_number(
-        self, token_str: str, should_convert: bool, max_decimal_places: int
-    ) -> str:
-        """Convert a number token to English if requested."""
-        if not should_convert:
-            return token_str
-
-        try:
-            val = int(token_str)
-        except ValueError:
-            val = float(token_str)
-        return convert_number_to_english(val, max_decimal_places)
-
-    def _process_negative_number(
-        self, number_token: str, english_probability: float, max_decimal_places: int
-    ) -> List[str]:
-        """Process a negative number, returning converted tokens."""
-        convert_minus = self.rng.random() < english_probability
-        convert_number = self.rng.random() < english_probability
-
-        if convert_minus and convert_number:
-            # Convert to "negative [number_in_english]"
-            val = float(number_token) if "." in number_token else int(number_token)
-            english_number = convert_number_to_english(val, max_decimal_places)
-            return [f"negative {english_number}"]
-        elif convert_minus:
-            # Convert minus to English, keep number as-is
-            return [self.rng.choice(self.symbol_to_english["-"]), number_token]
-        elif convert_number:
-            # Keep minus as-is, convert number to English
-            return ["-", self._convert_number(number_token, True, max_decimal_places)]
-        else:
-            # Keep both as-is
-            return ["-", number_token]
-
-    def format_expression(
-        self,
-        expression: str,
-        english_conversion_probability: float = 0.0,
-        max_decimal_places: int = 6,
-    ) -> str:
-        """Convert arithmetic expression to English with proper negative number handling."""
-        tokens = self._tokenize_expression(expression)
-        converted = []
-        i = 0
-
-        while i < len(tokens):
-            tok_type, tok_str = tokens[i]
-
-            # Handle unary minus (negative number)
-            if tok_type == tokenize.OP and self._is_unary_minus(tokens, i):
-                result_tokens = self._process_negative_number(
-                    tokens[i + 1][1], english_conversion_probability, max_decimal_places
-                )
-                converted.extend(result_tokens)
-                i += 2
-            # Handle regular number
-            elif tok_type == tokenize.NUMBER:
-                converted.append(
-                    self._convert_number(
-                        tok_str,
-                        self.rng.random() < english_conversion_probability,
-                        max_decimal_places,
-                    )
-                )
-                i += 1
-            # Handle operator
-            elif tok_type == tokenize.OP and tok_str in self.symbol_to_english:
-                if self.rng.random() < english_conversion_probability:
-                    converted.append(self.rng.choice(self.symbol_to_english[tok_str]))
-                else:
-                    converted.append(tok_str)
-                i += 1
-            # Everything else (identifiers, whitespace, etc.)
-            else:
-                converted.append(tok_str)
-                i += 1
-
-        return " ".join(converted).strip()
-
-
 def format_expression_string(
-    expression: Union[str, sympy.Basic],
+    expression: sympy.Basic,
+    initial_values: List[float],
     english_conversion_probability: float = 0.0,
     seed: int = 42,
     max_decimal_places: int = 6,
-    initial_values: list[float] | None = None,
     integer_no_decimal_probability: float = 0.0,
+    printing_style_probs: Dict[str, float] | None = None,
 ) -> str:
-    """Converts an arithmetic expression into English.
-
-    The expression can be either:
-    1. A string like "-1.2 + (5 / 3)" which will be converted to "negative one point two plus five divided by three"
-    2. A SymPy expression with placeholders (VAL_0, VAL_1, etc.) that will be replaced with values from initial_values
+    """Enhanced expression formatting with probabilistic style selection.
 
     Args:
-        expression: String or SymPy expression to format
-        english_conversion_probability: Probability of converting numbers/operators to English words
+        expression: SymPy expression to format (values may already be in English if english_conversion_probability > 0)
+        initial_values: List of values used in the expression
+        english_conversion_probability: Probability of converting operations to English
         seed: Random seed for consistent conversions
         max_decimal_places: Maximum decimal places to show in formatted numbers
-        initial_values: List of values to substitute for VAL_X placeholders in SymPy expressions
         integer_no_decimal_probability: Probability of dropping ".0" from integer values
+        printing_style_probs: Dictionary mapping style names to probabilities.
+                             If None, defaults to {"sstr": 1.0}
+
+    Returns:
+        Formatted expression string
     """
-    # If we have a SymPy expression, convert it to string and handle placeholders
-    if isinstance(expression, sympy.Basic):
-        if initial_values is None:
-            raise ValueError("initial_values must be provided for SymPy expressions")
+    # Validate input type
+    if not isinstance(expression, sympy.Basic):
+        raise TypeError(
+            f"expression must be a SymPy expression, got {type(expression)}"
+        )
 
-        expr_str = sympy.sstr(expression)
+    # Set default style probabilities
+    if printing_style_probs is None or not printing_style_probs:
+        printing_style_probs = {"sstr": 1.0}
 
-        # Replace placeholders with formatted numbers
-        rng_int = random.Random(seed + 12345)
-        for idx, val in enumerate(initial_values):
-            placeholder = f"VAL_{idx}"
-            formatted_abs = number_to_string(
-                abs(val),
-                rng=rng_int,
-                integer_no_decimal_probability=integer_no_decimal_probability,
+    # Sample printing style
+    rng = random.Random(seed)
+    style = sample_printing_style(printing_style_probs, rng)
+
+    # Render expression in selected style
+    expr_str = render_expr(expression, style)
+
+    # Apply English conversion to operations based on the style
+    # (operand conversion is handled during symbol creation)
+    if english_conversion_probability > 0:
+        # Only convert operations for sstr and latex styles
+        if style in ["sstr", "latex"]:
+            # Add proper spacing around operators
+            expr_str = add_operator_spacing(expr_str)
+            expr_str = substitute_operations(
+                expr_str, english_conversion_probability, seed
             )
-            replacement = formatted_abs if val >= 0 else f"-{formatted_abs}"
-            expr_str = expr_str.replace(placeholder, replacement)
 
-        # Collapse spaces that might appear inside numeric literals
-        expr_str = re.sub(r"\s+", "", expr_str)
-        expression = expr_str
+    return expr_str
 
-    formatter = ExpressionFormatter(seed)
-    return formatter.format_expression(
-        expression, english_conversion_probability, max_decimal_places
-    )
+
+# --------------------------------------------------------------------------- #
+# Multi-Style Expression Rendering System
+# --------------------------------------------------------------------------- #
+
+# Supported printing styles
+SUPPORTED_STYLES = {"sstr", "pretty", "ascii", "latex", "repr"}
+
+
+def validate_printing_style_probs(printing_style_probs: Dict[str, float]) -> None:
+    """Validate printing style probability dictionary.
+
+    Args:
+        printing_style_probs: Dictionary mapping style names to probabilities
+
+    Raises:
+        ValueError: If probabilities don't sum to 1.0 or contain unsupported styles
+    """
+    if not printing_style_probs:
+        raise ValueError("printing_style_probs cannot be empty")
+
+    # Check for unsupported styles
+    unsupported = set(printing_style_probs.keys()) - SUPPORTED_STYLES
+    if unsupported:
+        raise ValueError(
+            f"Unsupported printing styles: {unsupported}. "
+            f"Supported styles: {SUPPORTED_STYLES}"
+        )
+
+    # Check probabilities sum to 1.0 (with small tolerance for floating point)
+    total_prob = sum(printing_style_probs.values())
+    if abs(total_prob - 1.0) > 1e-6:
+        raise ValueError(
+            f"Printing style probabilities must sum to 1.0, got {total_prob}"
+        )
+
+
+def sample_printing_style(
+    printing_style_probs: Dict[str, float], rng: random.Random
+) -> str:
+    """Sample a printing style based on the provided probabilities.
+
+    Args:
+        printing_style_probs: Dictionary mapping style names to probabilities
+        rng: Random number generator for consistent sampling
+
+    Returns:
+        Selected printing style name
+    """
+    validate_printing_style_probs(printing_style_probs)
+
+    # Use random choice with weights
+    styles = list(printing_style_probs.keys())
+    weights = list(printing_style_probs.values())
+
+    return rng.choices(styles, weights=weights)[0]
+
+
+def render_expr(expr: sympy.Basic, style: str) -> str:
+    """Render a SymPy expression using the specified printing style.
+
+    Args:
+        expr: SymPy expression to render
+        style: Printing style ("sstr", "pretty", "ascii", "latex", "repr")
+
+    Returns:
+        String representation of the expression
+
+    Raises:
+        ValueError: If style is not supported
+    """
+    if style not in SUPPORTED_STYLES:
+        raise ValueError(f"Unsupported style: {style}. Supported: {SUPPORTED_STYLES}")
+
+    if style == "sstr":
+        return sympy.sstr(expr)
+    elif style == "pretty":
+        return sympy.pretty(expr)
+    elif style == "ascii":
+        return sympy.pretty(expr, use_unicode=False)
+    elif style == "latex":
+        return sympy.latex(expr)
+    elif style == "repr":
+        return repr(expr)
+    else:
+        # This should never happen due to the check above, but just in case
+        raise ValueError(f"Unhandled style: {style}")
+
+
+def add_operator_spacing(expression: str) -> str:
+    """Add proper spacing around operators while preserving line structure.
+
+    Args:
+        expression: Expression string to add spacing to
+
+    Returns:
+        Expression string with properly spaced operators
+    """
+    result = expression.strip()
+    lines = result.split("\n")
+    processed_lines = []
+
+    for line in lines:
+        # Add spaces around operators in each line individually
+        line = re.sub(r"(\d)\s*([+*/^=()])\s*", r"\1 \2 ", line)
+        line = re.sub(r"([+*/^=()])\s*(\d)", r"\1 \2", line)
+        line = re.sub(r"(\d|\))\s*-\s*", r"\1 - ", line)  # Binary minus
+        line = re.sub(r"(^|[+*/^=(])\s*-\s*(\d)", r"\1- \2", line)  # Unary minus
+        line = re.sub(r" +", " ", line).strip()
+        processed_lines.append(line)
+
+    # Reconstruct the multi-line result
+    return "\n".join(processed_lines)
+
+
+def substitute_operations(
+    expression: str, english_probability: float, seed: int
+) -> str:
+    """Substitute mathematical operations with English equivalents.
+
+    Args:
+        expression: Expression string with operations to convert
+        english_probability: Probability of converting each operator
+        seed: Random seed for consistency
+
+    Returns:
+        Expression with operations potentially converted to English
+    """
+    rng = random.Random(seed + 54321)  # Different seed offset than operands
+    result = expression
+
+    # Process line by line to maintain structure
+    lines = result.split("\n")
+    processed_lines = []
+
+    for line in lines:
+        current_line = line
+
+        # Step 1: Convert visual fractions to English
+        if rng.random() < english_probability:
+            # This step is handled separately since fractions span multiple lines
+            pass  # Fraction handling is now in substitute_operands
+
+        # Step 2: Convert non-minus operators to English
+        if rng.random() < english_probability:
+            # Handle multi-character operators first
+            if "**" in current_line and rng.random() < english_probability:
+                current_line = current_line.replace("**", " to_the_power_of ")
+
+            # Handle single operators
+            operators = {
+                "+": ["plus", "added to"],
+                "*": ["times", "multiplied by"],
+                "/": ["divided by", "over"],
+                "^": ["to the power of", "raised to"],
+            }
+
+            for op, options in operators.items():
+                if op in current_line and rng.random() < english_probability:
+                    english_op = rng.choice(options)
+                    current_line = current_line.replace(op, f" {english_op} ")
+
+        # Step 3: Handle minus signs systematically
+        if rng.random() < english_probability:
+            # First, identify and convert binary minus (subtraction)
+            # Pattern: number/paren followed by minus followed by space and number (not another minus)
+            minus_options = ["minus", "subtract", "less"]
+            english_minus = rng.choice(minus_options)
+            current_line = re.sub(
+                r"(\d|\))\s*-\s+(\d)", rf"\1 {english_minus} \2", current_line
+            )
+
+        # Clean up line-level formatting
+        current_line = re.sub(
+            r"to_the_power_of", "to the power of", current_line
+        )  # Fix temp replacement
+        current_line = re.sub(r"\s+", " ", current_line).strip()
+        processed_lines.append(current_line)
+
+    return "\n".join(processed_lines)

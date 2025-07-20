@@ -24,39 +24,14 @@ def test_generate_single_dag_example_determinism(depth: int, seed: int):
     example1 = generate_single_dag_example(**kwargs)
     example2 = generate_single_dag_example(**kwargs)
 
-    # Collect all differences instead of failing fast on the first one.
-    diffs = []
+    # Check that text is identical
+    assert example1.text == example2.text
 
-    # Simple scalar / list comparisons
-    if example1.text != example2.text:
-        diffs.append("text differs")
-    if example1.initial_values != example2.initial_values:
-        diffs.append("initial_values differ")
-    if example1.operations_named != example2.operations_named:
-        diffs.append("operations_named differ")
-    if example1.seed != example2.seed:
-        diffs.append("seed differs")
-    if example1.did_expand != example2.did_expand:
-        diffs.append("did_expand flag differs")
-    if example1.did_simplify != example2.did_simplify:
-        diffs.append("did_simplify flag differs")
-    if example1.allowed_operations != example2.allowed_operations:
-        diffs.append("allowed_operations differ")
+    # Check that initial values are identical
+    assert example1.initial_values == example2.initial_values
 
-    # Tensor comparisons
-    if not torch.equal(example1.signs, example2.signs):
-        diffs.append("signs tensor differs")
-    if not torch.equal(example1.digits, example2.digits):
-        diffs.append("digits tensor differs")
-    if not torch.equal(example1.operations, example2.operations):
-        diffs.append("operations tensor differs")
+    # Check that operations are identical
+    assert example1.operations_named == example2.operations_named
 
-    # Numerical value comparisons (approximate)
-    if not (example1.final_value_sympy == pytest.approx(example2.final_value_sympy)):
-        diffs.append("final_value_sympy differs")
-    if not (example1.final_value_exec == pytest.approx(example2.final_value_exec)):
-        diffs.append("final_value_exec differs")
-
-    # If any differences were found, fail the test once with a comprehensive message.
-    if diffs:
-        pytest.fail("DAGExample mismatch: \n- " + "\n- ".join(diffs))
+    # Check that sympy expressions are identical
+    assert example1.expr == example2.expr

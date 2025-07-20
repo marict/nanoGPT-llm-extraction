@@ -18,6 +18,7 @@ from sympy import im
 from sympy.printing.str import StrPrinter
 from tiktoken import get_encoding
 
+from data.dagset.expression_to_string import convert_number_to_english
 from models.dag_model import execute_stack
 
 
@@ -72,64 +73,71 @@ class DAGExample:
 
 
 def generate_uniform_digit_number(
-    seed: int = None,
+    seed: int | None = None,
     max_digits: int = 4,
     max_decimal_places: int = 6,
     allow_zero: bool = True,
-) -> float:
-    """Generate a number with uniform distribution over digit count combinations."""
-    rng = random.Random(seed)
-    num_integer_digits = rng.randint(0, max_digits)
+    integer_no_decimal_probability: float = 0.0,
+) -> float | int:
+    """Generate a random number within digit constraints.
 
-    # 0 decimal places = integer
+    A random number with controlled digit constraints, as float or int.
+    """
+    rng = random.Random(seed or random.randint(0, 10000))
+
+    # Determine if we're generating a positive or negative number
+    sign = 1 if rng.random() < 0.5 else -1
+
+    # 1. Generate a random number of integer digits
+    num_int_digits = rng.randint(1, max_digits)
+
+    # 2. Generate random integer digits (first digit can't be 0 for multi-digit integers)
+    if num_int_digits > 1:
+        first_digit = rng.randint(1, 9)
+        other_digits = [rng.randint(0, 9) for _ in range(num_int_digits - 1)]
+        int_digits = [first_digit] + other_digits
+    else:
+        # For single digit, if we don't allow zero, force non-zero
+        if not allow_zero:
+            int_digits = [rng.randint(1, 9)]
+        else:
+            int_digits = [rng.randint(0, 9)]
+
+    # 3. Generate a random number of decimal places
     num_decimal_places = rng.randint(0, max_decimal_places)
 
-    # If zero is not allowed, and the number is 0.0, generate a random number with 1 digit, either integer or decimal
-    if not allow_zero and (num_integer_digits == 0 and num_decimal_places == 0):
-        if rng.random() < 0.5:
-            num_integer_digits = 1
-        else:
-            num_decimal_places = 1
+    # 4. Generate random decimal digits
+    decimal_digits = [rng.randint(0, 9) for _ in range(num_decimal_places)]
 
-    # Generate integer part with the chosen number of digits
-    if num_integer_digits == 0:
-        # 0-digit: just 0 (for numbers like 0.003)
-        integer_part = 0
-    elif num_integer_digits == 1:
-        # 1-digit: 1 to 9 (0 is handled by num_integer_digits=0)
-        integer_part = rng.randint(1, 9)
+    # 5. Combine integer and decimal parts
+    int_part = sum(d * (10**i) for i, d in enumerate(reversed(int_digits)))
+
+    # If int_part is 0, and we have decimal places, make sure at least one decimal digit is non-zero
+    # to avoid generating a complete zero when not allowed
+    if int_part == 0 and not allow_zero and num_decimal_places > 0:
+        if all(d == 0 for d in decimal_digits):
+            # Replace a random decimal digit with non-zero
+            idx = rng.randint(0, len(decimal_digits) - 1)
+            decimal_digits[idx] = rng.randint(1, 9)
+
+    # Check if the number is a whole number (no decimal places)
+    is_whole_number = num_decimal_places == 0
+
+    # Calculate the actual result as a float initially
+    if num_decimal_places > 0:
+        decimal_part = sum(d * (10 ** -(i + 1)) for i, d in enumerate(decimal_digits))
+        result = int_part + decimal_part
     else:
-        # n-digit: from 10^(n-1) to 10^n - 1
-        min_val = 10 ** (num_integer_digits - 1)
-        max_val = 10**num_integer_digits - 1
-        integer_part = rng.randint(min_val, max_val)
+        result = float(int_part)
 
-    # Generate decimal part with the chosen number of decimal places
-    if num_decimal_places == 0:
-        # Integer (no decimal part)
-        decimal_part = 0.0
-    else:
-        # Generate exactly num_decimal_places digits after decimal
-        min_decimal = 1
-        if num_decimal_places > 1:
-            min_decimal = 10 ** (num_decimal_places - 1)
-        max_decimal = 10**num_decimal_places - 1
+    # Apply the sign
+    result *= sign
 
-        # Handle case where min_decimal can be > max_decimal if max_decimal is small
-        if min_decimal > max_decimal:
-            decimal_digits = max_decimal
-        else:
-            decimal_digits = rng.randint(min_decimal, max_decimal)
+    # Convert to integer if it's a whole number and the random probability is met
+    if is_whole_number and rng.random() < integer_no_decimal_probability:
+        return int(result)
 
-        decimal_part = decimal_digits / (10**num_decimal_places)
-
-    # Combine integer and decimal parts
-    magnitude = integer_part + decimal_part
-
-    sign = rng.choice([-1, 1])
-    value = sign * magnitude
-
-    return value
+    return result
 
 
 def _apply_sympy_op(op_name: str, second: sympy.Basic, top: sympy.Basic) -> sympy.Basic:
@@ -143,10 +151,10 @@ def _apply_sympy_op(op_name: str, second: sympy.Basic, top: sympy.Basic) -> symp
     if op_name == "divide":
         return sympy.Mul(second, sympy.Pow(top, -1, evaluate=False), evaluate=False)
     if op_name == "identity":
-        raise ValueError(
-            "Identity operation not supported, it should be padded onto the end of the operations list after generation."
-        )
-    raise ValueError(f"Unsupported op_name: {op_name}")
+        # For symbol creation in expression generation, we return the second operand
+        return second
+
+    raise ValueError(f"Unknown operation: {op_name}")
 
 
 def _generate_expression(
@@ -158,75 +166,66 @@ def _generate_expression(
     allowed_operations: list[str] | None,
     expression_simplification_probability: float,
     expression_expansion_probability: float,
+    english_conversion_probability: float = 0.0,
+    integer_no_decimal_probability: float = 0.0,
     override_initial_values: list[float] | None = None,
     override_operations: list[str] | None = None,
     execute_sympy: bool = True,
 ) -> tuple[sympy.Basic, list[float], list[str], float | None, bool, bool, bool]:
-    """Create a random SymPy expression of exactly *depth* operations.
+    """Generate a sympy expression.
 
-    Returns (expr, initial_values, operations, did_simplify, did_expand).
+    Returns:
+        Tuple of (sympy_expr, initial_values, operations, final_value, did_simplify, did_expand, is_complex)
     """
+    # ------------------------------------------------------------------
+    # 1. Generate random initial values and operations
+    # ------------------------------------------------------------------
     rng = random.Random(seed)
 
-    # ------------------------------------------------------------------
-    # 1. Determine leaf values & operations (override vs random)
-    # ------------------------------------------------------------------
-    if (override_initial_values is None) ^ (override_operations is None):
-        raise ValueError(
-            "Both override_initial_values and override_operations must be provided together (or neither)."
-        )
+    # Use provided operations or generate random ones
+    ops_set = allowed_operations or OP_NAMES
+    sym_ops = []
 
-    if override_initial_values is not None:
-        # Use caller-supplied plan verbatim
-        if len(override_operations) != depth:
-            raise ValueError("Length of override_operations must equal depth")
-        if len(override_initial_values) != depth + 1:
-            raise ValueError("override_initial_values must have depth+1 elements")
-
-        initial_values = list(override_initial_values)
+    if override_operations is not None:
         sym_ops = list(override_operations)
     else:
-        expression_size = rng.randint(1, depth + 1)
+        # Generate random operations
+        for i in range(depth):
+            op_name = rng.choice(ops_set)
+            sym_ops.append(op_name)
 
-        # Default to all operations if none are provided
-        if allowed_operations is None:
-            op_pool = [op for op in OP_NAMES]
-        else:
-            op_pool = [op for op in allowed_operations]
-
-        assert (
-            "identity" in op_pool
-        ), "Identity operation must be in the allowed operations pool"
-
-        non_identity_op_pool = [op for op in op_pool if op != "identity"]
-
-        sym_ops = rng.choices(non_identity_op_pool, k=expression_size - 1)
-
-        initial_values = [
-            generate_uniform_digit_number(
+    # Use provided initial values or generate random ones
+    initial_values = []
+    if override_initial_values is not None:
+        initial_values = list(override_initial_values)
+    else:
+        # Generate random values (depth + 1 values needed for depth operations)
+        for i in range(depth + 1):
+            value = generate_uniform_digit_number(
                 seed=seed * 7919 + i,
                 max_digits=max_digits,
                 max_decimal_places=max_decimal_places,
+                allow_zero=False,
+                integer_no_decimal_probability=integer_no_decimal_probability,
             )
-            for i in range(len(sym_ops) + 1)
-        ]
-
-        # Ensure we never divide by zero under the current stack evaluation semantics.
-        for i, op in enumerate(sym_ops):
-            if op == "divide":
-                denom_index = i + 1
-                if initial_values[denom_index] == 0.0:
-                    initial_values[denom_index] = generate_uniform_digit_number(
-                        seed=seed * 7919 + i,
-                        max_digits=max_digits,
-                        max_decimal_places=max_decimal_places,
-                        allow_zero=False,
-                    )
+            initial_values.append(value)
 
     # ------------------------------------------------------------------
     # 2. Build SymPy expression from leaves + operations
     # ------------------------------------------------------------------
-    symbols = [sympy.Symbol(f"VAL_{i}") for i in range(len(initial_values))]
+    # Convert values to symbols (possibly with English names based on probability)
+    symbols = []
+    for val in initial_values:
+        # Determine if this value should be converted to English
+        should_convert = rng.random() < english_conversion_probability
+
+        if should_convert:
+            symbol_name = convert_number_to_english(val)
+        else:
+            # Use numerical representation
+            symbol_name = str(val)
+
+        symbols.append(sympy.Symbol(symbol_name))
 
     nodes: list[sympy.Basic] = symbols.copy()
     ops_map: dict[sympy.Basic, str] = {}
@@ -508,6 +507,7 @@ def generate_single_dag_example(
     max_decimal_places: int = 6,
     allowed_operations: list[str] | None = None,
     execute_sympy: bool = True,
+    printing_style_probs: dict[str, float] | None = None,
     # Test-only overrides – callers should provide **both** or **neither**
     _operations_override: list[str] | None = None,
     _initial_values_override: list[float] | None = None,
@@ -534,11 +534,15 @@ def generate_single_dag_example(
         allowed_operations=allowed_operations,
         expression_simplification_probability=expression_simplification_probability,
         expression_expansion_probability=expression_expansion_probability,
+        english_conversion_probability=english_conversion_probability,
+        integer_no_decimal_probability=integer_no_decimal_probability,
         override_initial_values=_initial_values_override,
         override_operations=_operations_override,
         execute_sympy=execute_sympy,
     )
 
+    # Now we render the expression - no need for English conversion of operands
+    # since they're already converted if needed
     text = format_expression_string(
         expression=sym_expr,
         initial_values=initial_values,
@@ -546,6 +550,7 @@ def generate_single_dag_example(
         english_conversion_probability=english_conversion_probability,
         integer_no_decimal_probability=integer_no_decimal_probability,
         max_decimal_places=max_decimal_places,
+        printing_style_probs=printing_style_probs,
     )
     # Use plan_to_tensors to get the structure dict directly
     structure_dict = plan_to_tensors(
@@ -612,6 +617,7 @@ class DAGStructureDataset:
         max_digits: int = 4,
         max_decimal_places: int = 6,
         allowed_operations: list[str] | None = None,
+        printing_style_probs: dict[str, float] | None = None,
     ):
         """Initialize the DAG structure dataset."""
         self.max_depth = max_depth
@@ -629,6 +635,7 @@ class DAGStructureDataset:
             expression_simplification_probability
         )
         self.expression_expansion_probability = expression_expansion_probability
+        self.printing_style_probs = printing_style_probs
         self.max_digits = max_digits
         self.max_decimal_places = max_decimal_places
         # If a subset of operations is provided, validate and store mapping.
@@ -690,6 +697,7 @@ class DAGStructureDataset:
                 max_decimal_places=self.max_decimal_places,
                 allowed_operations=self.allowed_operations,
                 execute_sympy=False,
+                printing_style_probs=self.printing_style_probs,
             )
 
             texts.append(example.text)
@@ -800,6 +808,7 @@ def create_dag_structure_dataloaders(
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = 6,  # Auto-derived from max_digits for uniform string distribution
     allowed_operations: list[str] | None = None,
+    printing_style_probs: dict[str, float] | None = None,
 ) -> Tuple[Iterator, Iterator]:
     """Create train/val DAG structure dataloaders for predictor training.
 
@@ -829,6 +838,7 @@ def create_dag_structure_dataloaders(
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
         allowed_operations=allowed_operations,
+        printing_style_probs=printing_style_probs,
     )
 
     val_dataset = DAGStructureDataset(
@@ -841,6 +851,7 @@ def create_dag_structure_dataloaders(
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
         allowed_operations=allowed_operations,
+        printing_style_probs=printing_style_probs,
     )
 
     # Create dataloaders
