@@ -31,16 +31,15 @@ train_examples_per_batch = 4000
 val_examples_per_batch = 800
 
 # Expression generation settings
-english_conversion_probability = 0.3
+english_conversion_probability = 0.5
 integer_no_decimal_probability = 0.5
 expression_simplification_probability = 0.5
 expression_expansion_probability = 0.5
 printing_style_probs = {
-    "sstr": 0.4,
-    "pretty": 0.2,
-    "ascii": 0.1,
-    "latex": 0.2,
-    "str": 0.1,
+    "sstr": 0.25,
+    "pretty": 0.25,
+    "ascii": 0.25,
+    "latex": 0.25,
 }
 
 # Model configuration
