@@ -166,6 +166,7 @@ def generate_expression(
     override_initial_values: list[float] | None = None,
     override_operations: list[str] | None = None,
     execute_sympy: bool = True,
+    _print_exec_intermediates: bool = False,
 ) -> tuple[sympy.Basic, list[float], list[str], float | None, bool, bool, bool]:
     """Generate a sympy expression.
 
@@ -361,6 +362,7 @@ def plan_to_tensors(
     max_decimal_places: int,
     depth: int | None = None,
     allowed_operations: list[str] | None = None,
+    _print_exec_intermediates: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Convert a DAG plan to structure tensors for training."""
     # Convert initial values to signs and digit one-hots
@@ -396,6 +398,7 @@ def plan_to_tensors(
             max_digits=max_digits,
             max_decimal_places=max_decimal_places,
             ignore_clip=True,
+            _print_exec_intermediates=_print_exec_intermediates,
         )
 
         final_value_exec = (
@@ -520,6 +523,7 @@ def generate_single_dag_example(
     execute_sympy: bool = True,
     printing_style_probs: dict[str, float] | None = None,
     # Test-only overrides – callers should provide **both** or **neither**
+    _print_exec_intermediates: bool = False,
     _operations_override: list[str] | None = None,
     _initial_values_override: list[float] | None = None,
 ) -> DAGExample:
@@ -546,6 +550,7 @@ def generate_single_dag_example(
         override_initial_values=_initial_values_override,
         override_operations=_operations_override,
         execute_sympy=execute_sympy,
+        _print_exec_intermediates=_print_exec_intermediates,
     )
 
     # Now we render the expression - no need for English conversion of operands
@@ -564,6 +569,7 @@ def generate_single_dag_example(
         max_decimal_places=max_decimal_places,
         depth=depth,
         allowed_operations=allowed_operations,
+        _print_exec_intermediates=_print_exec_intermediates,
     )
 
     example = DAGExample(
@@ -580,11 +586,11 @@ def generate_single_dag_example(
         digits=structure_dict["initial_digits"],
         operations=structure_dict["operation_probs"],
         final_value_exec=structure_dict["final_value_exec"].item(),
+        final_value_sympy=final_value_sympy,
         operations_named=operations,
         seed=seed,
         did_expand=did_expand,
         did_simplify=did_simplify,
-        final_value_sympy=final_value_sympy,
         allowed_operations=allowed_operations,
         expr=sym_expr_with_vals,
     )

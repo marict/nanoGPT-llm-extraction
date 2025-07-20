@@ -294,10 +294,10 @@ def add_log_space(
     # Work in double precision to minimise error during the ``log1p`` call.
     target_dtype = torch.float64 if lx.device.type != "mps" else torch.float32
 
-    delta32_n = (small_log - big_log).to(target_dtype).clamp(
+    delta_n = (small_log.to(target_dtype) - big_log.to(target_dtype)).clamp(
         max=-1e-3, min=-LOG_LIM
     ) * LN10
-    diff_n = torch.log1p(-torch.exp(delta32_n))  # natural log domain
+    diff_n = torch.log1p(-torch.exp(delta_n))  # natural log domain
     diff = (diff_n / LN10).to(lx.dtype)
 
     # Perfect cancellation case
@@ -592,6 +592,7 @@ def execute_stack(
     max_digits: int,
     max_decimal_places: int,
     ignore_clip: bool = False,
+    _print_exec_intermediates: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Execute a differentiable stack-based DAG computation.
 
@@ -642,12 +643,12 @@ def execute_stack(
         device=digit_probs.device,
         dtype=digit_probs.dtype,
     )
-    # Non-negative exponents for mantissa
-    mantissa = (expected_digits * (10.0**powers)).sum(-1)  # (B,T,N)
+    # Assemble integer value from digits and powers
+    raw_int_value = (expected_digits * (10.0**powers)).sum(-1)  # (B,T,N)
     # Separate fixed scale (constant)
     scale = max_decimal_places
-    mantissa = mantissa.clamp_min(MIN_CLAMP)
-    initial_log = torch.log10(mantissa) - scale
+    raw_int_value = raw_int_value.clamp_min(MIN_CLAMP)
+    initial_log = torch.log10(raw_int_value) - scale
 
     B, T, num_initial = initial_sgn.shape
     depth = ops.shape[2]
@@ -673,6 +674,22 @@ def execute_stack(
 
     current_size = num_initial
 
+    # Helper function for debug output
+    def _log_to_value(sgn: torch.Tensor, log: torch.Tensor) -> float:
+        """Convert sign/log representation back to readable value."""
+        if sgn.numel() == 1 and log.numel() == 1:
+            return float(sgn.item() * (10 ** log.item()))
+        return "BATCH_DATA"
+
+    if _print_exec_intermediates:
+        print("\n=== EXECUTE_STACK DEBUG ===")
+        print(f"Initial stack size: {current_size}")
+        print(f"Operations depth: {depth}")
+        for i in range(current_size):
+            val = _log_to_value(buffer_sgn[0, 0, i], buffer_log[0, 0, i])
+            print(f"  Stack[{i}]: {val}")
+        print()
+
     for step in range(depth):
         if current_size < 2:
             raise RuntimeError(
@@ -683,6 +700,24 @@ def execute_stack(
         second_sgn = buffer_sgn[..., current_size - 2]
         top_log = buffer_log[..., current_size - 1]
         second_log = buffer_log[..., current_size - 2]
+
+        if _print_exec_intermediates:
+            # Show operation details
+            op_probs = ops[0, 0, depth - 1 - step]  # Get operation probabilities
+            max_op_idx = torch.argmax(op_probs).item()
+            op_name = (
+                OP_NAMES[max_op_idx]
+                if max_op_idx < len(OP_NAMES)
+                else f"unknown_{max_op_idx}"
+            )
+            op_prob = op_probs[max_op_idx].item()
+
+            second_val = _log_to_value(second_sgn[0, 0], second_log[0, 0])
+            top_val = _log_to_value(top_sgn[0, 0], top_log[0, 0])
+
+            print(f"Step {step}: Applying '{op_name}' (prob={op_prob:.4f})")
+            print(f"  Operands: second={second_val}, top={top_val}")
+            print(f"  Stack indices: [{current_size-2}] op [{current_size-1}]")
 
         # Apply the operation in Reverse Polish Notation
         # Ex. ['add','identity'] will apply identity operation first, and then add
@@ -695,12 +730,30 @@ def execute_stack(
             ignore_clip=ignore_clip,
         )
 
+        if _print_exec_intermediates:
+            result_val = _log_to_value(result_sgn[0, 0], result_log[0, 0])
+            print(f"  Result: {result_val}")
+
         second_idx = current_size - 2
         idx = torch.tensor([second_idx], device=buffer_sgn.device)
         buffer_sgn = index_copy_like(buffer_sgn, -1, idx, result_sgn)
         buffer_log = index_copy_like(buffer_log, -1, idx, result_log)
 
         current_size -= 1
+
+        if _print_exec_intermediates:
+            print(f"  New stack size: {current_size}")
+            for i in range(current_size):
+                val = _log_to_value(buffer_sgn[0, 0, i], buffer_log[0, 0, i])
+                print(f"    Stack[{i}]: {val}")
+            print()
+
+    if _print_exec_intermediates:
+        final_val = _log_to_value(buffer_sgn[0, 0, 0], buffer_log[0, 0, 0])
+        print(f"FINAL RESULT: {final_val}")
+        print(f"  Final sign: {buffer_sgn[0, 0, 0].item()}")
+        print(f"  Final log:  {buffer_log[0, 0, 0].item()}")
+        print("=== END EXECUTE_STACK DEBUG ===\n")
 
     return buffer_sgn[..., 0], buffer_log[..., 0]
 
