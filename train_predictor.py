@@ -325,7 +325,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     train_batch_size=cfg.batch_size,
                     val_batch_size=cfg.batch_size,
                     max_depth=cfg.dag_depth,
-                    seed=seed + iter_num,
+                    # Large prime to avoid overlap with training and repeated values on each eval.
+                    seed=seed + iter_num * 97919,
                     english_conversion_probability=cfg.english_conversion_probability,
                     integer_no_decimal_probability=cfg.integer_no_decimal_probability,
                     expression_simplification_probability=cfg.expression_simplification_probability,
