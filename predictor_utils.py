@@ -505,11 +505,11 @@ def evaluate_dag_model(
                 final_mse = F.mse_loss(pred_final_val, tgt_final_val)
 
                 # -------------------------------------------------------------- #
-                # Console debug: print one random sample from the first batch
+                # Console debug: print the last sample from the batch
                 # -------------------------------------------------------------- #
                 if i == 0:
                     batch_size = tgt_sgn.size(0)
-                    sample_idx = _eval_random.randrange(batch_size)
+                    sample_idx = batch_size - 1
                     sample_text = texts[sample_idx]
                     sample_obj: DAGExample = examples[sample_idx]
                     sample_seed = sample_obj.seed
