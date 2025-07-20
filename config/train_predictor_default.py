@@ -36,10 +36,10 @@ train_examples_per_batch = 100
 val_examples_per_batch = 20
 
 # Preprocessing settings
-english_conversion_probability = 1
-integer_no_decimal_probability = 0
-expression_simplification_probability = 0
-expression_expansion_probability = 0
+english_conversion_probability = 0.5
+integer_no_decimal_probability = 0.5
+expression_simplification_probability = 0.5
+expression_expansion_probability = 0.5
 
 # Expression rendering style probabilities - default style for fast testing
 printing_style_probs = {"sstr": 0.25, "pretty": 0.25, "ascii": 0.25, "latex": 0.25}

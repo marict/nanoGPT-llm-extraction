@@ -190,9 +190,12 @@ def generate_expression(
     if override_operations is not None:
         sym_ops = list(override_operations)
     else:
-        # Generate random operations
-        for i in range(depth):
-            op_name = rng.choice(ops_set)
+        ops_set_no_identity = [op for op in ops_set if op != "identity"]
+        # Choose a random number of operations between 0 and depth.
+        num_ops = rng.randint(0, depth)
+        # Generate random operations.
+        for i in range(num_ops):
+            op_name = rng.choice(ops_set_no_identity)
             sym_ops.append(op_name)
 
     # Use provided initial values or generate random ones
@@ -200,8 +203,8 @@ def generate_expression(
     if override_initial_values is not None:
         initial_values = list(override_initial_values)
     else:
-        # Generate random values (depth + 1 values needed for depth operations)
-        for i in range(depth + 1):
+        # Generate random values.
+        for i in range(num_ops + 1):
             value = generate_uniform_digit_number(
                 seed=seed * 7919 + i,
                 max_digits=max_digits,
@@ -695,21 +698,27 @@ class DAGStructureDataset:
             # The identity function allows us to handle cases with effective depth < max_depth naturally
             depth = self.max_depth
 
-            # Generate example directly with structure tensors
-            example = generate_single_dag_example(
-                depth=depth,
-                num_initial_values=self.num_initial_values,
-                seed=seed + self.num_generated + i,
-                english_conversion_probability=self.english_conversion_probability,
-                integer_no_decimal_probability=self.integer_no_decimal_probability,
-                expression_simplification_probability=self.expression_simplification_probability,
-                expression_expansion_probability=self.expression_expansion_probability,
-                max_digits=self.max_digits,
-                max_decimal_places=self.max_decimal_places,
-                allowed_operations=self.allowed_operations,
-                execute_sympy=execute_sympy,
-                printing_style_probs=self.printing_style_probs,
-            )
+            try:
+                # Generate example directly with structure tensors
+                example = generate_single_dag_example(
+                    depth=depth,
+                    num_initial_values=self.num_initial_values,
+                    seed=seed + self.num_generated + i,
+                    english_conversion_probability=self.english_conversion_probability,
+                    integer_no_decimal_probability=self.integer_no_decimal_probability,
+                    expression_simplification_probability=self.expression_simplification_probability,
+                    expression_expansion_probability=self.expression_expansion_probability,
+                    max_digits=self.max_digits,
+                    max_decimal_places=self.max_decimal_places,
+                    allowed_operations=self.allowed_operations,
+                    execute_sympy=execute_sympy,
+                    printing_style_probs=self.printing_style_probs,
+                )
+            except Exception:
+                logging.error(
+                    f"Error generating Example with seed: {seed + self.num_generated + i}"
+                )
+                raise
 
             texts.append(example.text)
             structures.append(example.structure_dict)
