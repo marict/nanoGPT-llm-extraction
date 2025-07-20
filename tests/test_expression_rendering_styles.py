@@ -170,8 +170,8 @@ class TestIntegration:
             expr, printing_style_probs={"sstr": 1.0}, seed=42
         )
 
-        assert "1.5" in result[0]
-        assert "-2" in result[0]
+        assert "1.5" in result
+        assert "-2" in result
 
     def test_format_expression_string_default_probs(self):
         """Test that None printing_style_probs defaults to sstr."""
@@ -225,9 +225,9 @@ class TestIntegration:
         )
 
         # Should contain English words for numbers and operators
-        assert "one" in result[0].lower()  # numbers already converted
+        assert "one" in result.lower()  # numbers already converted
         # At least one operator word should appear for sstr style
-        assert any(op in result[0].lower() for op in ["plus", "added to"])
+        assert any(op in result.lower() for op in ["plus", "added to"])
 
     def test_english_conversion_all_styles(self):
         """Test that English conversion works for all printing styles."""
@@ -257,9 +257,9 @@ class TestIntegration:
 
             # Should contain English words for numbers (already in symbol names)
             assert (
-                "two" in result[0].lower()
-                or "three" in result[0].lower()
-                or "four" in result[0].lower()
+                "two" in result.lower()
+                or "three" in result.lower()
+                or "four" in result.lower()
             )
 
             # Test that the result is different from non-English version (operations conversion)
@@ -274,10 +274,10 @@ class TestIntegration:
                     "over",  # Division
                 ]
 
-                has_english = any(word in result[0].lower() for word in english_words)
+                has_english = any(word in result.lower() for word in english_words)
                 assert (
                     has_english
-                ), f"Style '{style}' did not produce English conversion. Got: {repr(result[0])}"
+                ), f"Style '{style}' did not produce English conversion. Got: {repr(result)}"
 
     def test_negative_numbers_all_styles(self):
         """Test that negative number conversion works for all printing styles."""
@@ -301,7 +301,7 @@ class TestIntegration:
             # Should contain "negative" for the negative number in all styles
             # since it's part of the symbol name
             assert (
-                "negative" in result[0].lower()
+                "negative" in result.lower()
             ), f"Style '{style}' did not preserve 'negative' word"
 
     def test_division_conversion_styles(self):
@@ -325,28 +325,28 @@ class TestIntegration:
 
             # All styles should have numbers in English (from symbol names)
             assert (
-                "eight" in result[0].lower() and "two" in result[0].lower()
-            ), f"Style '{style}' did not preserve English number names. Got: {repr(result[0])}"
+                "eight" in result.lower() and "two" in result.lower()
+            ), f"Style '{style}' did not preserve English number names. Got: {repr(result)}"
 
             # Check for division words in sstr style
             if style == "sstr":
                 division_words = ["divided by", "over"]
-                has_division = any(word in result[0].lower() for word in division_words)
+                has_division = any(word in result.lower() for word in division_words)
                 assert (
                     has_division
-                ), f"Style '{style}' should convert division to English. Got: {repr(result[0])}"
+                ), f"Style '{style}' should convert division to English. Got: {repr(result)}"
 
             # For latex style, check that it uses \frac for division
             elif style == "latex":
                 assert (
-                    "\\frac" in result[0]
-                ), f"LaTeX style should use \\frac for division. Got: {repr(result[0])}"
+                    "\\frac" in result
+                ), f"LaTeX style should use \\frac for division. Got: {repr(result)}"
 
             # For pretty/ascii styles, check for newlines which indicate fraction layout
             elif style in ["pretty", "ascii"]:
                 assert (
-                    "\n" in result[0]
-                ), f"Style '{style}' should use multi-line layout for division. Got: {repr(result[0])}"
+                    "\n" in result
+                ), f"Style '{style}' should use multi-line layout for division. Got: {repr(result)}"
 
     def test_format_expression_string_sympy_input(self):
         """Test formatting SymPy expressions."""
@@ -360,8 +360,8 @@ class TestIntegration:
             expr, printing_style_probs={"sstr": 1.0}, seed=42
         )
 
-        assert "1" in result[0]
-        assert "2" in result[0]
+        assert "1" in result
+        assert "2" in result
 
 
 class TestNumericalCorrectness:
@@ -446,17 +446,17 @@ def test_newlines_preserved_in_pretty_print():
     )
 
     # Pretty printing should preserve newlines for fractions
-    assert "\n" in result[0]
+    assert "\n" in result
 
     # Division should appear as a line
     line_found = False
-    for line in result[0].split("\n"):
+    for line in result.split("\n"):
         if "─" in line or "-" in line:  # Unicode or ASCII line
             line_found = True
             break
     assert (
         line_found
-    ), f"No division line found in pretty-printed result: {repr(result[0])}"
+    ), f"No division line found in pretty-printed result: {repr(result)}"
 
 
 def test_newlines_preserved_with_spacing():
@@ -477,7 +477,7 @@ def test_newlines_preserved_with_spacing():
     )
 
     # Count original newlines
-    original_newlines = result[0].count("\n")
+    original_newlines = result.count("\n")
 
     # Original should have newlines for fraction layout
     assert original_newlines > 0
@@ -491,6 +491,6 @@ def test_newlines_preserved_with_spacing():
     )
 
     # Verify basic formatting is applied
-    assert "1.0" in result_sstr[0]
-    assert "2.0" in result_sstr[0]
-    assert "3.0" in result_sstr[0]
+    assert "1.0" in result_sstr
+    assert "2.0" in result_sstr
+    assert "3.0" in result_sstr

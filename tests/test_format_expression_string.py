@@ -34,8 +34,8 @@ class TestFormatExpressionStringNegativeNumbers:
             expression, english_conversion_probability=1.0, seed=42
         )
         # With full English conversion, negative numbers become "negative [number]"
-        assert "negative" in result[0].lower()
-        assert "five" in result[0].lower()
+        assert "negative" in result.lower()
+        assert "five" in result.lower()
 
     def test_negative_integer_no_decimal(self):
         """Test negative integer without decimal point."""
@@ -46,8 +46,8 @@ class TestFormatExpressionStringNegativeNumbers:
             expression, english_conversion_probability=1.0, seed=42
         )
         # With full English conversion, negative numbers become "negative [number]"
-        assert "negative" in result[0].lower()
-        assert "seven" in result[0].lower()
+        assert "negative" in result.lower()
+        assert "seven" in result.lower()
 
     def test_negative_zero(self):
         """Test negative zero handling."""
@@ -58,7 +58,7 @@ class TestFormatExpressionStringNegativeNumbers:
             expression, english_conversion_probability=1.0, seed=42
         )
         # Negative zero becomes just zero (mathematically correct)
-        assert result[0].lower() == "zero"
+        assert result.lower() == "zero"
 
     def test_negative_in_addition_expression(self):
         """Test negative number in addition expression."""
@@ -70,13 +70,10 @@ class TestFormatExpressionStringNegativeNumbers:
         result, style = format_expression_string(
             expression, english_conversion_probability=1.0, seed=42
         )
-        assert "negative" in result[0].lower()  # For the negative number
+        assert "negative" in result.lower()  # For the negative number
         # For the addition - accept any addition synonym
         addition_synonyms = ["plus", "added to"]
-        assert (
-            any(syn in result[0].lower() for syn in addition_synonyms)
-            or "+" in result[0]
-        )
+        assert any(syn in result.lower() for syn in addition_synonyms) or "+" in result
 
     def test_negative_in_subtraction_expression(self):
         """Test negative number in subtraction expression."""
@@ -91,9 +88,9 @@ class TestFormatExpressionStringNegativeNumbers:
             expression, english_conversion_probability=1.0, seed=42
         )
         # Should have "negative" for the first number
-        assert "negative" in result[0].lower()  # For -4.2
+        assert "negative" in result.lower()  # For -4.2
         # Should contain both numbers (operator conversion may vary)
-        assert "four" in result[0].lower() and "one" in result[0].lower()
+        assert "four" in result.lower() and "one" in result.lower()
 
     def test_negative_in_multiplication_expression(self):
         """Test negative number in multiplication expression."""
@@ -105,9 +102,9 @@ class TestFormatExpressionStringNegativeNumbers:
         result, style = format_expression_string(
             expression, english_conversion_probability=1.0, seed=42
         )
-        assert "negative" in result[0].lower()  # For the negative number
+        assert "negative" in result.lower()  # For the negative number
         mult_indicators = ["*", "times", "multiplied"]
-        assert any(indicator in result[0].lower() for indicator in mult_indicators)
+        assert any(indicator in result.lower() for indicator in mult_indicators)
 
     def test_negative_in_division_expression(self):
         """Test negative number in division expression."""
@@ -121,9 +118,9 @@ class TestFormatExpressionStringNegativeNumbers:
         result, style = format_expression_string(
             expression, english_conversion_probability=1.0, seed=42
         )
-        assert "negative" in result[0].lower()  # For the negative number
+        assert "negative" in result.lower()  # For the negative number
         div_indicators = ["/", "divided", "over", "divide"]
-        assert any(indicator in result[0].lower() for indicator in div_indicators)
+        assert any(indicator in result.lower() for indicator in div_indicators)
 
     def test_multiple_negative_numbers(self):
         """Test expression with multiple negative numbers."""
@@ -136,7 +133,7 @@ class TestFormatExpressionStringNegativeNumbers:
             expression, english_conversion_probability=1.0, seed=42
         )
         # Should have "negative" for both numbers
-        negative_count = result[0].lower().count("negative")
+        negative_count = result.lower().count("negative")
         assert negative_count == 2  # One for each negative number
 
     def test_negative_in_parentheses(self):
@@ -150,9 +147,9 @@ class TestFormatExpressionStringNegativeNumbers:
             expression, english_conversion_probability=1.0, seed=42
         )
         # Should have "negative" for the number
-        assert "negative" in result[0].lower()
+        assert "negative" in result.lower()
         # Numbers should be present
-        assert "five" in result[0].lower() and "three" in result[0].lower()
+        assert "five" in result.lower() and "three" in result.lower()
 
     def test_complex_expression_with_negatives(self):
         """Test complex expression with multiple negative numbers."""
@@ -175,7 +172,7 @@ class TestFormatExpressionStringNegativeNumbers:
             expression, english_conversion_probability=1.0, seed=42
         )
         # Should have "negative" for multiple negative numbers
-        negative_count = result[0].lower().count("negative")
+        negative_count = result.lower().count("negative")
         assert negative_count >= 2  # At least for -1.2 and -0.8
 
     def test_very_small_negative_number(self):
@@ -188,7 +185,7 @@ class TestFormatExpressionStringNegativeNumbers:
             english_conversion_probability=1.0,
             seed=42,
         )
-        assert "negative" in result[0].lower()  # For the negative number
+        assert "negative" in result.lower()  # For the negative number
 
     def test_large_negative_number(self):
         """Test large negative number."""
@@ -198,7 +195,7 @@ class TestFormatExpressionStringNegativeNumbers:
         result, style = format_expression_string(
             expression, english_conversion_probability=1.0, seed=42
         )
-        assert "negative" in result[0].lower()  # For the negative number
+        assert "negative" in result.lower()  # For the negative number
 
     def test_partial_english_conversion_deterministic(self):
         """Test that conversion is deterministic with same seed."""
@@ -241,7 +238,7 @@ class TestFormatExpressionStringNegativeNumbers:
         result, style = format_expression_string(
             expression, english_conversion_probability=1.0, seed=42
         )
-        assert "negative" in result[0].lower()  # For the negative number
+        assert "negative" in result.lower()  # For the negative number
 
     def test_mixed_positive_negative_expression(self):
         """Test expression mixing positive and negative numbers."""
@@ -258,7 +255,7 @@ class TestFormatExpressionStringNegativeNumbers:
             expression, english_conversion_probability=1.0, seed=42
         )
         # Should have at least one "negative" for the negative numbers
-        negative_count = result[0].lower().count("negative")
+        negative_count = result.lower().count("negative")
         assert negative_count >= 1  # English conversion is probabilistic
 
     def test_whitespace_preservation_with_negatives(self):
@@ -271,7 +268,7 @@ class TestFormatExpressionStringNegativeNumbers:
             expression, english_conversion_probability=0.0, seed=42
         )
         # Check that the negative number is present
-        assert "-5.2" in result[0]
+        assert "-5.2" in result
 
     def test_decimal_places_limit_negative(self):
         """Test decimal places limit with negative numbers."""
@@ -283,7 +280,7 @@ class TestFormatExpressionStringNegativeNumbers:
             english_conversion_probability=1.0,
             seed=42,
         )
-        assert "negative" in result[0].lower()  # For the negative number
+        assert "negative" in result.lower()  # For the negative number
         # The English conversion should respect decimal places limit
 
     def test_edge_case_negative_fraction(self):
@@ -294,7 +291,7 @@ class TestFormatExpressionStringNegativeNumbers:
         result, style = format_expression_string(
             expression, english_conversion_probability=1.0, seed=42
         )
-        assert "negative" in result[0].lower()  # For the negative number
+        assert "negative" in result.lower()  # For the negative number
         # Should handle fractional negative numbers correctly
 
     def test_user_reported_case(self):
@@ -306,8 +303,8 @@ class TestFormatExpressionStringNegativeNumbers:
             expression, english_conversion_probability=1.0, seed=42
         )
         # Should produce "negative [number]" not "less [number]"
-        assert "negative" in result[0].lower()
-        assert "six thousand" in result[0].lower()
+        assert "negative" in result.lower()
+        assert "six thousand" in result.lower()
         # Should NOT have minus synonyms for unary minus with full English conversion
         minus_synonyms = ["minus", "subtract", "less"]
-        assert not any(syn in result[0].lower() for syn in minus_synonyms)
+        assert not any(syn in result.lower() for syn in minus_synonyms)

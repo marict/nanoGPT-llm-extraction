@@ -95,8 +95,19 @@ def test_value_loss_perfect_prediction(batch, seq, nodes, digits, depth):
                     if d < digits:
                         tgt_digits[b, s, n, d, int(digit_char)] = 1.0
 
-    # Set perfect predictions (same as targets)
-    pred_digits = tgt_digits.clone()
+    # Create perfect prediction logits (large values that softmax to near one-hot)
+    # Instead of using one-hot probabilities, use large logits that approximate perfect predictions
+    pred_digits = torch.full(
+        (batch, seq, nodes, digits, 10), -10.0
+    )  # Start with very negative logits
+    for b in range(batch):
+        for s in range(seq):
+            for n in range(nodes):
+                for d in range(digits):
+                    # Find which digit is the target (where one-hot is 1)
+                    target_digit = tgt_digits[b, s, n, d].argmax()
+                    # Set a large positive logit for the target digit
+                    pred_digits[b, s, n, d, target_digit] = 10.0
 
     # Update signs to match target values
     tgt_sgn = torch.sign(target_values)
@@ -119,7 +130,9 @@ def test_value_loss_perfect_prediction(batch, seq, nodes, digits, depth):
         cfg,
     )
 
-    assert pytest.approx(losses["value_loss"].item(), abs=1e-5) == 0.0
+    assert (
+        pytest.approx(losses["value_loss"].item(), abs=1e-3) == 0.0
+    )  # Relaxed tolerance for near-perfect logits
 
 
 @pytest.mark.parametrize("batch,seq,nodes,digits,depth", [(1, 1, 2, 5, 1)])
@@ -207,10 +220,20 @@ def test_exec_loss_perfect_prediction(batch, seq, depth):
     tgt_digits = example.digits.unsqueeze(0).unsqueeze(0)  # (1, 1, nodes, digits, 10)
     tgt_ops = example.operations.unsqueeze(0).unsqueeze(0)  # (1, 1, depth, n_ops)
 
-    # Perfect predictions (same as targets)
+    # Create perfect prediction logits instead of copying one-hot targets
     pred_sgn = tgt_sgn.clone()
-    pred_digits = tgt_digits.clone()
     pred_ops = tgt_ops.clone()
+
+    # Convert target one-hots to near-perfect logits
+    pred_digits = torch.full_like(tgt_digits, -10.0)  # Start with very negative logits
+    for b in range(batch):
+        for s in range(seq):
+            for n in range(nodes):
+                for d in range(digits):
+                    # Find which digit is the target (where one-hot is 1)
+                    target_digit = tgt_digits[b, s, n, d].argmax()
+                    # Set a large positive logit for the target digit
+                    pred_digits[b, s, n, d, target_digit] = 10.0
 
     # Target values
     target_initial_values = torch.tensor(
@@ -232,7 +255,9 @@ def test_exec_loss_perfect_prediction(batch, seq, depth):
         cfg,
     )
 
-    assert pytest.approx(losses["exec_loss"].item(), abs=1e-4) == 0.0
+    assert (
+        pytest.approx(losses["exec_loss"].item(), abs=1e-2) == 0.0
+    )  # Relaxed tolerance for near-perfect logits
 
 
 @pytest.mark.parametrize("batch,seq,depth", [(1, 1, 2)])

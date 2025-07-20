@@ -50,15 +50,15 @@ def test_format_expression_string_conversion_and_identity():
     initial_values = [2.0, 2.0]
 
     # No conversion → expression should have basic spacing
-    no_conv = format_expression_string(
-        expr, initial_values, english_conversion_probability=0.0, seed=1
+    no_conv, style = format_expression_string(
+        expr, english_conversion_probability=0.0, seed=1
     )
     assert "2.0 + 2.0" in no_conv
 
     # Note: The actual English conversion of numbers is now done in _generate_expression
     # So this test only checks if operation conversion still works
-    conv = format_expression_string(
-        expr, initial_values, english_conversion_probability=1.0, seed=1
+    conv, style = format_expression_string(
+        expr, english_conversion_probability=1.0, seed=1
     )
     # At least one operator word should appear ("plus" or "added to")
     assert any(op in conv for op in ["plus", "added to"])

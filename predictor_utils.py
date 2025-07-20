@@ -69,12 +69,12 @@ def _compute_sign_loss(
 
 
 def _compute_digit_loss(
-    pred_digits: torch.Tensor,
+    pred_digit_probs: torch.Tensor,  # Now expects probabilities, not logits
     target_digits: torch.Tensor,
     device_type: str,
 ) -> torch.Tensor:
     """Compute cross-entropy loss for digit prediction."""
-    B, T, N, D, _ = pred_digits.shape
+    B, T, N, D, _ = pred_digit_probs.shape
 
     # Sanity check: model and dataset must agree on digit slots
     if target_digits.shape[-2] != D:
@@ -88,13 +88,10 @@ def _compute_digit_loss(
 
     with torch.amp.autocast(device_type=device_type, enabled=False):
         # Use reshape to handle potential non-contiguous tensors (view can fail)
-        pred_flat = pred_digits.reshape(-1, 10).to(torch.float32)  # (B*T*N*D, 10)
-        if pred_flat.min() < 0 or pred_flat.max() > 1:
-            # Likely raw logits – apply log_softmax
-            log_probs = F.log_softmax(pred_flat, dim=-1)
-        else:
-            # Already probabilities (or one-hot). Clamp for numerical stability
-            log_probs = torch.log(pred_flat.clamp(min=1e-8))
+        pred_flat = pred_digit_probs.reshape(-1, 10).to(torch.float32)  # (B*T*N*D, 10)
+
+        # Expect probabilities - clamp for numerical stability and take log
+        log_probs = torch.log(pred_flat.clamp(min=1e-8))
 
         target_flat = target_digits.reshape(-1, 10)
         target_idx = target_flat.argmax(dim=-1)
@@ -104,7 +101,7 @@ def _compute_digit_loss(
         if valid_mask.any():
             digit_loss = F.nll_loss(log_probs[valid_mask], target_idx[valid_mask])
         else:
-            digit_loss = torch.tensor(0.0, device=pred_digits.device)
+            digit_loss = torch.tensor(0.0, device=pred_digit_probs.device)
 
     return digit_loss
 
@@ -125,19 +122,13 @@ def _compute_op_loss(
 
 def _compute_value_loss(
     pred_sgn: torch.Tensor,
-    pred_digits: torch.Tensor,
+    pred_digit_probs: torch.Tensor,  # Now expects probabilities, not logits
     target_initial_values: torch.Tensor,
     cfg,
     device_type: str,
 ) -> torch.Tensor:
     """Compute robust loss between predicted and target initial values in log space."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
-        # Convert predicted digits to probabilities if they're logits
-        if pred_digits.min() < 0 or pred_digits.max() > 1:
-            pred_digit_probs = F.softmax(pred_digits, dim=-1)
-        else:
-            pred_digit_probs = pred_digits
-
         # Compute predicted log magnitudes directly from digit distributions
         # This avoids the intermediate step of reconstructing actual values
         device, dtype = pred_digit_probs.device, pred_digit_probs.dtype
@@ -158,10 +149,14 @@ def _compute_value_loss(
         pred_magnitude = (digits_vals * weights).sum(-1)  # (B,T,N)
 
         # Convert to log space (clamp for numerical stability)
-        pred_log_magnitude = torch.log10(pred_magnitude.clamp(min=1e-8))
+        pred_log_magnitude = torch.log10(pred_magnitude.clamp(min=1e-8)).to(
+            torch.float32
+        )
 
         # Target log magnitudes
-        target_log_magnitude = torch.log10(target_initial_values.abs() + 1e-8)
+        target_log_magnitude = torch.log10(target_initial_values.abs() + 1e-8).to(
+            torch.float32
+        )
 
         # Core magnitude loss in log space (direct smooth_l1_loss)
         magnitude_loss = F.smooth_l1_loss(
@@ -175,7 +170,9 @@ def _compute_value_loss(
 
         # Smooth sign loss: penalize when pred_sgn and target_sign have different signs
         # Use smooth penalty instead of hard mismatch counting
-        sign_diff = (pred_sgn - target_sign_smooth) * sign_mask.float()
+        sign_diff = (
+            pred_sgn.to(torch.float32) - target_sign_smooth.to(torch.float32)
+        ) * sign_mask.float()
         sign_penalty = 0.1 * (sign_diff**2).mean()  # smooth quadratic penalty
 
         return magnitude_loss + sign_penalty
@@ -183,7 +180,7 @@ def _compute_value_loss(
 
 def _compute_exec_loss(
     pred_sgn: torch.Tensor,
-    pred_digits: torch.Tensor,
+    pred_digit_probs: torch.Tensor,  # Now expects probabilities, not logits
     pred_ops: torch.Tensor,
     target_final_exec: torch.Tensor,
     cfg,
@@ -191,11 +188,6 @@ def _compute_exec_loss(
 ) -> torch.Tensor:
     """Execution loss using log10 magnitudes directly (avoids 10** blow-up)."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
-        # Convert predicted digits to probabilities if they're logits
-        if pred_digits.min() < 0 or pred_digits.max() > 1:
-            pred_digit_probs = F.softmax(pred_digits, dim=-1)
-        else:
-            pred_digit_probs = pred_digits
 
         # Execute: returns sign tensor and log10(|value|) tensor
         pred_final_sgn, pred_final_log10 = execute_stack(
@@ -207,21 +199,27 @@ def _compute_exec_loss(
             ignore_clip=True,  # raw for loss
         )
 
-        # Flatten
+        # Flatten and ensure float32 for smooth_l1_loss compatibility
         pred_final_log10 = pred_final_log10.reshape(-1).to(torch.float32)
-        pred_final_sgn = pred_final_sgn.reshape(-1)
+        pred_final_sgn = pred_final_sgn.reshape(-1).to(torch.float32)
         target_flat = target_final_exec.reshape(-1).to(torch.float32)
 
-        # Target log10 magnitude
-        tgt_log10 = torch.log10(target_flat.abs() + 1e-8)
+        # Target log10 magnitude - ensure float32
+        tgt_log10 = torch.log10(target_flat.abs() + 1e-8).to(torch.float32)
 
         # Magnitude loss components (inlined from safe_big_loss):
         # A) Huber loss in log space (weight 1.0)
         log_loss = F.smooth_l1_loss(pred_final_log10, tgt_log10, beta=1.0)
 
-        # B) Relative multiplicative error approximation (weight 0.2)
-        log_diff = (pred_final_log10 - tgt_log10).abs().clamp(max=12.0)
-        rel_loss = 0.2 * (10**log_diff - 1.0).mean()
+        # B) Relative multiplicative error approximation (reduced weight and clamped)
+        log_diff = (
+            (pred_final_log10 - tgt_log10).abs().clamp(max=6.0)
+        )  # Reduced from 12.0
+        # Clamp the exponential to prevent massive values
+        rel_term = (10**log_diff - 1.0).clamp(
+            max=100.0
+        )  # Prevent massive relative errors
+        rel_loss = 0.01 * rel_term.mean()  # Reduced weight from 0.2 to 0.01
 
         # C) Overflow penalty (weight 0.05)
         overflow_pen = 0.05 * (pred_final_log10.abs() > 12.0).float().mean()
@@ -243,7 +241,7 @@ def _compute_exec_loss(
 # --------------------------------------------------------------------------- #
 def compute_dag_structure_loss(
     pred_sgn: torch.Tensor,  # (B,T,N)
-    pred_digits: torch.Tensor,  # (B,T,N,D,10) logits or probs
+    pred_digit_logits: torch.Tensor,  # (B,T,N,D,10) raw logits (not probabilities)
     pred_ops: torch.Tensor,  # (B,T,depth,n_ops)
     target_sgn: torch.Tensor,  # (B,T,N)
     target_digits: torch.Tensor,  # (B,T,N,D,10) one-hot
@@ -255,22 +253,25 @@ def compute_dag_structure_loss(
     """Compute robust DAG-structure prediction loss.
 
     The formulation includes BCE for sign, cross-entropy for digits, NLL for operations,
-    MSE for initial values, and MSE for final execution values.
+    and MSE for initial values and final execution values.
 
     All target tensors are required parameters.
     """
     # Determine device type once for proper autocast context switching
     device_type = pred_sgn.device.type if isinstance(pred_sgn, torch.Tensor) else "cuda"
 
-    # Compute individual loss components
+    with torch.amp.autocast(device_type=device_type, enabled=False):
+        pred_digit_probs = F.softmax(pred_digit_logits.to(torch.float32), dim=-1)
+
+    # Compute individual loss components (now pass probabilities, not logits)
     sign_loss = _compute_sign_loss(pred_sgn, target_sgn, device_type)
-    digit_loss = _compute_digit_loss(pred_digits, target_digits, device_type)
+    digit_loss = _compute_digit_loss(pred_digit_probs, target_digits, device_type)
     op_loss = _compute_op_loss(pred_ops, target_ops, device_type)
     value_loss = _compute_value_loss(
-        pred_sgn, pred_digits, target_initial_values, cfg, device_type
+        pred_sgn, pred_digit_probs, target_initial_values, cfg, device_type
     )
     exec_loss = _compute_exec_loss(
-        pred_sgn, pred_digits, pred_ops, target_final_exec, cfg, device_type
+        pred_sgn, pred_digit_probs, pred_ops, target_final_exec, cfg, device_type
     )
 
     # Combine all losses with their respective weights

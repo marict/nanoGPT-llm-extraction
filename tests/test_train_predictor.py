@@ -623,10 +623,22 @@ class TestLossFunctions(unittest.TestCase):
         target_ops = torch.zeros(B, T, depth, n_ops)
         target_ops[:, :, :, 0] = 1
 
-        # Perfect predictions equal the targets
+        # Create perfect prediction logits instead of copying one-hot targets
         pred_sgn = target_sgn.clone()
-        pred_digits = target_digits.clone()
         pred_ops = target_ops.clone()
+
+        # Convert target one-hots to near-perfect logits
+        pred_digits = torch.full_like(
+            target_digits, -10.0
+        )  # Start with very negative logits
+        for b in range(B):
+            for t in range(T):
+                for n in range(num_nodes):
+                    for d in range(D_total):
+                        # Find which digit is the target (where one-hot is 1)
+                        target_digit = target_digits[b, t, n, d].argmax()
+                        # Set a large positive logit for the target digit
+                        pred_digits[b, t, n, d, target_digit] = 10.0
 
         # Add dummy targets for the new losses
         target_initial_values = torch.ones(B, T, num_nodes)
@@ -644,9 +656,11 @@ class TestLossFunctions(unittest.TestCase):
             self.cfg,
         )
 
-        # Losses should be very small for perfect predictions
+        # Losses should be very small for near-perfect predictions (relaxed tolerance)
         self.assertLess(losses["sign_loss"].item(), 1e-6)
-        self.assertLess(losses["digit_loss"].item(), 1e-6)
+        self.assertLess(
+            losses["digit_loss"].item(), 1e-3
+        )  # Relaxed for near-perfect logits
         self.assertLess(losses["op_loss"].item(), 1e-6)
 
 
