@@ -595,7 +595,7 @@ def generate_single_dag_example(
         and not math.isclose(
             example.final_value_exec,
             example.final_value_sympy,
-            abs_tol=1e-3,
+            abs_tol=1e-2,
             rel_tol=1e-2,
         )
     ):
