@@ -40,9 +40,12 @@ english_conversion_probability = 0.5
 integer_no_decimal_probability = 0.5
 expression_simplification_probability = 0.5
 expression_expansion_probability = 0.5
-
-# Expression rendering style probabilities - default style for fast testing
-printing_style_probs = {"sstr": 0.25, "pretty": 0.25, "ascii": 0.25, "latex": 0.25}
+printing_style_probs = {
+    "sstr": 0.25,
+    "pretty": 0.25,
+    "ascii": 0.25,
+    "latex": 0.25,
+}
 
 # Data generation settings
 
