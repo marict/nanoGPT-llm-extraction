@@ -166,12 +166,12 @@ class TestIntegration:
         values = [1.5, -2.0, 2]
 
         # Test with specific style
-        result = format_expression_string(
-            expr, initial_values=values, printing_style_probs={"sstr": 1.0}, seed=42
+        result, style = format_expression_string(
+            expr, printing_style_probs={"sstr": 1.0}, seed=42
         )
 
-        assert "1.5" in result
-        assert "-2" in result
+        assert "1.5" in result[0]
+        assert "-2" in result[0]
 
     def test_format_expression_string_default_probs(self):
         """Test that None printing_style_probs defaults to sstr."""
@@ -180,13 +180,13 @@ class TestIntegration:
         expr = sympy.Add(a, b, evaluate=False)
         values = [1.0, 2.0]
 
-        result = format_expression_string(
-            expr, initial_values=values, printing_style_probs=None, seed=42
+        result, style = format_expression_string(
+            expr, printing_style_probs=None, seed=42
         )
 
         # Should work and produce valid output
-        assert isinstance(result, str)
-        assert len(result) > 0
+        assert isinstance(result[0], str)
+        assert len(result[0]) > 0
 
     def test_format_expression_string_probabilistic(self):
         """Test probabilistic style selection."""
@@ -199,10 +199,10 @@ class TestIntegration:
         # Generate multiple samples
         results = []
         for i in range(20):
-            result = format_expression_string(
-                expr, initial_values=values, printing_style_probs=probs, seed=i
+            result, style = format_expression_string(
+                expr, printing_style_probs=probs, seed=i
             )
-            results.append(result)
+            results.append(result[0])
 
         # All results should be valid strings
         for result in results:
@@ -217,18 +217,17 @@ class TestIntegration:
         expr = sympy.Add(a, b, evaluate=False)
         values = [1.0, 2.0]
 
-        result = format_expression_string(
+        result, style = format_expression_string(
             expr,
-            initial_values=values,
             printing_style_probs={"sstr": 1.0},
             english_conversion_probability=1.0,
             seed=42,
         )
 
         # Should contain English words for numbers and operators
-        assert "one" in result.lower()  # numbers already converted
+        assert "one" in result[0].lower()  # numbers already converted
         # At least one operator word should appear for sstr style
-        assert any(op in result.lower() for op in ["plus", "added to"])
+        assert any(op in result[0].lower() for op in ["plus", "added to"])
 
     def test_english_conversion_all_styles(self):
         """Test that English conversion works for all printing styles."""
@@ -249,9 +248,8 @@ class TestIntegration:
 
         for style in styles:
             # Test with English conversion enabled
-            result = format_expression_string(
+            result, style = format_expression_string(
                 expr,
-                initial_values=values,
                 printing_style_probs={style: 1.0},
                 english_conversion_probability=1.0,
                 seed=42,
@@ -259,9 +257,9 @@ class TestIntegration:
 
             # Should contain English words for numbers (already in symbol names)
             assert (
-                "two" in result.lower()
-                or "three" in result.lower()
-                or "four" in result.lower()
+                "two" in result[0].lower()
+                or "three" in result[0].lower()
+                or "four" in result[0].lower()
             )
 
             # Test that the result is different from non-English version (operations conversion)
@@ -276,10 +274,10 @@ class TestIntegration:
                     "over",  # Division
                 ]
 
-                has_english = any(word in result.lower() for word in english_words)
+                has_english = any(word in result[0].lower() for word in english_words)
                 assert (
                     has_english
-                ), f"Style '{style}' did not produce English conversion. Got: {repr(result)}"
+                ), f"Style '{style}' did not produce English conversion. Got: {repr(result[0])}"
 
     def test_negative_numbers_all_styles(self):
         """Test that negative number conversion works for all printing styles."""
@@ -293,9 +291,8 @@ class TestIntegration:
 
         for style in styles:
             # Test with English conversion enabled
-            result = format_expression_string(
+            result, style = format_expression_string(
                 expr,
-                initial_values=values,
                 printing_style_probs={style: 1.0},
                 english_conversion_probability=1.0,
                 seed=42,
@@ -304,7 +301,7 @@ class TestIntegration:
             # Should contain "negative" for the negative number in all styles
             # since it's part of the symbol name
             assert (
-                "negative" in result.lower()
+                "negative" in result[0].lower()
             ), f"Style '{style}' did not preserve 'negative' word"
 
     def test_division_conversion_styles(self):
@@ -319,9 +316,8 @@ class TestIntegration:
         styles = ["sstr", "latex", "pretty", "ascii", "repr"]
 
         for style in styles:
-            result = format_expression_string(
+            result, style = format_expression_string(
                 expr,
-                initial_values=values,
                 printing_style_probs={style: 1.0},
                 english_conversion_probability=1.0,
                 seed=42,
@@ -329,28 +325,28 @@ class TestIntegration:
 
             # All styles should have numbers in English (from symbol names)
             assert (
-                "eight" in result.lower() and "two" in result.lower()
-            ), f"Style '{style}' did not preserve English number names. Got: {repr(result)}"
+                "eight" in result[0].lower() and "two" in result[0].lower()
+            ), f"Style '{style}' did not preserve English number names. Got: {repr(result[0])}"
 
             # Check for division words in sstr style
             if style == "sstr":
                 division_words = ["divided by", "over"]
-                has_division = any(word in result.lower() for word in division_words)
+                has_division = any(word in result[0].lower() for word in division_words)
                 assert (
                     has_division
-                ), f"Style '{style}' should convert division to English. Got: {repr(result)}"
+                ), f"Style '{style}' should convert division to English. Got: {repr(result[0])}"
 
             # For latex style, check that it uses \frac for division
             elif style == "latex":
                 assert (
-                    "\\frac" in result
-                ), f"LaTeX style should use \\frac for division. Got: {repr(result)}"
+                    "\\frac" in result[0]
+                ), f"LaTeX style should use \\frac for division. Got: {repr(result[0])}"
 
             # For pretty/ascii styles, check for newlines which indicate fraction layout
             elif style in ["pretty", "ascii"]:
                 assert (
-                    "\n" in result
-                ), f"Style '{style}' should use multi-line layout for division. Got: {repr(result)}"
+                    "\n" in result[0]
+                ), f"Style '{style}' should use multi-line layout for division. Got: {repr(result[0])}"
 
     def test_format_expression_string_sympy_input(self):
         """Test formatting SymPy expressions."""
@@ -360,12 +356,12 @@ class TestIntegration:
         expr = sympy.Add(a, b, evaluate=False)
         initial_values = [1.0, 2.0]
 
-        result = format_expression_string(
-            expr, initial_values, printing_style_probs={"sstr": 1.0}, seed=42
+        result, style = format_expression_string(
+            expr, printing_style_probs={"sstr": 1.0}, seed=42
         )
 
-        assert "1" in result
-        assert "2" in result
+        assert "1" in result[0]
+        assert "2" in result[0]
 
 
 class TestNumericalCorrectness:
@@ -398,20 +394,11 @@ class TestEdgeCases:
         # Create a constant expression with no symbols
         expr = sympy.sympify("2 + 3")
 
-        result = format_expression_string(
-            expr, initial_values=[], printing_style_probs={"sstr": 1.0}, seed=42
+        result, style = format_expression_string(
+            expr, printing_style_probs={"sstr": 1.0}, seed=42
         )
 
-        assert isinstance(result, str)
-
-    def test_missing_initial_values_error(self):
-        """Test that missing initial_values raises appropriate error."""
-        a = sympy.Symbol("1.0")
-        b = sympy.Symbol("2.0")
-        expr = sympy.Add(a, b, evaluate=False)
-
-        with pytest.raises(TypeError, match="missing 1 required positional argument"):
-            format_expression_string(expr, printing_style_probs={"sstr": 1.0}, seed=42)
+        assert isinstance(result[0], str)
 
     def test_complex_expressions(self):
         """Test with more complex mathematical expressions."""
@@ -435,13 +422,12 @@ class TestEdgeCases:
         # Should not crash for any style
         for style in SUPPORTED_STYLES:
             try:
-                result = format_expression_string(
+                result, style = format_expression_string(
                     expr,
-                    initial_values=values,
                     printing_style_probs={style: 1.0},
                     seed=42,
                 )
-                assert isinstance(result, str)
+                assert isinstance(result[0], str)
             except:
                 # Some complex expressions might not render in all styles, that's ok
                 pass
@@ -455,22 +441,22 @@ def test_newlines_preserved_in_pretty_print():
     expr = sympy.Mul(a, sympy.Pow(b, -1, evaluate=False), evaluate=False)
     values = [1.0, 2.0]
 
-    result = format_expression_string(
-        expr, initial_values=values, printing_style_probs={"pretty": 1.0}, seed=42
+    result, style = format_expression_string(
+        expr, printing_style_probs={"pretty": 1.0}, seed=42
     )
 
     # Pretty printing should preserve newlines for fractions
-    assert "\n" in result
+    assert "\n" in result[0]
 
     # Division should appear as a line
     line_found = False
-    for line in result.split("\n"):
+    for line in result[0].split("\n"):
         if "─" in line or "-" in line:  # Unicode or ASCII line
             line_found = True
             break
     assert (
         line_found
-    ), f"No division line found in pretty-printed result: {repr(result)}"
+    ), f"No division line found in pretty-printed result: {repr(result[0])}"
 
 
 def test_newlines_preserved_with_spacing():
@@ -486,26 +472,25 @@ def test_newlines_preserved_with_spacing():
     values = [1.0, 2.0, 3.0]
 
     # With pretty printing
-    result = format_expression_string(
-        expr, initial_values=values, printing_style_probs={"pretty": 1.0}, seed=42
+    result, style = format_expression_string(
+        expr, printing_style_probs={"pretty": 1.0}, seed=42
     )
 
     # Count original newlines
-    original_newlines = result.count("\n")
+    original_newlines = result[0].count("\n")
 
     # Original should have newlines for fraction layout
     assert original_newlines > 0
 
     # sstr and latex styles should convert operations but not mess with newlines
-    result_sstr = format_expression_string(
+    result_sstr, style = format_expression_string(
         expr,
-        initial_values=values,
         printing_style_probs={"sstr": 1.0},
         english_conversion_probability=1.0,
         seed=42,
     )
 
     # Verify basic formatting is applied
-    assert "1.0" in result_sstr
-    assert "2.0" in result_sstr
-    assert "3.0" in result_sstr
+    assert "1.0" in result_sstr[0]
+    assert "2.0" in result_sstr[0]
+    assert "3.0" in result_sstr[0]

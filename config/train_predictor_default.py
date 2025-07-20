@@ -29,8 +29,8 @@ dataset = "dagset"  # Use DAG dataset for predictor training
 
 # DAG dataset parameters
 max_dag_depth = 6
-max_digits = 2  # Maximum number of integer digits for uniform digit distribution
-max_decimal_places = 2
+max_digits = 4  # Maximum number of integer digits for uniform digit distribution
+max_decimal_places = 4
 
 train_examples_per_batch = 100
 val_examples_per_batch = 20

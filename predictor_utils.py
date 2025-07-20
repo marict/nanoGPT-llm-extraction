@@ -123,65 +123,6 @@ def _compute_op_loss(
     return op_loss
 
 
-def safe_big_loss(
-    pred: torch.Tensor,
-    target: torch.Tensor,
-    *,
-    assume_log10: bool = False,
-    apply_sign_penalty: bool = False,
-    eps: float = 1e-8,
-) -> torch.Tensor:
-    """
-    Robust loss with frozen defaults.
-    Modes:
-      - Raw mode (assume_log10=False): takes raw values, converts to log10(|.|), discards sign (unless sign penalty enabled).
-      - Log mode (assume_log10=True): inputs are already log10(|.|).
-
-    Components (all fixed weights):
-      A) Huber(log10 magnitude)  (weight 1.0)
-      B) Relative multiplicative term via |Δ log10| (weight 0.2)
-      C) Sign penalty if apply_sign_penalty (weight 0.1)
-      D) Overflow penalty if |log10(pred)| > 12 (weight 0.05)
-    """
-    # Cast inputs to float32 at the beginning to ensure consistent precision
-    pred_f = pred.reshape(-1).to(torch.float32)
-    tgt_f = target.reshape(-1).to(torch.float32)
-
-    if assume_log10:
-        pred_log10 = pred_f
-        tgt_log10 = tgt_f.abs()  # ensure non-negative if accidentally negative
-    else:
-        pred_log10 = torch.log10(pred_f.abs() + eps)
-        tgt_log10 = torch.log10(tgt_f.abs() + eps)
-
-    # A) Huber in log space (delta=1)
-    log_loss = F.smooth_l1_loss(pred_log10, tgt_log10, beta=1.0)
-
-    # B) Relative multiplicative error approximation
-    log_diff = (pred_log10 - tgt_log10).abs().clamp(max=12.0)
-    rel_loss = 0.2 * (10**log_diff - 1.0).mean()
-
-    # C) Sign penalty (only for raw mode when explicitly requested)
-    if apply_sign_penalty and not assume_log10:
-        tgt_sign = torch.sign(tgt_f)
-        pred_sign = torch.sign(pred_f)
-        sign_mask = tgt_f.abs() > 1e-8  # ignore target zeros
-        sign_mismatch = (pred_sign != tgt_sign) & sign_mask
-        sign_pen = sign_mismatch.float().mean()
-    else:
-        sign_pen = 0.0
-
-    # D) Overflow penalty
-    overflow_pen = 0.05 * (pred_log10.abs() > 12.0).float().mean()
-
-    return (
-        log_loss
-        + rel_loss
-        + overflow_pen
-        + (0.1 * sign_pen if apply_sign_penalty else 0.0)
-    )
-
-
 def _compute_value_loss(
     pred_sgn: torch.Tensor,
     pred_digits: torch.Tensor,
@@ -189,7 +130,7 @@ def _compute_value_loss(
     cfg,
     device_type: str,
 ) -> torch.Tensor:
-    """Compute robust loss between predicted and target initial values."""
+    """Compute robust loss between predicted and target initial values in log space."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
         # Convert predicted digits to probabilities if they're logits
         if pred_digits.min() < 0 or pred_digits.max() > 1:
@@ -197,22 +138,47 @@ def _compute_value_loss(
         else:
             pred_digit_probs = pred_digits
 
-        # Compute predicted magnitudes from digit distributions
-        pred_magnitudes = digits_to_magnitude(
-            pred_digit_probs,
-            cfg.max_digits,
-            cfg.max_decimal_places,
-        )  # (B,T,N)
+        # Compute predicted log magnitudes directly from digit distributions
+        # This avoids the intermediate step of reconstructing actual values
+        device, dtype = pred_digit_probs.device, pred_digit_probs.dtype
+        digits_vals = (
+            pred_digit_probs * torch.arange(10, device=device, dtype=dtype)
+        ).sum(
+            -1
+        )  # (..., D)
 
-        # Combine signs and magnitudes to get predicted initial values
-        pred_initial_values = torch.sign(pred_sgn) * pred_magnitudes
-
-        value_loss = safe_big_loss(
-            pred_initial_values,
-            target_initial_values,
-            apply_sign_penalty=True,
+        # Build decimal place weights for log magnitude computation
+        int_weights = 10 ** torch.arange(
+            cfg.max_digits - 1, -1, -1, device=device, dtype=dtype
         )
-    return value_loss
+        frac_weights = 10 ** torch.arange(
+            -1, -cfg.max_decimal_places - 1, -1, device=device, dtype=dtype
+        )
+        weights = torch.cat((int_weights, frac_weights))  # (D,)
+        pred_magnitude = (digits_vals * weights).sum(-1)  # (B,T,N)
+
+        # Convert to log space (clamp for numerical stability)
+        pred_log_magnitude = torch.log10(pred_magnitude.clamp(min=1e-8))
+
+        # Target log magnitudes
+        target_log_magnitude = torch.log10(target_initial_values.abs() + 1e-8)
+
+        # Core magnitude loss in log space (direct smooth_l1_loss)
+        magnitude_loss = F.smooth_l1_loss(
+            pred_log_magnitude, target_log_magnitude, beta=1.0
+        )
+
+        # Smooth sign penalty using continuous sign values
+        # pred_sgn is already in [-1,1] from tanh, target signs are ±1
+        target_sign_smooth = torch.sign(target_initial_values)  # ±1
+        sign_mask = target_initial_values.abs() > 1e-8  # ignore target zeros
+
+        # Smooth sign loss: penalize when pred_sgn and target_sign have different signs
+        # Use smooth penalty instead of hard mismatch counting
+        sign_diff = (pred_sgn - target_sign_smooth) * sign_mask.float()
+        sign_penalty = 0.1 * (sign_diff**2).mean()  # smooth quadratic penalty
+
+        return magnitude_loss + sign_penalty
 
 
 def _compute_exec_loss(
@@ -242,15 +208,25 @@ def _compute_exec_loss(
         )
 
         # Flatten
-        pred_final_log10 = pred_final_log10.reshape(-1)
+        pred_final_log10 = pred_final_log10.reshape(-1).to(torch.float32)
         pred_final_sgn = pred_final_sgn.reshape(-1)
-        target_flat = target_final_exec.reshape(-1)
+        target_flat = target_final_exec.reshape(-1).to(torch.float32)
 
         # Target log10 magnitude
         tgt_log10 = torch.log10(target_flat.abs() + 1e-8)
 
-        # Core magnitude loss (pass log10 preds directly)
-        mag_loss = safe_big_loss(pred_final_log10, tgt_log10, assume_log10=True)
+        # Magnitude loss components (inlined from safe_big_loss):
+        # A) Huber loss in log space (weight 1.0)
+        log_loss = F.smooth_l1_loss(pred_final_log10, tgt_log10, beta=1.0)
+
+        # B) Relative multiplicative error approximation (weight 0.2)
+        log_diff = (pred_final_log10 - tgt_log10).abs().clamp(max=12.0)
+        rel_loss = 0.2 * (10**log_diff - 1.0).mean()
+
+        # C) Overflow penalty (weight 0.05)
+        overflow_pen = 0.05 * (pred_final_log10.abs() > 12.0).float().mean()
+
+        mag_loss = log_loss + rel_loss + overflow_pen
 
         # Sign penalty for final execution results (fixed weight 0.1)
         # This is essential: predicting -10 instead of +10 should be worse than predicting 8 instead of +10

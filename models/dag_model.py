@@ -401,6 +401,18 @@ class DAGPlanPredictor(nn.Module):
             nn.Linear(config.n_embd, initial_values_output_dim),
         )
 
+        # Bias digits toward zero at init (one time)
+        with torch.no_grad():
+            bias = self.initial_values_predictor[-1].bias
+            digit_bias_start = self.num_scratch_nodes
+            for node in range(self.num_scratch_nodes):
+                for dig in range(self.digits_per_number):
+                    offset = (
+                        digit_bias_start + (node * self.digits_per_number + dig) * 10
+                    )
+                    bias[offset] = 3.0
+                    bias[offset + 1 : offset + 10] = -3.0
+
         # Cross attention for operations: dag_structure_hidden attends to initial_value_hidden
         self.cross_attn = nn.MultiheadAttention(
             embed_dim=config.n_embd,
