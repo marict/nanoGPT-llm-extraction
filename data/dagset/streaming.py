@@ -16,21 +16,10 @@ import numpy as np
 import sympy
 import torch
 from sympy import im
-from sympy.printing.str import StrPrinter
 from tiktoken import get_encoding
 
 from data.dagset.expression_to_string import convert_number_to_english
 from models.dag_model import execute_stack
-
-
-class VerboseMulPrinter(StrPrinter):
-    def _print_Mul(self, expr):
-        return " * ".join(self._print(arg) for arg in expr.args)
-
-
-def verbose_str(expr):
-    return VerboseMulPrinter().doprint(expr)
-
 
 # Add parent directories to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
@@ -190,8 +179,10 @@ def generate_expression(
     if override_operations is not None:
         sym_ops = list(override_operations)
     else:
+        # Identities will be added later.
         ops_set_no_identity = [op for op in ops_set if op != "identity"]
         # Choose a random number of operations between 0 and depth.
+        # That we generate expressions with a variety of depths.
         num_ops = rng.randint(0, depth)
         # Generate random operations.
         for i in range(num_ops):
