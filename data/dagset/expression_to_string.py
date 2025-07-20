@@ -2,7 +2,7 @@
 """
 Expression formatting utilities for converting arithmetic expressions to English.
 """
-
+import logging
 import random
 import re
 from decimal import ROUND_HALF_UP, Decimal
@@ -71,8 +71,8 @@ def format_expression_string(
     rng = random.Random(seed)
     style = sample_printing_style(printing_style_probs, rng)
 
-    # Render expression in selected style
-    expr_str = render_expr(expression, style)
+    # Render expression in selected style, note this style might changed if a bug occurs.
+    expr_str, style = render_expr(expression, style)
 
     # Apply English conversion to operations based on the style
     # (operand conversion is handled during symbol creation)
@@ -145,15 +145,16 @@ def sample_printing_style(
     return rng.choices(styles, weights=weights)[0]
 
 
-def render_expr(expr: sympy.Basic, style: str) -> str:
+def render_expr(expr: sympy.Basic, style: str) -> tuple[str, str]:
     """Render a SymPy expression using the specified printing style.
 
     Args:
         expr: SymPy expression to render
-        style: Printing style ("sstr", "pretty", "ascii", "latex", "repr")
+        style: Printing style ("sstr", "pretty", "ascii", "latex")
 
     Returns:
         String representation of the expression
+        Style used for rendering
 
     Raises:
         ValueError: If style is not supported
@@ -161,19 +162,26 @@ def render_expr(expr: sympy.Basic, style: str) -> str:
     if style not in SUPPORTED_STYLES:
         raise ValueError(f"Unsupported style: {style}. Supported: {SUPPORTED_STYLES}")
 
-    if style == "sstr":
-        return sympy.sstr(expr)
-    elif style == "pretty":
-        return sympy.pretty(expr)
-    elif style == "ascii":
-        return sympy.pretty(expr, use_unicode=False)
-    elif style == "latex":
-        return sympy.latex(expr)
-    elif style == "repr":
-        return repr(expr)
-    else:
-        # This should never happen due to the check above, but just in case
-        raise ValueError(f"Unhandled style: {style}")
+    try:
+        if style == "sstr":
+            return sympy.sstr(expr), style
+        elif style == "pretty":
+            return sympy.pretty(expr), style
+        elif style == "ascii":
+            return sympy.pretty(expr, use_unicode=False), style
+        elif style == "latex":
+            return sympy.latex(expr), style
+        elif style == "repr":
+            return repr(expr), style
+        else:
+            raise ValueError(f"Unhandled style: {style}")
+    except Exception as e:
+        # SymPy pretty printing can sometimes fail with internal bugs
+        # Fall back to the most reliable string representation
+        logging.warning(
+            f"SymPy rendering failed for style '{style}' with error: {e}. Falling back to 'sstr' style."
+        )
+        return sympy.sstr(expr), "sstr"
 
 
 def add_operator_spacing(expression: str) -> str:

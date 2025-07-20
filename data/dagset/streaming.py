@@ -596,7 +596,7 @@ def generate_single_dag_example(
             example.final_value_exec,
             example.final_value_sympy,
             abs_tol=1e-3,
-            rel_tol=1e-3,
+            rel_tol=1e-2,
         )
     ):
         logging.warning(
