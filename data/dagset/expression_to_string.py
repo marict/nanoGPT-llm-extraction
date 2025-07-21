@@ -73,7 +73,7 @@ def format_expression_string(
     style = sample_printing_style(printing_style_probs, rng)
 
     # Render expression in selected style
-    expr_str = render_expr(expression, style)
+    expr_str, style = render_expr(expression, style)
 
     # Apply English conversion to operations based on the style
     if english_conversion_probability > 0:
@@ -154,7 +154,7 @@ def render_expr(expr: sympy.Basic, style: str) -> tuple[str, str]:
 
     Returns:
         String representation of the expression
-        Style used for rendering
+        Style used for rendering since it might change during a fallback.
 
     Raises:
         ValueError: If style is not supported

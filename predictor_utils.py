@@ -514,21 +514,19 @@ def evaluate_dag_model(
                 # -------------------------------------------------------------- #
                 if i == 0:
                     batch_size = tgt_sgn.size(0)
-                    sample_idx = batch_size - 1
-                    sample_text = texts[sample_idx]
-                    sample_obj: DAGExample = examples[sample_idx]
+                    batch_idx = batch_size - 1
+                    sample_text = texts[batch_idx]
+                    sample_obj: DAGExample = examples[batch_idx]
                     sample_seed = sample_obj.seed
                     did_expand = sample_obj.did_expand
                     did_simplify = sample_obj.did_simplify
 
                     # Sign vectors (N,) and digit logits (N,D,10)
-                    pred_sign_vec = pred_sgn.squeeze(1)[sample_idx]
-                    tgt_sign_vec = tgt_sgn[sample_idx]
+                    pred_sign_vec = pred_sgn.squeeze(1)[batch_idx]
 
-                    pred_digits_vec = last_digit_logits.squeeze(1)[sample_idx].softmax(
+                    pred_digits_vec = last_digit_logits.squeeze(1)[batch_idx].softmax(
                         dim=-1
                     )
-                    tgt_digits_vec = tgt_digits[sample_idx]
 
                     # Convert digit distributions to magnitudes
                     pred_mag_vec = digits_to_magnitude(
@@ -536,22 +534,14 @@ def evaluate_dag_model(
                         cfg.max_digits,
                         cfg.max_decimal_places,
                     )
-                    tgt_mag_vec = digits_to_magnitude(
-                        tgt_digits_vec,
-                        cfg.max_digits,
-                        cfg.max_decimal_places,
-                    )
 
                     pred_real_vals = (
                         (torch.sign(pred_sign_vec) * pred_mag_vec).cpu().tolist()
                     )
-                    tgt_real_vals = (
-                        (torch.sign(tgt_sign_vec) * tgt_mag_vec).cpu().tolist()
-                    )
 
                     # Decode operations
-                    tgt_ops_row = tgt_ops[sample_idx]  # (depth, n_ops)
-                    pred_ops_row = pred_ops.squeeze(1)[sample_idx]
+                    tgt_ops_row = tgt_ops[batch_idx]  # (depth, n_ops)
+                    pred_ops_row = pred_ops.squeeze(1)[batch_idx]
                     tgt_op_indices = tgt_ops_row.argmax(dim=-1).cpu().tolist()
                     pred_op_indices = pred_ops_row.argmax(dim=-1).cpu().tolist()
                     tgt_op_names = [OP_NAMES[idx] for idx in tgt_op_indices]
@@ -575,7 +565,10 @@ def evaluate_dag_model(
                     print(f"Did simplify: {did_simplify}")
                     print(f"Sympy execution value: {sample_obj.final_value_sympy}")
                     print(
-                        f"Execute stack execution value: {sample_obj.final_value_exec}"
+                        f"Target stack execution value: {sample_obj.final_value_exec}"
+                    )
+                    print(
+                        f"Predicted stack execution value: {pred_final_val[batch_idx].item()}"
                     )
                     # Print number of tokens in the sample text to check context length
                     enc = get_encoding("gpt2")
