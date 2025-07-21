@@ -16,6 +16,7 @@ class TestDigitPrediction(unittest.TestCase):
         """Helper – returns a fresh PredictorOnlyModel with custom digit settings."""
         cfg = PredictorOnlyConfig(
             vocab_size=1000,
+            n_layer=1,
             n_embd=64,
             n_head=4,
             dropout=0.0,

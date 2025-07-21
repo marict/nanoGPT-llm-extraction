@@ -40,6 +40,7 @@ def test_value_exec_losses_with_real_data():
     # Create a tiny model for testing
     model_config = PredictorOnlyConfig(
         vocab_size=50257,  # GPT-2 vocab size
+        n_layer=1,
         n_embd=32,  # Small embedding
         n_head=2,
         dropout=0.0,
@@ -166,6 +167,7 @@ def test_evaluation_function_with_new_losses():
     # Create model
     model_config = PredictorOnlyConfig(
         vocab_size=50257,
+        n_layer=1,
         n_embd=16,  # Very small
         n_head=1,
         dropout=0.0,
@@ -233,6 +235,7 @@ def test_zero_weights_exclude_from_total():
 
     model_config = PredictorOnlyConfig(
         vocab_size=50257,
+        n_layer=1,
         n_embd=16,
         n_head=1,
         dropout=0.0,

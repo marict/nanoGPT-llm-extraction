@@ -114,6 +114,7 @@ class TestShallowAttentionConfig(unittest.TestCase):
         """Test default configuration values."""
         cfg = PredictorOnlyConfig()
         self.assertEqual(cfg.vocab_size, 50304)
+        self.assertEqual(cfg.n_layer, 1)
         self.assertEqual(cfg.n_embd, 768)
         self.assertEqual(cfg.n_head, 12)
         self.assertEqual(cfg.dag_depth, 4)
@@ -166,9 +167,10 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
         self.assertEqual(model.config.n_embd, 64)
 
         # Test model has required components
-        self.assertTrue(hasattr(model, "wte"))  # Token embeddings
-        self.assertTrue(hasattr(model, "wpe"))  # Position embeddings
-        self.assertTrue(hasattr(model, "attention_block"))  # Shallow attention
+        self.assertTrue(hasattr(model, "transformer"))  # Transformer backbone
+        self.assertTrue(hasattr(model.transformer, "wte"))  # Token embeddings
+        self.assertTrue(hasattr(model.transformer, "wpe"))  # Position embeddings
+        self.assertTrue(hasattr(model.transformer, "h"))  # Attention blocks
         self.assertTrue(hasattr(model, "dag_predictor"))  # DAG predictor
 
         # Test parameter count
@@ -1223,8 +1225,8 @@ class TestCheckpointLoadingPredictor(unittest.TestCase):
             self.assertTrue(hasattr(saved_config, "n_embd"))
             self.assertTrue(hasattr(saved_config, "dag_depth"))
 
-            # n_layer should not be part of PredictorOnlyConfig
-            self.assertFalse(hasattr(saved_config, "n_layer"))
+            # n_layer is now part of PredictorOnlyConfig
+            self.assertTrue(hasattr(saved_config, "n_layer"))
 
         except Exception as e:
             self.fail(f"Loading checkpoint failed unexpectedly: {e}")
