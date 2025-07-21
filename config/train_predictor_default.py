@@ -52,7 +52,7 @@ printing_style_probs = {
 # Training hyperparameters
 gradient_accumulation_steps = 1
 batch_size = 4
-sequence_length = 32
+block_size = 32
 
 # Model architecture (should match target model)
 n_head = 1

@@ -45,7 +45,7 @@ class DAGTrainConfig(BaseConfig):
     # Batching / sequence
     gradient_accumulation_steps: int = 4
     batch_size: int = 32
-    sequence_length: int = 512
+    block_size: int = 512
 
     # Model architecture
     n_head: int = 12

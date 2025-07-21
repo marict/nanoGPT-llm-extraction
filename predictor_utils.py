@@ -386,7 +386,7 @@ def evaluate_dag_model(
             tgt_ops = structures["operation_probs"].to(device)
 
             # Inputs
-            input_tokens = tokenize_texts(texts, cfg.sequence_length, device)
+            input_tokens = tokenize_texts(texts, cfg.block_size, device)
 
             # Forward
             with ctx:

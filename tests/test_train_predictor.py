@@ -62,7 +62,7 @@ class TestDAGTrainConfig(unittest.TestCase):
             "dag_depth",
             "n_embd",
             "n_head",
-            "sequence_length",
+            "block_size",
             "batch_size",
             "learning_rate",
             "max_iters",
@@ -118,7 +118,7 @@ class TestShallowAttentionConfig(unittest.TestCase):
         self.assertEqual(cfg.n_embd, 768)
         self.assertEqual(cfg.n_head, 12)
         self.assertEqual(cfg.dag_depth, 4)
-        self.assertEqual(cfg.sequence_length, 512)
+        self.assertEqual(cfg.block_size, 512)
         self.assertEqual(cfg.dropout, 0.0)
         self.assertFalse(cfg.bias)
 
@@ -132,7 +132,7 @@ class TestShallowAttentionConfig(unittest.TestCase):
             "dropout",
             "bias",
             "dag_depth",
-            "sequence_length",
+            "block_size",
         ]
 
         for attr in required_attrs:
@@ -154,7 +154,7 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
             dropout=0.0,
             bias=False,
             dag_depth=2,
-            sequence_length=32,
+            block_size=32,
         )
 
     def test_model_creation(self):
@@ -183,7 +183,7 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
         model.eval()
 
         batch_size = 2
-        seq_len = self.config.sequence_length
+        seq_len = self.config.block_size
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
 
         with torch.no_grad():
@@ -212,7 +212,7 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
         model.eval()
 
         batch_size = 2
-        seq_len = self.config.sequence_length
+        seq_len = self.config.block_size
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
 
         with torch.no_grad():
@@ -245,16 +245,16 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
             self.assertTrue(torch.isfinite(pred_log).all())
             self.assertTrue(torch.isfinite(pred_ops).all())
 
-    def test_different_sequence_lengths(self):
-        """Test model works with different sequence lengths."""
+    def test_different_block_sizes(self):
+        """Test model works with different block sizes."""
         model = PredictorOnlyModel(self.config)
         model.eval()
 
         batch_size = 2
-        test_lengths = [16, 32, 64]  # Test different lengths <= config.sequence_length
+        test_lengths = [16, 32, 64]  # Test different lengths <= config.block_size
 
         for seq_len in test_lengths:
-            if seq_len <= self.config.sequence_length:
+            if seq_len <= self.config.block_size:
                 input_ids = torch.randint(0, 1000, (batch_size, seq_len))
 
                 with torch.no_grad():
@@ -283,7 +283,7 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
         model.train()
 
         batch_size = 2
-        seq_len = self.config.sequence_length
+        seq_len = self.config.block_size
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
 
         # Forward pass
@@ -314,7 +314,7 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
             dropout=0.0,
             bias=False,
             dag_depth=2,
-            sequence_length=32,
+            block_size=32,
         )
 
         multi_layer_config = PredictorOnlyConfig(
@@ -325,7 +325,7 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
             dropout=0.0,
             bias=False,
             dag_depth=2,
-            sequence_length=32,
+            block_size=32,
         )
 
         # Create models
@@ -395,7 +395,7 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
             n_embd=64,
             n_head=4,
             dag_depth=2,
-            sequence_length=32,
+            block_size=32,
         )
 
         model = PredictorOnlyModel(config)
@@ -853,16 +853,16 @@ class TestTokenization(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         self.device = "cpu"
-        self.sequence_length = 32
+        self.block_size = 32
 
     def test_tokenize_simple_expressions(self):
         """Test tokenization of simple mathematical expressions."""
         texts = ["28", "42.5", "3 + 4", "10 - 5", "7 * 8", "15 / 3"]
 
-        tokens = tokenize_texts(texts, self.sequence_length, self.device)
+        tokens = tokenize_texts(texts, self.block_size, self.device)
 
         # Check basic properties
-        self.assertEqual(tokens.shape, (len(texts), self.sequence_length))
+        self.assertEqual(tokens.shape, (len(texts), self.block_size))
         self.assertEqual(tokens.dtype, torch.long)
         self.assertEqual(tokens.device.type, self.device)
 
@@ -878,10 +878,10 @@ class TestTokenization(unittest.TestCase):
             "93.3 * 4.9 - 93.3",
         ]
 
-        tokens = tokenize_texts(texts, self.sequence_length, self.device)
+        tokens = tokenize_texts(texts, self.block_size, self.device)
 
         # Check basic properties
-        self.assertEqual(tokens.shape, (len(texts), self.sequence_length))
+        self.assertEqual(tokens.shape, (len(texts), self.block_size))
         self.assertEqual(tokens.dtype, torch.long)
 
         # Check that longer expressions produce more non-zero tokens
@@ -891,7 +891,7 @@ class TestTokenization(unittest.TestCase):
             self.assertGreaterEqual(non_zero_count, 1)
 
             # But shouldn't exceed sequence length
-            self.assertLessEqual(non_zero_count, self.sequence_length)
+            self.assertLessEqual(non_zero_count, self.block_size)
 
     def test_tokenize_english_expressions(self):
         """Test tokenization of English mathematical expressions."""
@@ -902,10 +902,10 @@ class TestTokenization(unittest.TestCase):
             "forty-one point eight three times eight point two eight",
         ]
 
-        tokens = tokenize_texts(texts, self.sequence_length, self.device)
+        tokens = tokenize_texts(texts, self.block_size, self.device)
 
         # Check basic properties
-        self.assertEqual(tokens.shape, (len(texts), self.sequence_length))
+        self.assertEqual(tokens.shape, (len(texts), self.block_size))
         self.assertEqual(tokens.dtype, torch.long)
 
         # English expressions typically generate more tokens
@@ -923,10 +923,10 @@ class TestTokenization(unittest.TestCase):
             "1.0",  # Simple decimal
         ]
 
-        tokens = tokenize_texts(texts, self.sequence_length, self.device)
+        tokens = tokenize_texts(texts, self.block_size, self.device)
 
         # Check basic properties
-        self.assertEqual(tokens.shape, (len(texts), self.sequence_length))
+        self.assertEqual(tokens.shape, (len(texts), self.block_size))
         self.assertEqual(tokens.dtype, torch.long)
 
         # Empty string should result in all zeros (padding)
@@ -941,26 +941,26 @@ class TestTokenization(unittest.TestCase):
         long_text = " + ".join([str(i) for i in range(100)])  # "0 + 1 + 2 + ... + 99"
         texts = [long_text]
 
-        short_sequence_length = 10
-        tokens = tokenize_texts(texts, short_sequence_length, self.device)
+        short_block_size = 10
+        tokens = tokenize_texts(texts, short_block_size, self.device)
 
         # Check that output is properly shaped and truncated
-        self.assertEqual(tokens.shape, (1, short_sequence_length))
+        self.assertEqual(tokens.shape, (1, short_block_size))
         self.assertEqual(tokens.dtype, torch.long)
 
         # All positions should be filled (no padding for truncated text)
         non_zero_count = (tokens[0] != 0).sum().item()
-        self.assertEqual(non_zero_count, short_sequence_length)
+        self.assertEqual(non_zero_count, short_block_size)
 
     def test_tokenize_padding(self):
         """Test that short texts are properly padded."""
         texts = ["5"]  # Very short text
-        long_sequence_length = 50
+        long_block_size = 50
 
-        tokens = tokenize_texts(texts, long_sequence_length, self.device)
+        tokens = tokenize_texts(texts, long_block_size, self.device)
 
         # Check basic properties
-        self.assertEqual(tokens.shape, (1, long_sequence_length))
+        self.assertEqual(tokens.shape, (1, long_block_size))
         self.assertEqual(tokens.dtype, torch.long)
 
         # Should have exactly one non-zero token, rest should be padding (zeros)
@@ -968,19 +968,19 @@ class TestTokenization(unittest.TestCase):
         zero_count = (tokens[0] == 0).sum().item()
 
         self.assertEqual(non_zero_count, 1)
-        self.assertEqual(zero_count, long_sequence_length - 1)
+        self.assertEqual(zero_count, long_block_size - 1)
 
     def test_tokenize_batch_consistency(self):
         """Test that tokenization is consistent across batches."""
         texts = ["42", "3.14", "7 + 8"]
 
         # Tokenize as a batch
-        batch_tokens = tokenize_texts(texts, self.sequence_length, self.device)
+        batch_tokens = tokenize_texts(texts, self.block_size, self.device)
 
         # Tokenize individually
         individual_tokens = []
         for text in texts:
-            tokens = tokenize_texts([text], self.sequence_length, self.device)
+            tokens = tokenize_texts([text], self.block_size, self.device)
             individual_tokens.append(tokens[0])
 
         # Results should be identical
@@ -992,8 +992,8 @@ class TestTokenization(unittest.TestCase):
         texts = ["42.5 * 3", "10 / 2 + 1"]
 
         # Tokenize twice
-        tokens1 = tokenize_texts(texts, self.sequence_length, self.device)
-        tokens2 = tokenize_texts(texts, self.sequence_length, self.device)
+        tokens1 = tokenize_texts(texts, self.block_size, self.device)
+        tokens2 = tokenize_texts(texts, self.block_size, self.device)
 
         # Results should be identical
         self.assertTrue(torch.equal(tokens1, tokens2))
@@ -1003,17 +1003,17 @@ class TestTokenization(unittest.TestCase):
         texts = ["123", "456"]
 
         # Test CPU
-        cpu_tokens = tokenize_texts(texts, self.sequence_length, "cpu")
+        cpu_tokens = tokenize_texts(texts, self.block_size, "cpu")
         self.assertEqual(cpu_tokens.device.type, "cpu")
 
         # Test MPS if available
         if torch.backends.mps.is_available():
-            mps_tokens = tokenize_texts(texts, self.sequence_length, "mps")
+            mps_tokens = tokenize_texts(texts, self.block_size, "mps")
             self.assertEqual(mps_tokens.device.type, "mps")
 
         # Test CUDA if available
         if torch.cuda.is_available():
-            cuda_tokens = tokenize_texts(texts, self.sequence_length, "cuda")
+            cuda_tokens = tokenize_texts(texts, self.block_size, "cuda")
             self.assertEqual(cuda_tokens.device.type, "cuda")
 
     def test_tokenize_roundtrip(self):
@@ -1025,7 +1025,7 @@ class TestTokenization(unittest.TestCase):
         enc = get_encoding("gpt2")
 
         for text in texts:
-            tokens = tokenize_texts([text], self.sequence_length, self.device)
+            tokens = tokenize_texts([text], self.block_size, self.device)
 
             # Extract non-zero tokens
             non_zero_tokens = tokens[0][tokens[0] != 0].tolist()
@@ -1050,13 +1050,13 @@ class TestModelSetup(unittest.TestCase):
         cfg.dag_depth = 2
         cfg.n_head = 2
         cfg.n_embd = 32
-        cfg.sequence_length = 16
+        cfg.block_size = 16
 
         model_args = dict(
             n_layer=2,  # Fixed for test - predictor doesn't use n_layer
             n_head=cfg.n_head,
             n_embd=cfg.n_embd,
-            block_size=cfg.sequence_length,
+            block_size=cfg.block_size,
             bias=cfg.bias,
             vocab_size=1000,
             dropout=cfg.dropout,
@@ -1077,13 +1077,13 @@ class TestModelSetup(unittest.TestCase):
         cfg.dag_depth = 2
         cfg.n_head = 2
         cfg.n_embd = 32
-        cfg.sequence_length = 16
+        cfg.block_size = 16
 
         model_args = dict(
             n_layer=2,  # Fixed for test - predictor doesn't use n_layer
             n_head=cfg.n_head,
             n_embd=cfg.n_embd,
-            block_size=cfg.sequence_length,
+            block_size=cfg.block_size,
             bias=cfg.bias,
             vocab_size=1000,
             dropout=cfg.dropout,
@@ -1111,7 +1111,7 @@ class TestModelSetup(unittest.TestCase):
         cfg.dag_depth = 2
         cfg.n_head = 2
         cfg.n_embd = 32
-        cfg.sequence_length = 16
+        cfg.block_size = 16
         cfg.max_digits = 4
         cfg.max_decimal_places = 2
 
@@ -1119,7 +1119,7 @@ class TestModelSetup(unittest.TestCase):
             n_layer=2,  # Fixed for test - predictor doesn't use n_layer
             n_head=cfg.n_head,
             n_embd=cfg.n_embd,
-            block_size=cfg.sequence_length,
+            block_size=cfg.block_size,
             bias=cfg.bias,
             vocab_size=1000,
             dropout=cfg.dropout,
@@ -1133,11 +1133,11 @@ class TestModelSetup(unittest.TestCase):
         model.eval()
 
         batch_size = 2
-        input_tokens = torch.randint(0, 1000, (batch_size, cfg.sequence_length))
+        input_tokens = torch.randint(0, 1000, (batch_size, cfg.block_size))
 
         with torch.no_grad():
             # Get hidden states
-            pos = torch.arange(cfg.sequence_length)
+            pos = torch.arange(cfg.block_size)
             emb = model.transformer.wte(input_tokens) + model.transformer.wpe(pos)
             hidden = model.transformer.drop(emb)
             for block in model.transformer.h:
@@ -1155,13 +1155,13 @@ class TestModelSetup(unittest.TestCase):
             # Verify output shapes
             expected_nodes = cfg.dag_depth + 1
             self.assertEqual(
-                pred_sgn.shape, (batch_size, cfg.sequence_length, expected_nodes)
+                pred_sgn.shape, (batch_size, cfg.block_size, expected_nodes)
             )
             self.assertEqual(
-                pred_log.shape, (batch_size, cfg.sequence_length, expected_nodes)
+                pred_log.shape, (batch_size, cfg.block_size, expected_nodes)
             )
             self.assertEqual(
-                pred_ops.shape, (batch_size, cfg.sequence_length, cfg.dag_depth, N_OPS)
+                pred_ops.shape, (batch_size, cfg.block_size, cfg.dag_depth, N_OPS)
             )
 
             # Verify outputs are reasonable
@@ -1312,7 +1312,7 @@ class TestCheckpointLoadingPredictor(unittest.TestCase):
             dropout=0.0,
             bias=False,
             dag_depth=2,
-            sequence_length=32,
+            block_size=32,
         )
         model = PredictorOnlyModel(config)
 
@@ -1356,7 +1356,7 @@ class TestCheckpointLoadingPredictor(unittest.TestCase):
             dropout=0.0,
             bias=False,
             dag_depth=2,
-            sequence_length=32,
+            block_size=32,
         )
         model = PredictorOnlyModel(config)
 
@@ -1403,7 +1403,7 @@ class TestCheckpointLoadingPredictor(unittest.TestCase):
             dropout=0.0,
             bias=False,
             dag_depth=2,
-            sequence_length=32,
+            block_size=32,
         )
         model = PredictorOnlyModel(config)
 

@@ -42,6 +42,8 @@ def _empty_metrics() -> dict[str, float]:
         "op_loss": 0.0,
         "value_loss": 0.0,  # Robust loss on initial values
         "exec_loss": 0.0,  # Robust loss on final execution values
+        "exec_loss_raw": 0.0,  # Raw exec loss before EMA smoothing
+        "exec_loss_smoothed": 0.0,  # EMA smoothed exec loss
         "op_accuracy": 0.0,
         "full_dag_op_match": 0.0,
         "sign_accuracy": 0.0,
@@ -462,7 +464,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
                 with ctx:
                     # Tokenize texts properly using the mathematical expressions
-                    input_tokens = tokenize_texts(texts, cfg.sequence_length, device)
+                    input_tokens = tokenize_texts(texts, cfg.block_size, device)
 
                     # Forward pass through shallow attention DAG predictor model
 

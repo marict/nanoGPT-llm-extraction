@@ -642,7 +642,7 @@ class CheckpointManager:
             "n_embd",
             "n_head",
             "n_layer",
-            "sequence_length",
+            "block_size",
             "vocab_size",
         ]
         if saved_cfg is not None:
@@ -672,7 +672,7 @@ class CheckpointManager:
                 "dropout": (saved_cfg or {}).get("dropout", cfg.dropout),
                 "bias": (saved_cfg or {}).get("bias", cfg.bias),
                 "dag_depth": (saved_cfg or {}).get("dag_depth", cfg.dag_depth),
-                "block_size": (saved_cfg or {}).get("block_size", cfg.sequence_length),
+                "block_size": (saved_cfg or {}).get("block_size", cfg.block_size),
                 # Propagate subset or default full list
                 "op_names": (saved_cfg or {}).get(
                     "op_names", getattr(cfg, "op_names", OP_NAMES.copy())
@@ -697,9 +697,7 @@ class CheckpointManager:
                 "dropout": (saved_cfg or {}).get("dropout", cfg.dropout),
                 "bias": (saved_cfg or {}).get("bias", cfg.bias),
                 "dag_depth": (saved_cfg or {}).get("dag_depth", cfg.dag_depth),
-                "sequence_length": (saved_cfg or {}).get(
-                    "sequence_length", cfg.sequence_length
-                ),
+                "block_size": (saved_cfg or {}).get("block_size", cfg.block_size),
                 # Propagate subset or default full list
                 "op_names": (saved_cfg or {}).get(
                     "op_names", getattr(cfg, "op_names", OP_NAMES.copy())

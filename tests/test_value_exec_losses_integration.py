@@ -18,7 +18,7 @@ def test_value_exec_losses_with_real_data():
     cfg = types.SimpleNamespace(
         max_digits=3,
         max_decimal_places=2,
-        sequence_length=128,
+        block_size=128,
         sign_loss_weight=1.0,
         digit_loss_weight=1.0,
         op_loss_weight=1.0,
@@ -45,7 +45,7 @@ def test_value_exec_losses_with_real_data():
         n_head=2,
         dropout=0.0,
         dag_depth=2,
-        sequence_length=cfg.sequence_length,
+        block_size=cfg.block_size,
         max_digits=cfg.max_digits,
         max_decimal_places=cfg.max_decimal_places,
     )
@@ -65,7 +65,7 @@ def test_value_exec_losses_with_real_data():
     tgt_ops = structures["operation_probs"].to(device)
 
     # Tokenize inputs
-    input_tokens = tokenize_texts(texts, cfg.sequence_length, device)
+    input_tokens = tokenize_texts(texts, cfg.block_size, device)
 
     # Forward pass
     with torch.no_grad():
@@ -145,7 +145,7 @@ def test_evaluation_function_with_new_losses():
     cfg = types.SimpleNamespace(
         max_digits=3,
         max_decimal_places=2,
-        sequence_length=64,
+        block_size=64,
         sign_loss_weight=1.0,
         digit_loss_weight=1.0,
         op_loss_weight=1.0,
@@ -172,7 +172,7 @@ def test_evaluation_function_with_new_losses():
         n_head=1,
         dropout=0.0,
         dag_depth=1,
-        sequence_length=cfg.sequence_length,
+        block_size=cfg.block_size,
         max_digits=cfg.max_digits,
         max_decimal_places=cfg.max_decimal_places,
     )
@@ -214,7 +214,7 @@ def test_zero_weights_exclude_from_total():
     cfg = types.SimpleNamespace(
         max_digits=3,
         max_decimal_places=2,
-        sequence_length=64,
+        block_size=64,
         sign_loss_weight=1.0,
         digit_loss_weight=1.0,
         op_loss_weight=1.0,
@@ -240,7 +240,7 @@ def test_zero_weights_exclude_from_total():
         n_head=1,
         dropout=0.0,
         dag_depth=1,
-        sequence_length=cfg.sequence_length,
+        block_size=cfg.block_size,
         max_digits=cfg.max_digits,
         max_decimal_places=cfg.max_decimal_places,
     )
@@ -257,7 +257,7 @@ def test_zero_weights_exclude_from_total():
     tgt_digits = structures["initial_digits"].to(device)
     tgt_ops = structures["operation_probs"].to(device)
 
-    input_tokens = tokenize_texts(texts, cfg.sequence_length, device)
+    input_tokens = tokenize_texts(texts, cfg.block_size, device)
 
     with torch.no_grad():
         pred_sgn, _, pred_ops = model(input_tokens)

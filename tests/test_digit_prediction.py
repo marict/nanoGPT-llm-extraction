@@ -22,7 +22,7 @@ class TestDigitPrediction(unittest.TestCase):
             dropout=0.0,
             bias=False,
             dag_depth=2,
-            sequence_length=32,
+            block_size=32,
         )
 
         # Attach the digit-related attributes expected by DAGPlanPredictor at runtime
