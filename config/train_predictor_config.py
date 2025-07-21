@@ -13,8 +13,8 @@ clear_previous_checkpoints = False
 reload_reset_iters = False
 
 # Model initialization
-init_from = "/runpod-volume/checkpoints/o2p39j6g235xhk-add_gpt_backbone/ckpt_predictor_pretrain.pt"
-# init_from = "scratch"
+# init_from = "/runpod-volume/checkpoints/o2p39j6g235xhk-add_gpt_backbone/ckpt_predictor_pretrain.pt"
+init_from = "scratch"
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
@@ -41,8 +41,8 @@ printing_style_probs = {
 }
 
 # Model configuration
-gradient_accumulation_steps = 8
-batch_size = 128
+gradient_accumulation_steps = 4
+batch_size = 64
 sequence_length = 128
 
 # Model architecture (larger for RunPod training)
@@ -65,7 +65,6 @@ warmup_iters = max_iters * 0.02  # 1/50 of max_iters
 lr_decay_iters = max_iters  # Updated to match max_iters
 min_lr = 1e-5
 learning_rate = 5e-5
-
 
 # System settings (optimized for RunPod)
 backend = "nccl"
