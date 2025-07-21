@@ -41,21 +41,22 @@ printing_style_probs = {
 }
 
 # Model configuration
-gradient_accumulation_steps = 4
-batch_size = 64
+gradient_accumulation_steps = 1
+batch_size = 256
 sequence_length = 128
 
 # Model architecture (larger for RunPod training)
 n_head = 12
 n_layer = 6
 n_embd = n_head * 64
-dropout = 0.35  # Slight dropout for regularization
+dropout = 0.1
 bias = True
 dag_depth = max_dag_depth  # MUST match max_dag_depth above
 
 # Optimization (tuned for longer training)
 max_iters = 50000
-weight_decay = 1e-1
+# weight_decay = 1e-1
+weight_decay = 0.0
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
@@ -63,13 +64,13 @@ grad_clip = 1.0
 # Learning rate schedule
 warmup_iters = max_iters * 0.02  # 1/50 of max_iters
 lr_decay_iters = max_iters  # Updated to match max_iters
-min_lr = 1e-5
-learning_rate = 5e-5
+min_lr = 2e-4
+learning_rate = 3e-4
 
 # System settings (optimized for RunPod)
 backend = "nccl"
 dtype = "bfloat16"  # Use bfloat16 for efficiency if available
-compile = True  # Enable compilation for speed
+compile = False  # Disable compilation for now to see if there are any gradient issues.
 keep_alive = False  # Auto-stop by default
 check_nans = False  # Check for NaNs in cloud training
 
