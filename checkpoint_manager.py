@@ -733,7 +733,7 @@ class CheckpointManager:
                 f"[{time.time() - setup_start_time:.2f}s] ✅ Model loaded from checkpoint"
             )
         else:
-            init_msg = "Full backbone" if use_full_backbone else "Shallow predictor"
+            init_msg = "Full DAGGPT" if use_full_backbone else "Predictor only"
             print(
                 f"[{time.time() - setup_start_time:.2f}s] ✅ {init_msg} model initialized."
             )

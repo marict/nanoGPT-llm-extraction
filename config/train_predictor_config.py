@@ -13,10 +13,8 @@ clear_previous_checkpoints = False
 reload_reset_iters = False
 
 # Model initialization
-# init_from = (
-#     "/runpod-volume/checkpoints/t4hs3j0vbdkpo8-fixvalseed/ckpt_predictor_pretrain.pt"
-# )
-init_from = "scratch"
+init_from = "/runpod-volume/checkpoints/o2p39j6g235xhk-add_gpt_backbone/ckpt_predictor_pretrain.pt"
+# init_from = "scratch"
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
@@ -56,7 +54,6 @@ bias = True
 dag_depth = max_dag_depth  # MUST match max_dag_depth above
 
 # Optimization (tuned for longer training)
-learning_rate = 5e-5  # Based on when performance started to degrade
 max_iters = 50000
 weight_decay = 1e-1
 beta1 = 0.9
@@ -67,6 +64,8 @@ grad_clip = 1.0
 warmup_iters = max_iters * 0.02  # 1/50 of max_iters
 lr_decay_iters = max_iters  # Updated to match max_iters
 min_lr = 1e-5
+learning_rate = 5e-5
+
 
 # System settings (optimized for RunPod)
 backend = "nccl"

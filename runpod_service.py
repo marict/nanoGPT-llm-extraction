@@ -18,7 +18,8 @@ check_python_version()
 # - NVIDIA L40, L40S, RTX 6000 Ada Generation, RTX A6000
 # - NVIDIA RTX PRO 6000 Blackwell Workstation Edition
 
-DEFAULT_GPU_TYPE = "NVIDIA RTX 6000 Ada Generation"  # Available in WA network volume
+# DEFAULT_GPU_TYPE = "NVIDIA RTX 6000 Ada Generation"  # Available in WA network volume
+DEFAULT_GPU_TYPE = "NVIDIA RTX 2000 Ada Generation"
 REPO_URL = "https://github.com/marict/nanoGPT-llm-extraction.git"
 
 
@@ -163,11 +164,11 @@ def start_cloud_training(
             image_name="runpod/pytorch:2.2.1-py3.10-cuda12.1.1-devel-ubuntu22.04",
             gpu_type_id=gpu_type_id,
             gpu_count=1,
-            min_vcpu_count=8,
-            min_memory_in_gb=64,
+            min_vcpu_count=6,
+            min_memory_in_gb=16,
             volume_in_gb=1000,
             container_disk_in_gb=1000,
-            network_volume_id="tvi2olc54y",
+            network_volume_id="h3tyejvqqb",
             env={
                 "WANDB_API_KEY": os.getenv("WANDB_API_KEY", ""),
                 "HF_HOME": "/workspace/.cache/huggingface",
