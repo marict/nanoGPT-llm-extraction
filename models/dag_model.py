@@ -315,6 +315,13 @@ class DAGPlanPredictor(nn.Module):
         # Learnable temperature (log τ) so model can adapt softmax sharpness during training
         # Parameterised in log-space and passed through softplus → guarantees τ > 0
         self.log_ops_tau = nn.Parameter(torch.log(torch.tensor(float(init_ops_tau))))
+
+        # Learnable temperature for digit predictions to prevent plateauing
+        init_digit_tau = 20.0  # Same as operations for consistency
+        self.log_digit_tau = nn.Parameter(
+            torch.log(torch.tensor(float(init_digit_tau)))
+        )
+
         # Resolve operations from config
         self.op_names = config.op_names
         self.n_ops = len(self.op_names)
@@ -434,8 +441,13 @@ class DAGPlanPredictor(nn.Module):
         # Store the last digit logits predicted for logging / compatibility
         self.last_digit_logits = digit_logits.clone()
 
-        # Compute probabilities and expected digits
-        digit_probs = F.softmax(digit_logits, dim=-1).contiguous()
+        # Apply learnable temperature scaling to digit logits before softmax
+        # Follow the same pattern as operation prediction for consistency
+        digit_tau = (F.softplus(self.log_digit_tau) + 1e-4).to(digit_logits.dtype)
+        digit_scale = math.sqrt(10)  # 10 digit classes, same pattern as ops
+        digit_probs = F.softmax(
+            digit_logits * digit_scale / digit_tau, dim=-1
+        ).contiguous()
         sign_logits = initial_values_raw[..., :slice_sign]
 
         # Convert sign tensor in [-1,1]
