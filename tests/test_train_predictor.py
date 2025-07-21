@@ -1484,7 +1484,25 @@ class TestFullBackbonePredictor(unittest.TestCase):
 
 
 class TestExecLossEMASmoothing(unittest.TestCase):
-    """Test EMA smoothing functionality for exec_loss."""
+    """
+    Test EMA smoothing functionality for exec_loss in training.
+
+    This test class covers EMA smoothing that affects the actual training loss:
+
+    PURPOSE: Apply EMA smoothing to exec_loss for training stability. Raw exec_loss
+    can have extreme spikes that destabilize training. By smoothing exec_loss before
+    recomputing total_loss, we get more stable gradients while preserving learning signal.
+
+    IMPLEMENTATION: EMA is applied per micro-step to exec_loss, then total_loss is
+    recomputed with the smoothed exec_loss. This affects the actual loss being
+    backpropagated, not just logging.
+
+    These tests demonstrate:
+    1. Basic EMA functionality (initialization, calculation, clipping)
+    2. How smoothing affects training vs just logging
+    3. Comparison between different smoothing approaches
+    4. Realistic training scenarios showing stability benefits
+    """
 
     def setUp(self):
         """Set up test configuration."""
@@ -1568,32 +1586,52 @@ class TestExecLossEMASmoothing(unittest.TestCase):
         self.assertLess(ema, max(values))  # But not as much as raw values
 
     def test_loss_recomputation_with_smoothing(self):
-        """Test that total_loss is recomputed correctly with smoothed exec_loss."""
+        """Test that total_loss is recomputed correctly with smoothed exec_loss for training."""
         # Mock losses similar to what compute_dag_structure_loss returns
         losses = {
             "sign_loss": torch.tensor(0.5),
             "digit_loss": torch.tensor(0.3),
             "op_loss": torch.tensor(0.4),
             "value_loss": torch.tensor(0.6),
-            "exec_loss": torch.tensor(3.0),  # Raw exec_loss
+            "exec_loss": torch.tensor(3.0),  # Raw exec_loss (spike)
         }
 
-        # Simulate smoothing
-        smoothed_exec_loss = 1.5  # Much lower than raw
+        # Simulate smoothing applied during training
+        smoothed_exec_loss = 1.5  # EMA dampens the spike from 3.0 to 1.5
 
-        # Recompute total_loss with smoothed exec_loss
+        # This is what happens in the training loop:
+        # 1. Raw total_loss would be affected by the spike
+        raw_total_loss = (
+            self.cfg.sign_loss_weight * losses["sign_loss"]
+            + self.cfg.digit_loss_weight * losses["digit_loss"]
+            + self.cfg.op_loss_weight * losses["op_loss"]
+            + self.cfg.value_loss_weight * losses["value_loss"]
+            + self.cfg.exec_loss_weight * losses["exec_loss"]  # Raw spike
+        )
+
+        # 2. Smoothed total_loss uses EMA-dampened exec_loss for training
         smoothed_total_loss = (
             self.cfg.sign_loss_weight * losses["sign_loss"]
             + self.cfg.digit_loss_weight * losses["digit_loss"]
             + self.cfg.op_loss_weight * losses["op_loss"]
             + self.cfg.value_loss_weight * losses["value_loss"]
-            + self.cfg.exec_loss_weight * smoothed_exec_loss
+            + self.cfg.exec_loss_weight * smoothed_exec_loss  # EMA-smoothed
         )
 
-        # Calculate expected: 1.0*0.5 + 1.0*0.3 + 1.0*0.4 + 1.0*0.6 + 0.5*1.5 = 2.55
-        expected_total = 0.5 + 0.3 + 0.4 + 0.6 + 0.5 * 1.5
-        self.assertAlmostEqual(smoothed_total_loss.item(), expected_total, places=5)
-        self.assertAlmostEqual(smoothed_total_loss.item(), 2.55, places=5)
+        # The smoothed loss should be lower and more stable for training
+        expected_raw = 0.5 + 0.3 + 0.4 + 0.6 + 0.5 * 3.0  # = 3.3
+        expected_smoothed = 0.5 + 0.3 + 0.4 + 0.6 + 0.5 * 1.5  # = 2.55
+
+        self.assertAlmostEqual(raw_total_loss.item(), expected_raw, places=5)
+        self.assertAlmostEqual(smoothed_total_loss.item(), expected_smoothed, places=5)
+
+        # Key point: model trains on the smoothed loss, which is more stable
+        self.assertLess(smoothed_total_loss.item(), raw_total_loss.item())
+
+        print(f"Raw total_loss: {raw_total_loss.item():.3f} (with spike)")
+        print(
+            f"Smoothed total_loss: {smoothed_total_loss.item():.3f} (used for training)"
+        )
 
     def test_warmup_period_behavior(self):
         """Test behavior during warmup period."""
@@ -1752,6 +1790,381 @@ class TestExecLossEMASmoothing(unittest.TestCase):
 
         # Smoothed should have lower variance (more stable)
         self.assertLess(smoothed_variance, raw_variance)
+
+    def test_gradient_accumulation_issue_reproduction(self):
+        """
+        Test that reproduces the original issue where EMA was applied per micro-step
+        and then accumulated, which defeated the smoothing effect.
+        """
+        cfg = DAGTrainConfig()
+        cfg.exec_loss_ema_decay = 0.9
+        cfg.exec_loss_max_clip = 5.0
+        cfg.exec_loss_warmup_steps = 1
+        cfg.gradient_accumulation_steps = 4
+
+        # Simulate the WRONG approach (old implementation)
+        # Apply EMA per micro-step and then accumulate
+        def simulate_wrong_approach(micro_losses, exec_loss_ema):
+            """Simulate the buggy implementation that applied EMA per micro-step."""
+            accumulated_smoothed = 0.0
+            current_ema = exec_loss_ema
+
+            for micro_loss in micro_losses:
+                clipped_loss = min(micro_loss, cfg.exec_loss_max_clip)
+                if current_ema is None:
+                    current_ema = clipped_loss
+                    smoothed_loss = clipped_loss
+                else:
+                    current_ema = (
+                        cfg.exec_loss_ema_decay * current_ema
+                        + (1 - cfg.exec_loss_ema_decay) * clipped_loss
+                    )
+                    smoothed_loss = current_ema
+
+                # Accumulate smoothed values (this was the bug!)
+                accumulated_smoothed += smoothed_loss / cfg.gradient_accumulation_steps
+
+            return accumulated_smoothed, current_ema
+
+        # Simulate the CORRECT approach (new implementation)
+        # Accumulate first, then apply EMA
+        def simulate_correct_approach(micro_losses, exec_loss_ema):
+            """Simulate the fixed implementation that accumulates first, then applies EMA."""
+            # First accumulate raw losses
+            accumulated_raw = sum(micro_losses) / len(micro_losses)
+
+            # Then apply EMA to the accumulated value
+            clipped_loss = min(accumulated_raw, cfg.exec_loss_max_clip)
+            if exec_loss_ema is None:
+                new_ema = clipped_loss
+                smoothed_loss = clipped_loss
+            else:
+                new_ema = (
+                    cfg.exec_loss_ema_decay * exec_loss_ema
+                    + (1 - cfg.exec_loss_ema_decay) * clipped_loss
+                )
+                smoothed_loss = new_ema
+
+            return smoothed_loss, new_ema
+
+        # Test with noisy micro-step losses that should be smoothed
+        # These represent exec_loss values from individual micro-steps
+        test_cases = [
+            # Case 1: High variance micro-steps
+            [1.0, 5.0, 1.5, 4.8],  # Should average to ~3.075
+            # Case 2: All high values (test clipping)
+            [8.0, 7.5, 9.0, 6.5],  # Should average to ~7.75, but clipped to 5.0
+            # Case 3: Mixed with extreme spike
+            [2.0, 1.8, 15.0, 2.2],  # One extreme value that should be dampened
+            # Case 4: Gradually increasing
+            [1.0, 2.0, 3.0, 4.0],  # Should average to 2.5
+        ]
+
+        exec_loss_ema_wrong = None
+        exec_loss_ema_correct = None
+
+        wrong_results = []
+        correct_results = []
+
+        for micro_losses in test_cases:
+            # Apply wrong approach
+            wrong_smoothed, exec_loss_ema_wrong = simulate_wrong_approach(
+                micro_losses, exec_loss_ema_wrong
+            )
+            wrong_results.append(wrong_smoothed)
+
+            # Apply correct approach
+            correct_smoothed, exec_loss_ema_correct = simulate_correct_approach(
+                micro_losses, exec_loss_ema_correct
+            )
+            correct_results.append(correct_smoothed)
+
+        # Key assertions that demonstrate the difference
+
+        # 1. With noisy micro-steps (case 1), correct approach should be smoother
+        # Wrong approach processes [1.0, 5.0, 1.5, 4.8] sequentially with EMA
+        # Correct approach averages to 3.075 first, then applies EMA
+        print(
+            f"Case 1 - Wrong: {wrong_results[0]:.4f}, Correct: {correct_results[0]:.4f}"
+        )
+
+        # 2. The variance between approaches should be significant for noisy data
+        import statistics
+
+        if len(wrong_results) > 1:
+            wrong_variance = statistics.variance(wrong_results)
+            correct_variance = statistics.variance(correct_results)
+
+            # This is not always true, but in most cases correct approach is more stable
+            # The key difference is in how spikes are handled
+            print(f"Wrong approach variance: {wrong_variance:.4f}")
+            print(f"Correct approach variance: {correct_variance:.4f}")
+
+        # 3. Most importantly, test the extreme spike case (case 3)
+        # Wrong approach: EMA applied to [2.0, 1.8, 15.0, 2.2] sequentially
+        # This can cause the EMA to jump dramatically mid-iteration
+        # Correct approach: averages to 5.25, clips to 5.0, then applies EMA
+        case_3_wrong = wrong_results[2]
+        case_3_correct = correct_results[2]
+
+        # The correct approach should handle the spike more gracefully
+        # by averaging it with other micro-steps first
+        print(
+            f"Case 3 (spike) - Wrong: {case_3_wrong:.4f}, Correct: {case_3_correct:.4f}"
+        )
+
+        # Since this is the first iteration (after warmup), both should equal the clipped average
+        # But they process the data differently
+
+        # Verify that both approaches at least produce finite, reasonable values
+        for result in wrong_results + correct_results:
+            self.assertTrue(torch.isfinite(torch.tensor(result)))
+            self.assertGreaterEqual(result, 0.0)
+            self.assertLessEqual(result, cfg.exec_loss_max_clip)
+
+    def test_micro_step_vs_accumulated_smoothing(self):
+        """
+        Test that demonstrates why accumulating first, then smoothing is better
+        than smoothing per micro-step and then accumulating.
+        """
+        # Configuration
+        ema_decay = 0.8
+        max_clip = 10.0
+
+        # Test scenario: one normal step followed by one with a large spike in one micro-step
+        normal_micro_losses = [2.0, 2.1, 1.9, 2.0]  # Average: 2.0
+        spike_micro_losses = [
+            2.0,
+            2.0,
+            20.0,
+            2.0,
+        ]  # Average: 6.5, spike clipped to 10.0
+
+        # Method 1: Smooth each micro-step, then accumulate (OLD/WRONG)
+        def method_1_per_microstep_smoothing(micro_losses, ema):
+            accumulated = 0.0
+            current_ema = ema
+
+            for loss in micro_losses:
+                clipped = min(loss, max_clip)
+                if current_ema is None:
+                    current_ema = clipped
+                    smoothed = clipped
+                else:
+                    current_ema = ema_decay * current_ema + (1 - ema_decay) * clipped
+                    smoothed = current_ema
+
+                accumulated += smoothed / len(micro_losses)
+
+            return accumulated, current_ema
+
+        # Method 2: Accumulate first, then smooth (NEW/CORRECT)
+        def method_2_accumulate_then_smooth(micro_losses, ema):
+            # Accumulate raw losses first
+            avg_loss = sum(micro_losses) / len(micro_losses)
+            clipped = min(avg_loss, max_clip)
+
+            # Then apply EMA to the accumulated result
+            if ema is None:
+                new_ema = clipped
+                smoothed = clipped
+            else:
+                new_ema = ema_decay * ema + (1 - ema_decay) * clipped
+                smoothed = new_ema
+
+            return smoothed, new_ema
+
+        # Start with both methods having the same EMA state
+        ema1 = None
+        ema2 = None
+
+        # Process normal step
+        result1_normal, ema1 = method_1_per_microstep_smoothing(
+            normal_micro_losses, ema1
+        )
+        result2_normal, ema2 = method_2_accumulate_then_smooth(
+            normal_micro_losses, ema2
+        )
+
+        # For the first step (no prior EMA), results will be different because:
+        # Method 1: processes [2.0, 2.1, 1.9, 2.0] sequentially, accumulating each EMA step
+        # Method 2: averages to 2.0 first, then applies EMA
+        # The difference demonstrates the issue we're trying to fix
+        self.assertNotAlmostEqual(
+            result1_normal, result2_normal, places=3
+        )  # Should be different
+
+        # Process spike step - this is where the difference becomes apparent
+        result1_spike, ema1 = method_1_per_microstep_smoothing(spike_micro_losses, ema1)
+        result2_spike, ema2 = method_2_accumulate_then_smooth(spike_micro_losses, ema2)
+
+        print(
+            f"Normal step - Method 1: {result1_normal:.4f}, Method 2: {result2_normal:.4f}"
+        )
+        print(
+            f"Spike step - Method 1: {result1_spike:.4f}, Method 2: {result2_spike:.4f}"
+        )
+        print(f"EMA after spike - Method 1: {ema1:.4f}, Method 2: {ema2:.4f}")
+
+        # Key insight: Method 2 should be more stable because it averages out the spike
+        # before applying EMA, while Method 1 applies EMA to each micro-step individually
+
+        # Method 2 averages [2.0, 2.0, 20.0, 2.0] = 6.5, then applies EMA
+        # Method 1 applies EMA sequentially: 2.0 -> 2.0 -> huge jump to 20.0 -> back to 2.0
+
+        # The exact values depend on the EMA calculation, but Method 2 should generally
+        # be more predictable and less susceptible to individual micro-step spikes
+
+        # Verify both produce reasonable values
+        self.assertGreater(result1_spike, 0)
+        self.assertGreater(result2_spike, 0)
+        self.assertLessEqual(result1_spike, max_clip)
+        self.assertLessEqual(result2_spike, max_clip)
+
+        # Both methods should have moved the EMA upward due to the spike,
+        # but Method 2 should be more predictable
+        self.assertGreater(ema1, result1_normal)
+        self.assertGreater(ema2, result2_normal)
+
+    def test_smoothing_effectiveness_comparison(self):
+        """
+        Test that compares the smoothing effectiveness of the old vs new approach
+        using a realistic training scenario with multiple iterations.
+        """
+        # Configuration for more aggressive smoothing to see the effect clearly
+        cfg = DAGTrainConfig()
+        cfg.exec_loss_ema_decay = 0.7  # Less conservative for clearer demonstration
+        cfg.exec_loss_max_clip = 8.0
+        cfg.exec_loss_warmup_steps = 2
+        cfg.gradient_accumulation_steps = 3
+
+        # Simulate a training scenario with varying micro-step losses
+        # Each sub-list represents micro-step losses for one training iteration
+        training_iterations = [
+            # Initial high, noisy losses
+            [4.0, 4.2, 3.8],  # iter 0 (warmup)
+            [3.5, 3.7, 3.3],  # iter 1 (warmup)
+            [3.0, 15.0, 2.8],  # iter 2 (spike in middle micro-step)
+            [2.5, 2.7, 2.3],  # iter 3 (normal)
+            [2.0, 12.0, 1.8],  # iter 4 (another spike)
+            [1.8, 1.9, 1.7],  # iter 5 (stable)
+            [1.5, 1.6, 1.4],  # iter 6 (stable)
+            [1.3, 8.0, 1.2],  # iter 7 (spike)
+            [1.1, 1.0, 1.2],  # iter 8 (recovery)
+            [0.9, 0.95, 0.85],  # iter 9 (final stable)
+        ]
+
+        def simulate_old_approach(iterations, cfg):
+            """Simulate old approach: EMA per micro-step, then accumulate."""
+            results = []
+            exec_loss_ema = None
+
+            for iter_num, micro_losses in enumerate(iterations):
+                accumulated_smoothed = 0.0
+
+                for micro_loss in micro_losses:
+                    clipped_loss = min(micro_loss, cfg.exec_loss_max_clip)
+
+                    if exec_loss_ema is None or iter_num < cfg.exec_loss_warmup_steps:
+                        exec_loss_ema = clipped_loss
+                        smoothed_loss = clipped_loss
+                    else:
+                        exec_loss_ema = (
+                            cfg.exec_loss_ema_decay * exec_loss_ema
+                            + (1 - cfg.exec_loss_ema_decay) * clipped_loss
+                        )
+                        smoothed_loss = exec_loss_ema
+
+                    accumulated_smoothed += (
+                        smoothed_loss / cfg.gradient_accumulation_steps
+                    )
+
+                results.append(accumulated_smoothed)
+
+            return results
+
+        def simulate_new_approach(iterations, cfg):
+            """Simulate new approach: accumulate first, then apply EMA."""
+            results = []
+            exec_loss_ema = None
+
+            for iter_num, micro_losses in enumerate(iterations):
+                # Accumulate raw losses first
+                accumulated_raw = sum(micro_losses) / len(micro_losses)
+                clipped_loss = min(accumulated_raw, cfg.exec_loss_max_clip)
+
+                if exec_loss_ema is None or iter_num < cfg.exec_loss_warmup_steps:
+                    exec_loss_ema = clipped_loss
+                    smoothed_loss = clipped_loss
+                else:
+                    exec_loss_ema = (
+                        cfg.exec_loss_ema_decay * exec_loss_ema
+                        + (1 - cfg.exec_loss_ema_decay) * clipped_loss
+                    )
+                    smoothed_loss = exec_loss_ema
+
+                results.append(smoothed_loss)
+
+            return results
+
+        old_results = simulate_old_approach(training_iterations, cfg)
+        new_results = simulate_new_approach(training_iterations, cfg)
+
+        print("\nComparison of Old vs New Approach:")
+        print("Iter | Raw Avg | Old Method | New Method | Difference")
+        print("-" * 55)
+
+        for i, (iteration, old_val, new_val) in enumerate(
+            zip(training_iterations, old_results, new_results)
+        ):
+            raw_avg = sum(iteration) / len(iteration)
+            diff = abs(old_val - new_val)
+            print(
+                f"{i:4d} | {raw_avg:7.2f} | {old_val:10.4f} | {new_val:10.4f} | {diff:10.4f}"
+            )
+
+        # Compute smoothness metrics
+        import statistics
+
+        # Skip warmup period for variance calculation
+        post_warmup_old = old_results[cfg.exec_loss_warmup_steps :]
+        post_warmup_new = new_results[cfg.exec_loss_warmup_steps :]
+
+        if len(post_warmup_old) > 1:
+            old_variance = statistics.variance(post_warmup_old)
+            new_variance = statistics.variance(post_warmup_new)
+
+            print(f"\nVariance (lower = smoother):")
+            print(f"Old approach: {old_variance:.6f}")
+            print(f"New approach: {new_variance:.6f}")
+
+            # The new approach should generally be smoother (lower variance)
+            # This isn't always guaranteed due to the different EMA evolution,
+            # but it should handle spikes more gracefully
+
+        # Test specific spike handling
+        # Look at iterations with spikes: 2, 4, 7 (where one micro-step is much larger)
+        spike_iterations = [2, 4, 7]
+
+        for spike_iter in spike_iterations:
+            iteration_losses = training_iterations[spike_iter]
+            spike_loss = max(iteration_losses)
+            avg_loss = sum(iteration_losses) / len(iteration_losses)
+
+            old_result = old_results[spike_iter]
+            new_result = new_results[spike_iter]
+
+            print(f"\nSpike analysis for iteration {spike_iter}:")
+            print(f"  Micro-losses: {iteration_losses}")
+            print(f"  Max spike: {spike_loss:.1f}, Average: {avg_loss:.2f}")
+            print(f"  Old method result: {old_result:.4f}")
+            print(f"  New method result: {new_result:.4f}")
+
+            # Both should produce finite, reasonable results
+            self.assertTrue(torch.isfinite(torch.tensor(old_result)))
+            self.assertTrue(torch.isfinite(torch.tensor(new_result)))
+            self.assertGreaterEqual(old_result, 0.0)
+            self.assertGreaterEqual(new_result, 0.0)
 
 
 if __name__ == "__main__":

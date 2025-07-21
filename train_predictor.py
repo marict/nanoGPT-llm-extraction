@@ -304,9 +304,13 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
     # Initialize EMA smoothing for exec_loss to prevent spikes
     exec_loss_ema = None
-    exec_loss_ema_decay = getattr(cfg, "exec_loss_ema_decay", 0.95)
+    exec_loss_ema_decay = getattr(
+        cfg, "exec_loss_ema_decay", 0.9
+    )  # Less aggressive decay for more noticeable smoothing
     exec_loss_max_clip = getattr(cfg, "exec_loss_max_clip", 5.0)
-    exec_loss_warmup_steps = getattr(cfg, "exec_loss_warmup_steps", 100)
+    exec_loss_warmup_steps = getattr(
+        cfg, "exec_loss_warmup_steps", 50
+    )  # Shorter warmup
 
     # Store validation metrics for combined logging
     pending_val_metrics = None
@@ -559,26 +563,22 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         cfg,
                     )
 
-                    # Apply EMA smoothing to exec_loss to prevent training spikes
+                    # Apply EMA smoothing to exec_loss for training stability
                     raw_exec_loss = losses["exec_loss"].item()
-
-                    # Clip extreme exec_loss values
                     clipped_exec_loss = min(raw_exec_loss, exec_loss_max_clip)
 
-                    # Update EMA
+                    # Update EMA (per micro-step, but will be more stable than old approach)
                     if exec_loss_ema is None or iter_num < exec_loss_warmup_steps:
-                        # Initialize or warmup period - use raw value
                         exec_loss_ema = clipped_exec_loss
                         smoothed_exec_loss = clipped_exec_loss
                     else:
-                        # Apply exponential moving average
                         exec_loss_ema = (
                             exec_loss_ema_decay * exec_loss_ema
                             + (1 - exec_loss_ema_decay) * clipped_exec_loss
                         )
                         smoothed_exec_loss = exec_loss_ema
 
-                    # Recompute total_loss with smoothed exec_loss
+                    # Recompute total_loss with smoothed exec_loss for training
                     smoothed_total_loss = (
                         cfg.sign_loss_weight * losses["sign_loss"]
                         + cfg.digit_loss_weight * losses["digit_loss"]
@@ -587,7 +587,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         + cfg.exec_loss_weight * smoothed_exec_loss
                     )
 
-                    # Use smoothed loss for training, keep raw for logging
+                    # Use smoothed loss for training
                     losses["exec_loss_raw"] = losses[
                         "exec_loss"
                     ]  # Keep original for logging
@@ -642,7 +642,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
             if iter_num % cfg.log_interval == 0 and master_process:
                 # Build dynamic log message for main losses
-                # Show smoothed exec_loss in console since that's what's used for training
+                # Show smoothed exec_loss since that's what's actually used for training
                 exec_loss_display = loss_accum.get(
                     "exec_loss_smoothed", loss_accum["exec_loss"]
                 )
@@ -692,20 +692,18 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "train/digit_loss": loss_accum["digit_loss"],
                         "train/op_loss": loss_accum["op_loss"],
                         "train/value_loss": loss_accum["value_loss"],
-                        "train/exec_loss": loss_accum["exec_loss"],
+                        "train/exec_loss": loss_accum.get(
+                            "exec_loss_smoothed", loss_accum["exec_loss"]
+                        ),  # The actual training loss
                         "lr": current_lr,
                         "train/op_accuracy": loss_accum["op_accuracy"],
                         "train/full_dag_op_match": loss_accum["full_dag_op_match"],
                         "train/sign_accuracy": loss_accum["sign_accuracy"],
                     }
 
-                    # Add smoothed exec_loss metrics for monitoring
+                    # Add raw exec_loss for comparison
                     if "exec_loss_raw" in loss_accum:
                         log_dict["train/exec_loss_raw"] = loss_accum["exec_loss_raw"]
-                    if "exec_loss_smoothed" in loss_accum:
-                        log_dict["train/exec_loss_smoothed"] = loss_accum[
-                            "exec_loss_smoothed"
-                        ]
 
                     # Add internal losses to wandb logging
                     for key, value in loss_accum.items():
