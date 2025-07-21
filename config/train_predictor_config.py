@@ -56,7 +56,7 @@ dag_depth = max_dag_depth  # MUST match max_dag_depth above
 # Optimization (tuned for longer training)
 max_iters = 50000
 # weight_decay = 1e-1
-weight_decay = 0.0
+weight_decay = 1e-2
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
@@ -79,7 +79,7 @@ sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
 value_loss_weight = 1.0
-exec_loss_weight = 1.0
+exec_loss_weight = 0.5
 
 # Random seeds
 seed = 42
