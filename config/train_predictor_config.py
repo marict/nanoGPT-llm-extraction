@@ -52,7 +52,7 @@ n_head = 12
 n_layer = 6
 n_embd = n_head * 64
 dropout = 0.35  # Slight dropout for regularization
-bias = False
+bias = True
 dag_depth = max_dag_depth  # MUST match max_dag_depth above
 
 # Optimization (tuned for longer training)
