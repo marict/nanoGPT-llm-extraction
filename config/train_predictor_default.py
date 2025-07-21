@@ -56,6 +56,7 @@ sequence_length = 32
 
 # Model architecture (should match target model)
 n_head = 1
+n_layer = 2
 n_embd = 32
 dropout = 0.0
 bias = False

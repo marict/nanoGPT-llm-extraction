@@ -28,7 +28,7 @@ val_examples_per_batch = 800
 max_dag_depth = 6  # Match the model dag_depth for consistency
 # Choose 4 to match the NALU paper
 max_digits = 4
-n_layer = 2
+n_layer = 6
 max_decimal_places = 4
 
 # Expression generation settings
@@ -50,6 +50,7 @@ sequence_length = 128
 
 # Model architecture (larger for RunPod training)
 n_head = 12
+n_layer = 2
 n_embd = n_head * 64
 dropout = 0.35  # Slight dropout for regularization
 bias = False

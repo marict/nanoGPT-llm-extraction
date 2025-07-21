@@ -693,6 +693,7 @@ class CheckpointManager:
                 "vocab_size": (saved_cfg or {}).get("vocab_size", 50304),
                 "n_embd": (saved_cfg or {}).get("n_embd", cfg.n_embd),
                 "n_head": (saved_cfg or {}).get("n_head", cfg.n_head),
+                "n_layer": (saved_cfg or {}).get("n_layer", cfg.n_layer),
                 "dropout": (saved_cfg or {}).get("dropout", cfg.dropout),
                 "bias": (saved_cfg or {}).get("bias", cfg.bias),
                 "dag_depth": (saved_cfg or {}).get("dag_depth", cfg.dag_depth),
