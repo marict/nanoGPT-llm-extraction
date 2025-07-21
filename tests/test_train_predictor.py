@@ -278,35 +278,150 @@ class TestShallowAttentionDAGPredictor(unittest.TestCase):
                     )
 
     def test_gradient_flow(self):
-        """Test that gradients flow properly through the model."""
+        """Test gradient flow through the model."""
         model = PredictorOnlyModel(self.config)
         model.train()
+
+        batch_size = 2
+        seq_len = self.config.sequence_length
+        input_ids = torch.randint(0, 1000, (batch_size, seq_len))
+
+        # Forward pass
+        pred_sgn, digit_probs, pred_ops = model(input_ids)
+
+        # Compute a simple loss
+        loss = pred_sgn.mean() + digit_probs.mean() + pred_ops.mean()
+
+        # Backward pass
+        loss.backward()
+
+        # Check that gradients exist and are finite
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.assertIsNotNone(param.grad, f"No gradient for {name}")
+                self.assertTrue(
+                    torch.isfinite(param.grad).all(), f"Non-finite gradient for {name}"
+                )
+
+    def test_multi_layer_functionality(self):
+        """Test that n_layer > 1 works correctly and produces different outputs than n_layer=1."""
+        # Create configurations for single and multi-layer models
+        single_layer_config = PredictorOnlyConfig(
+            vocab_size=1000,
+            n_layer=1,
+            n_embd=64,
+            n_head=4,
+            dropout=0.0,
+            bias=False,
+            dag_depth=2,
+            sequence_length=32,
+        )
+
+        multi_layer_config = PredictorOnlyConfig(
+            vocab_size=1000,
+            n_layer=3,  # Multiple layers
+            n_embd=64,
+            n_head=4,
+            dropout=0.0,
+            bias=False,
+            dag_depth=2,
+            sequence_length=32,
+        )
+
+        # Create models
+        single_layer_model = PredictorOnlyModel(single_layer_config)
+        multi_layer_model = PredictorOnlyModel(multi_layer_config)
+
+        # Test model structure
+        self.assertEqual(len(single_layer_model.transformer.h), 1)
+        self.assertEqual(len(multi_layer_model.transformer.h), 3)
+
+        # Test parameter counts are different
+        single_params = single_layer_model.get_num_params()
+        multi_params = multi_layer_model.get_num_params()
+        self.assertGreater(multi_params, single_params)
+
+        # Test forward pass with same input
+        batch_size = 2
+        seq_len = 16
+        torch.manual_seed(42)  # For reproducible inputs
+        input_ids = torch.randint(0, 1000, (batch_size, seq_len))
+
+        # Both models should run without error
+        with torch.no_grad():
+            single_layer_model.eval()
+            multi_layer_model.eval()
+
+            single_sgn, single_digits, single_ops = single_layer_model(input_ids)
+            multi_sgn, multi_digits, multi_ops = multi_layer_model(input_ids)
+
+            # Outputs should have same shapes
+            self.assertEqual(single_sgn.shape, multi_sgn.shape)
+            self.assertEqual(single_digits.shape, multi_digits.shape)
+            self.assertEqual(single_ops.shape, multi_ops.shape)
+
+            # Outputs should be different (models have different architectures)
+            self.assertFalse(torch.allclose(single_sgn, multi_sgn, atol=1e-5))
+
+            # Both outputs should be valid
+            self.assertTrue(torch.isfinite(single_sgn).all())
+            self.assertTrue(torch.isfinite(multi_sgn).all())
+            self.assertTrue(torch.isfinite(single_ops).all())
+            self.assertTrue(torch.isfinite(multi_ops).all())
+
+        # Test backward pass works for multi-layer
+        multi_layer_model.train()
+        pred_sgn, digit_probs, pred_ops = multi_layer_model(input_ids)
+        loss = pred_sgn.mean() + digit_probs.mean() + pred_ops.mean()
+        loss.backward()
+
+        # Check gradients exist for all layers
+        for i, block in enumerate(multi_layer_model.transformer.h):
+            for name, param in block.named_parameters():
+                if param.requires_grad:
+                    self.assertIsNotNone(
+                        param.grad, f"No gradient for layer {i} param {name}"
+                    )
+                    self.assertTrue(
+                        torch.isfinite(param.grad).all(),
+                        f"Non-finite gradient for layer {i} param {name}",
+                    )
+
+    def test_multi_layer_hidden_states(self):
+        """Test that forward_hidden works correctly with multiple layers."""
+        config = PredictorOnlyConfig(
+            vocab_size=1000,
+            n_layer=2,
+            n_embd=64,
+            n_head=4,
+            dag_depth=2,
+            sequence_length=32,
+        )
+
+        model = PredictorOnlyModel(config)
+        model.eval()
 
         batch_size = 2
         seq_len = 16
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
 
-        # Forward pass
-        pred_sgn, digit_probs, pred_ops = model(input_ids)
-        pred_log = _derive_log_from_digits(
-            digit_probs,
-            self.config.max_digits,
-            self.config.max_decimal_places,
-        )
+        with torch.no_grad():
+            hidden_states = model.forward_hidden(input_ids)
 
-        # Create dummy loss
-        loss = pred_sgn.mean() + pred_log.mean() + pred_ops.mean()
+            # Check output shape
+            expected_shape = (batch_size, seq_len, config.n_embd)
+            self.assertEqual(hidden_states.shape, expected_shape)
 
-        # Backward pass
-        loss.backward()
+            # Check output is finite
+            self.assertTrue(torch.isfinite(hidden_states).all())
 
-        # Check that gradients were computed
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                self.assertIsNotNone(param.grad, f"No gradient for parameter {name}")
-                self.assertTrue(
-                    torch.isfinite(param.grad).all(), f"Non-finite gradient for {name}"
-                )
+            # Compare with full forward pass
+            pred_sgn, digit_probs, pred_ops = model(input_ids)
+
+            # Both should work and be finite
+            self.assertTrue(torch.isfinite(pred_sgn).all())
+            self.assertTrue(torch.isfinite(digit_probs).all())
+            self.assertTrue(torch.isfinite(pred_ops).all())
 
     def test_backwards_pass_with_zero_inputs(self):
         """Test that backwards pass can go through the predictor only model if the input string just contains 0s."""

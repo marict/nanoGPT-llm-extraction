@@ -13,10 +13,10 @@ clear_previous_checkpoints = False
 reload_reset_iters = False
 
 # Model initialization
-init_from = (
-    "/runpod-volume/checkpoints/t4hs3j0vbdkpo8-fixvalseed/ckpt_predictor_pretrain.pt"
-)
-# init_from = "scratch"
+# init_from = (
+#     "/runpod-volume/checkpoints/t4hs3j0vbdkpo8-fixvalseed/ckpt_predictor_pretrain.pt"
+# )
+init_from = "scratch"
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
@@ -28,6 +28,7 @@ val_examples_per_batch = 800
 max_dag_depth = 6  # Match the model dag_depth for consistency
 # Choose 4 to match the NALU paper
 max_digits = 4
+n_layer = 2
 max_decimal_places = 4
 
 # Expression generation settings
