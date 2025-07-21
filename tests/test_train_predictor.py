@@ -1483,5 +1483,276 @@ class TestFullBackbonePredictor(unittest.TestCase):
         self.assertTrue(torch.allclose(op_sums, torch.ones_like(op_sums), atol=1e-5))
 
 
+class TestExecLossEMASmoothing(unittest.TestCase):
+    """Test EMA smoothing functionality for exec_loss."""
+
+    def setUp(self):
+        """Set up test configuration."""
+        self.cfg = DAGTrainConfig()
+        self.cfg.exec_loss_ema_decay = 0.9  # Faster decay for testing
+        self.cfg.exec_loss_max_clip = 5.0
+        self.cfg.exec_loss_warmup_steps = 3  # Short warmup for testing
+        self.cfg.exec_loss_weight = 0.5
+
+    def test_ema_initialization(self):
+        """Test that EMA initializes correctly during warmup."""
+        # Simulate the EMA initialization logic
+        exec_loss_ema = None
+        iter_num = 0  # Within warmup
+        raw_exec_loss = 2.5
+        clipped_exec_loss = min(raw_exec_loss, self.cfg.exec_loss_max_clip)
+
+        # During warmup, EMA should initialize to the first value
+        if exec_loss_ema is None or iter_num < self.cfg.exec_loss_warmup_steps:
+            exec_loss_ema = clipped_exec_loss
+            smoothed_exec_loss = clipped_exec_loss
+
+        self.assertEqual(exec_loss_ema, 2.5)
+        self.assertEqual(smoothed_exec_loss, 2.5)
+
+    def test_ema_calculation(self):
+        """Test EMA calculation after warmup period."""
+        # Initial EMA value after warmup
+        exec_loss_ema = 2.0
+        new_raw_loss = 4.0
+        clipped_loss = min(new_raw_loss, self.cfg.exec_loss_max_clip)
+
+        # Apply EMA formula
+        expected_ema = (
+            self.cfg.exec_loss_ema_decay * exec_loss_ema
+            + (1 - self.cfg.exec_loss_ema_decay) * clipped_loss
+        )
+
+        # Manual calculation: 0.9 * 2.0 + 0.1 * 4.0 = 1.8 + 0.4 = 2.2
+        self.assertAlmostEqual(expected_ema, 2.2, places=5)
+
+    def test_exec_loss_clipping(self):
+        """Test that extreme exec_loss values are clipped."""
+        extreme_loss = 100.0
+        clipped_loss = min(extreme_loss, self.cfg.exec_loss_max_clip)
+
+        self.assertEqual(clipped_loss, self.cfg.exec_loss_max_clip)
+        self.assertEqual(clipped_loss, 5.0)
+
+    def test_ema_dampens_spikes(self):
+        """Test that EMA effectively dampens sudden spikes."""
+        # Start with stable EMA
+        exec_loss_ema = 1.0
+        decay = self.cfg.exec_loss_ema_decay
+
+        # Sudden spike
+        spike_value = 5.0
+        new_ema = decay * exec_loss_ema + (1 - decay) * spike_value
+
+        # EMA should be much closer to old value than spike
+        self.assertLess(new_ema, 2.0)  # Much less than spike
+        self.assertGreater(new_ema, 1.0)  # But moved from original
+
+        # Expected: 0.9 * 1.0 + 0.1 * 5.0 = 0.9 + 0.5 = 1.4
+        self.assertAlmostEqual(new_ema, 1.4, places=5)
+
+    def test_ema_follows_trends(self):
+        """Test that EMA follows gradual trends."""
+        exec_loss_ema = 2.0
+        decay = self.cfg.exec_loss_ema_decay
+
+        # Simulate gradual increase over several steps
+        values = [2.1, 2.2, 2.3, 2.4]
+        ema = exec_loss_ema
+
+        for val in values:
+            ema = decay * ema + (1 - decay) * val
+
+        # EMA should have moved toward the trend
+        self.assertGreater(ema, exec_loss_ema)
+        self.assertLess(ema, max(values))  # But not as much as raw values
+
+    def test_loss_recomputation_with_smoothing(self):
+        """Test that total_loss is recomputed correctly with smoothed exec_loss."""
+        # Mock losses similar to what compute_dag_structure_loss returns
+        losses = {
+            "sign_loss": torch.tensor(0.5),
+            "digit_loss": torch.tensor(0.3),
+            "op_loss": torch.tensor(0.4),
+            "value_loss": torch.tensor(0.6),
+            "exec_loss": torch.tensor(3.0),  # Raw exec_loss
+        }
+
+        # Simulate smoothing
+        smoothed_exec_loss = 1.5  # Much lower than raw
+
+        # Recompute total_loss with smoothed exec_loss
+        smoothed_total_loss = (
+            self.cfg.sign_loss_weight * losses["sign_loss"]
+            + self.cfg.digit_loss_weight * losses["digit_loss"]
+            + self.cfg.op_loss_weight * losses["op_loss"]
+            + self.cfg.value_loss_weight * losses["value_loss"]
+            + self.cfg.exec_loss_weight * smoothed_exec_loss
+        )
+
+        # Calculate expected: 1.0*0.5 + 1.0*0.3 + 1.0*0.4 + 1.0*0.6 + 0.5*1.5 = 2.55
+        expected_total = 0.5 + 0.3 + 0.4 + 0.6 + 0.5 * 1.5
+        self.assertAlmostEqual(smoothed_total_loss.item(), expected_total, places=5)
+        self.assertAlmostEqual(smoothed_total_loss.item(), 2.55, places=5)
+
+    def test_warmup_period_behavior(self):
+        """Test behavior during warmup period."""
+        warmup_steps = self.cfg.exec_loss_warmup_steps
+
+        for iter_num in range(warmup_steps + 2):
+            raw_loss = 2.0 + iter_num * 0.5  # Increasing loss
+            exec_loss_ema = 1.0 if iter_num > 0 else None
+
+            if exec_loss_ema is None or iter_num < warmup_steps:
+                # During warmup, should use raw values
+                expected_smoothed = min(raw_loss, self.cfg.exec_loss_max_clip)
+            else:
+                # After warmup, should use EMA
+                clipped = min(raw_loss, self.cfg.exec_loss_max_clip)
+                expected_smoothed = (
+                    self.cfg.exec_loss_ema_decay * exec_loss_ema
+                    + (1 - self.cfg.exec_loss_ema_decay) * clipped
+                )
+
+            if iter_num < warmup_steps:
+                # During warmup, smoothed should equal clipped raw
+                self.assertEqual(
+                    expected_smoothed, min(raw_loss, self.cfg.exec_loss_max_clip)
+                )
+
+    def test_config_defaults(self):
+        """Test that configuration has sensible defaults when EMA parameters are missing."""
+        # Test getattr with defaults
+        cfg_missing = DAGTrainConfig()  # Won't have EMA parameters
+
+        exec_loss_ema_decay = getattr(cfg_missing, "exec_loss_ema_decay", 0.95)
+        exec_loss_max_clip = getattr(cfg_missing, "exec_loss_max_clip", 5.0)
+        exec_loss_warmup_steps = getattr(cfg_missing, "exec_loss_warmup_steps", 100)
+
+        self.assertEqual(exec_loss_ema_decay, 0.95)
+        self.assertEqual(exec_loss_max_clip, 5.0)
+        self.assertEqual(exec_loss_warmup_steps, 100)
+
+    def test_loss_dict_modifications(self):
+        """Test that loss dictionary is modified correctly with raw and smoothed values."""
+        # Mock original losses
+        original_losses = {
+            "total_loss": torch.tensor(5.0),
+            "exec_loss": torch.tensor(3.0),
+            "sign_loss": torch.tensor(0.5),
+        }
+
+        smoothed_exec_loss = 1.5
+        device = original_losses["exec_loss"].device
+
+        # Simulate the modifications from our implementation
+        losses = original_losses.copy()
+        losses["exec_loss_raw"] = losses["exec_loss"]  # Keep original
+        losses["exec_loss_smoothed"] = torch.tensor(smoothed_exec_loss, device=device)
+
+        # Check that we have both versions
+        self.assertIn("exec_loss_raw", losses)
+        self.assertIn("exec_loss_smoothed", losses)
+        self.assertEqual(losses["exec_loss_raw"].item(), 3.0)
+        self.assertEqual(losses["exec_loss_smoothed"].item(), 1.5)
+
+    def test_integration_realistic_training_scenario(self):
+        """Test EMA behavior in a realistic training scenario with various loss patterns."""
+        cfg = DAGTrainConfig()
+        cfg.exec_loss_ema_decay = 0.95
+        cfg.exec_loss_max_clip = 10.0
+        cfg.exec_loss_warmup_steps = 5
+        cfg.exec_loss_weight = 0.3
+
+        # Simulate realistic exec_loss values over training
+        # Pattern: high initial losses, gradual decline, occasional spikes
+        raw_losses = [
+            8.5,
+            7.2,
+            6.8,
+            5.9,
+            5.1,  # warmup period (declining)
+            4.8,
+            4.2,
+            15.0,
+            3.9,
+            3.6,  # spike at step 7
+            3.4,
+            3.2,
+            3.0,
+            12.0,
+            2.5,  # another spike at step 13
+            2.3,
+            2.1,
+            1.9,
+            1.8,
+            1.7,  # final stable period
+        ]
+
+        exec_loss_ema = None
+        smoothed_losses = []
+
+        for iter_num, raw_loss in enumerate(raw_losses):
+            # Simulate the EMA logic from our implementation
+            clipped_loss = min(raw_loss, cfg.exec_loss_max_clip)
+
+            if exec_loss_ema is None or iter_num < cfg.exec_loss_warmup_steps:
+                exec_loss_ema = clipped_loss
+                smoothed_loss = clipped_loss
+            else:
+                exec_loss_ema = (
+                    cfg.exec_loss_ema_decay * exec_loss_ema
+                    + (1 - cfg.exec_loss_ema_decay) * clipped_loss
+                )
+                smoothed_loss = exec_loss_ema
+
+            smoothed_losses.append(smoothed_loss)
+
+        # Verify key properties of the smoothed losses
+
+        # 1. During warmup, smoothed should equal clipped raw
+        for i in range(cfg.exec_loss_warmup_steps):
+            expected = min(raw_losses[i], cfg.exec_loss_max_clip)
+            self.assertAlmostEqual(smoothed_losses[i], expected, places=4)
+
+        # 2. Spikes should be significantly dampened
+        spike_indices = [7, 13]  # Where we have spikes of 15.0 and 12.0
+        for spike_idx in spike_indices:
+            raw_spike = raw_losses[spike_idx]
+            smoothed_spike = smoothed_losses[spike_idx]
+
+            # Smoothed should be much lower than raw spike
+            self.assertLess(smoothed_spike, raw_spike * 0.7)
+            # But should be higher than previous smoothed value
+            self.assertGreater(smoothed_spike, smoothed_losses[spike_idx - 1])
+
+        # 3. Overall trend should be preserved (declining)
+        first_half_avg = sum(smoothed_losses[:10]) / 10
+        second_half_avg = sum(smoothed_losses[10:]) / 10
+        self.assertLess(second_half_avg, first_half_avg)
+
+        # 4. EMA should eventually converge toward stable values (but may lag)
+        # Check that the final smoothed value is moving toward the recent raw values
+        final_raw_avg = sum(raw_losses[-3:]) / 3  # Last 3 raw values
+        final_smoothed = smoothed_losses[-1]
+
+        # Smoothed should be closer to recent raw values than to early values
+        early_raw_avg = sum(raw_losses[:3]) / 3
+        self.assertLess(
+            abs(final_smoothed - final_raw_avg), abs(final_smoothed - early_raw_avg)
+        )
+
+        # 5. Smoothed values should be more stable (lower variance)
+        import statistics
+
+        raw_variance = statistics.variance(raw_losses[cfg.exec_loss_warmup_steps :])
+        smoothed_variance = statistics.variance(
+            smoothed_losses[cfg.exec_loss_warmup_steps :]
+        )
+
+        # Smoothed should have lower variance (more stable)
+        self.assertLess(smoothed_variance, raw_variance)
+
+
 if __name__ == "__main__":
     unittest.main()

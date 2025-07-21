@@ -473,6 +473,9 @@ class DAGPlanPredictor(nn.Module):
         # Flag last Linear layer for custom initialisation in GPT._init_weights
         self.operations_projection[-1].is_operations_projection = True
 
+        # Flag the initial values predictor to preserve its bias initialization
+        self.initial_values_predictor[-1].is_initial_values_predictor = True
+
         # Store last predictions for logging
         self.last_operation_probs: torch.Tensor | None = None
         self.last_digit_logits: torch.Tensor | None = None
@@ -1048,6 +1051,9 @@ class GPT(nn.Module):
             if getattr(module, "is_operations_projection", False):
                 torch.nn.init.xavier_uniform_(module.weight)
                 # Bias was pre-initialised (-4.0) in DAGPlanPredictor; keep as-is.
+            elif getattr(module, "is_initial_values_predictor", False):
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                # Bias was pre-initialised with digit biases in DAGPlanPredictor; keep as-is.
             else:
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
                 if module.bias is not None:

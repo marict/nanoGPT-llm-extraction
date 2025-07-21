@@ -81,5 +81,10 @@ op_loss_weight = 1.0
 value_loss_weight = 1.0
 exec_loss_weight = 0.5
 
+# Exec loss smoothing to prevent spikes
+exec_loss_ema_decay = 0.95  # EMA decay factor (0.95 = keep 95% of history)
+exec_loss_max_clip = 5.0  # Maximum allowed exec_loss value
+exec_loss_warmup_steps = 100  # Steps before EMA kicks in
+
 # Random seeds
 seed = 42

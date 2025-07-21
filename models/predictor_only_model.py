@@ -89,6 +89,9 @@ class PredictorOnlyModel(nn.Module):
             if getattr(module, "is_operations_projection", False):
                 torch.nn.init.xavier_uniform_(module.weight)
                 # Bias was pre-initialised (-4.0) in DAGPlanPredictor; keep as-is.
+            elif getattr(module, "is_initial_values_predictor", False):
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                # Bias was pre-initialised with digit biases in DAGPlanPredictor; keep as-is.
             else:
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
                 if module.bias is not None:
