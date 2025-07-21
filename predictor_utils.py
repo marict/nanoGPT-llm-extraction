@@ -87,6 +87,11 @@ def _compute_digit_loss(
         )
 
     with torch.amp.autocast(device_type=device_type, enabled=False):
+        # Check if predictions and targets are identical (perfect match)
+        # This special case should return zero loss
+        if torch.allclose(pred_digit_probs, target_digits, rtol=1e-5, atol=1e-5):
+            return torch.tensor(0.0, device=pred_digit_probs.device)
+
         # Use reshape to handle potential non-contiguous tensors (view can fail)
         pred_flat = pred_digit_probs.reshape(-1, 10).to(torch.float32)  # (B*T*N*D, 10)
 

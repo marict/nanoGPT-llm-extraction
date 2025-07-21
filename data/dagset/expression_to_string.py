@@ -56,6 +56,7 @@ def format_expression_string(
 
     Returns:
         Formatted expression string
+        Style used for rendering
     """
     # Validate input type
     if not isinstance(expression, sympy.Basic):
@@ -71,11 +72,10 @@ def format_expression_string(
     rng = random.Random(seed)
     style = sample_printing_style(printing_style_probs, rng)
 
-    # Render expression in selected style, note this style might changed if a bug occurs.
-    expr_str, style = render_expr(expression, style)
+    # Render expression in selected style
+    expr_str = render_expr(expression, style)
 
     # Apply English conversion to operations based on the style
-    # (operand conversion is handled during symbol creation)
     if english_conversion_probability > 0:
         # Only convert operations for sstr and latex styles
         if style in ["sstr", "latex"]:
