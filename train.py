@@ -34,8 +34,10 @@ from evaluation import estimate_loss, evaluate_math
 from models.dag_model import GPT, GPTConfig
 from python_version_check import check_python_version
 from training_utils import (CHECKPOINT_DIR, BaseConfig, _check_for_nonfinite,
-                            apply_overrides, generate_run_name, get_lr,
-                            load_config_file, parse_args, update_config)
+                            apply_overrides, check_disk_space_emergency,
+                            cleanup_disk_space_emergency, generate_run_name,
+                            get_disk_usage_percent, get_lr, load_config_file,
+                            parse_args, update_config)
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
 CUDA_AVAILABLE = torch.cuda.is_available()
@@ -526,7 +528,49 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
         consecutive_errors = 0
         max_consecutive_errors = 5
 
+        # Disk space monitoring
+        disk_check_interval = 100  # Check every 100 iterations
+        last_disk_check_iter = 0
+        disk_emergency_threshold = 95.0
+
+        # Initial disk space check
+        disk_space_emergency = False
+        if master_process:
+            usage_percent = get_disk_usage_percent(".")
+            print(
+                f"[{time.time() - setup_start:.2f}s] Initial disk usage: {usage_percent:.1f}%"
+            )
+
+            if check_disk_space_emergency(".", disk_emergency_threshold):
+                cleanup_disk_space_emergency()
+                # Re-check after cleanup
+                if check_disk_space_emergency(".", disk_emergency_threshold):
+                    print(
+                        "❌ CRITICAL: Disk space emergency persists after cleanup. Stopping training."
+                    )
+                    disk_space_emergency = True
+
         while True:
+            # Stop training if disk space emergency
+            if disk_space_emergency:
+                print("Exiting training due to disk space emergency")
+                break
+            # Periodic disk space check
+            if (
+                master_process
+                and iter_num - last_disk_check_iter >= disk_check_interval
+            ):
+                if check_disk_space_emergency(".", disk_emergency_threshold):
+                    cleanup_disk_space_emergency()
+                    # Re-check after cleanup
+                    if check_disk_space_emergency(".", disk_emergency_threshold):
+                        print(
+                            "❌ CRITICAL: Disk space emergency during training. Stopping."
+                        )
+                        disk_space_emergency = True
+                        break
+                last_disk_check_iter = iter_num
+
             lr = get_lr(iter_num, cfg=cfg)
             for pg in optimizer.param_groups:
                 pg["lr"] = lr
@@ -707,6 +751,12 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
 
                     X, Y = get_batch("train")
                     scaler.scale(loss).backward()
+
+                    # Clear batch references to prevent accumulation
+                    if (
+                        micro_step > 0
+                    ):  # Don't clear on first step as we need X, Y for next iteration
+                        del X, Y
                     for n, p in model.named_parameters():
                         if p.grad is not None and (
                             torch.isnan(p.grad).any() or torch.isinf(p.grad).any()
@@ -789,6 +839,22 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
 
                 # Reset error counter on successful training step
                 consecutive_errors = 0
+
+                # Memory cleanup every iteration to prevent leaks
+                if hasattr(raw_model, "clear_model_cache"):
+                    raw_model.clear_model_cache()
+
+                # Clean up DAG logger memory periodically (every 50 iterations)
+                if iter_num % 50 == 0:
+                    dag_logger.cleanup_for_next_iteration()
+
+                # Explicit garbage collection every 200 iterations
+                if iter_num % 200 == 0:
+                    import gc
+
+                    gc.collect()
+                    if device == "cuda":
+                        torch.cuda.empty_cache()
 
                 iter_num += 1
                 if iter_num > cfg.max_iters:

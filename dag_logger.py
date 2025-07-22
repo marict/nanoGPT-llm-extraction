@@ -191,6 +191,30 @@ class DAGLogger:
             hook.remove()
         self.gradient_hooks.clear()
 
+        # Also clear the operation gradient hook if it exists
+        if self.op_grad_hook is not None:
+            self.op_grad_hook.remove()
+            self.op_grad_hook = None
+
+    def clear_memory_cache(self) -> None:
+        """Clear all cached memory to prevent memory leaks."""
+        # Clear logging data
+        self.logging_data.clear()
+
+        # Clear captured gradients
+        self.captured_gradients.clear()
+
+        # Remove all gradient hooks
+        self.clear_gradient_hooks()
+
+    def cleanup_for_next_iteration(self) -> None:
+        """Lightweight cleanup between training iterations."""
+        # Only clear captured gradients, keep hooks for next iteration
+        self.captured_gradients.clear()
+
+        # Clear logging data but not hooks (for performance)
+        self.logging_data.clear()
+
     def get_extra_vals(self, model) -> Dict[str, float]:
         """Get extra values for logging."""
         if model.config.dag_depth == 0:

@@ -402,6 +402,11 @@ class DAGPlanPredictor(nn.Module):
         self.last_operation_probs: torch.Tensor | None = None
         self.last_digit_logits: torch.Tensor | None = None
 
+    def clear_cache(self) -> None:
+        """Clear cached tensors to prevent memory leaks."""
+        self.last_operation_probs = None
+        self.last_digit_logits = None
+
     def forward(self, original_hidden: torch.Tensor):
         """
         ƒ both initial values and operation choices for stack-based execution.
@@ -532,7 +537,7 @@ def apply_op(
     sub_sgn, sub_log = subtract_log_space(s1, l1, s2, l2, ignore_clip)
     mul_sgn, mul_log = multiply_log_space(s1, l1, s2, l2, ignore_clip)
     div_sgn, div_log = divide_log_space(s1, l1, s2, l2, ignore_clip)
-    id_sgn, id_log = identity_log_space(s1, l1, s2, l2, ignore_clip=ignore_clip)
+    id_sgn, id_log = identity_log_space(s1, l1, s2, l2, ignore_clip)
 
     # Stack results
     ops_sgn = torch.stack(
@@ -793,6 +798,13 @@ class DifferentiableDAG(nn.Module):
         self.final_hidden = None
         self.final_values = None
 
+    def clear_cache(self) -> None:
+        """Clear cached tensors to prevent memory leaks."""
+        self.final_hidden = None
+        self.final_values = None
+        # Also clear plan predictor cache
+        self.plan_predictor.clear_cache()
+
     def forward(
         self,
         original_hidden: torch.Tensor,  # (B, T, H)
@@ -924,6 +936,22 @@ class GPT(BaseGPTModel):
             self.gate_w_o = nn.Parameter(torch.full((config.n_embd,), -2.0))
             # Bias so gate can open even if means are near zero
             self.gate_b = nn.Parameter(torch.tensor(-2.0))
+
+    def clear_model_cache(self) -> None:
+        """Clear all cached tensors to prevent memory leaks."""
+        # Clear stored tensors from forward pass
+        if hasattr(self, "last_original_hidden"):
+            self.last_original_hidden = None
+        if hasattr(self, "last_mixed_hidden"):
+            self.last_mixed_hidden = None
+        if hasattr(self, "final_values"):
+            self.final_values = None
+        if hasattr(self, "last_gate"):
+            self.last_gate = None
+
+        # Clear DAG cache if present
+        if hasattr(self, "dag"):
+            self.dag.clear_cache()
 
     def _compute_loss(self, logits, targets):
         """Utility to compute the cross-entropy loss."""

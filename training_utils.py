@@ -5,9 +5,12 @@ import math
 import os
 import random
 import runpy
+import shutil
 import string
+import time
 from ast import literal_eval
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List
 
 import torch
@@ -20,6 +23,92 @@ import torch
 CHECKPOINT_DIR = (
     "/runpod-volume/checkpoints" if os.path.exists("/runpod-volume") else "checkpoints"
 )
+
+
+# --------------------------------------------------------------------------- #
+# Disk space monitoring utilities
+# --------------------------------------------------------------------------- #
+
+
+def get_disk_usage_percent(path: str = ".") -> float:
+    """Get disk usage percentage for the given path.
+
+    Args:
+        path: Path to check disk usage for (defaults to current directory)
+
+    Returns:
+        Disk usage as a percentage (0-100)
+    """
+    try:
+        _, total, free = shutil.disk_usage(path)
+        used = total - free
+        usage_percent = (used / total) * 100.0
+        return usage_percent
+    except Exception as e:
+        print(f"Warning: Could not check disk usage for {path}: {e}")
+        return 0.0
+
+
+def check_disk_space_emergency(path: str = ".", threshold: float = 95.0) -> bool:
+    """Check if disk usage exceeds emergency threshold.
+
+    Args:
+        path: Path to check disk usage for
+        threshold: Emergency threshold percentage (default: 95%)
+
+    Returns:
+        True if disk usage exceeds threshold, False otherwise
+    """
+    usage_percent = get_disk_usage_percent(path)
+
+    if usage_percent >= threshold:
+        print(
+            f"🚨 DISK SPACE EMERGENCY: {usage_percent:.1f}% usage exceeds {threshold}% threshold!"
+        )
+        print(f"📊 Disk usage details for {path}:")
+
+        try:
+            _, total, free = shutil.disk_usage(path)
+            print(f"  Total: {total / (1024**3):.1f} GB")
+            print(f"  Free:  {free / (1024**3):.1f} GB")
+            print(f"  Used:  {(total - free) / (1024**3):.1f} GB")
+        except Exception as e:
+            print(f"  Could not get detailed disk usage: {e}")
+
+        return True
+
+    return False
+
+
+def cleanup_disk_space_emergency():
+    """Emergency disk space cleanup procedures."""
+    print("🧹 Attempting emergency disk space cleanup...")
+
+    cleanup_paths = ["/tmp", str(Path.home() / ".cache"), "/var/tmp"]
+
+    cleaned_mb = 0
+
+    for cleanup_path in cleanup_paths:
+        if os.path.exists(cleanup_path):
+            try:
+                # Clean temporary files older than 1 hour
+                for root, dirs, files in os.walk(cleanup_path):
+                    for file in files:
+                        file_path = Path(root) / file
+                        try:
+                            if file_path.stat().st_mtime < (
+                                time.time() - 3600
+                            ):  # 1 hour old
+                                size_mb = file_path.stat().st_size / (1024 * 1024)
+                                file_path.unlink()
+                                cleaned_mb += size_mb
+                        except Exception:
+                            continue  # Skip files we can't delete
+            except Exception as e:
+                print(f"Warning: Could not clean {cleanup_path}: {e}")
+
+    print(f"🧹 Emergency cleanup freed {cleaned_mb:.1f} MB")
+    return cleaned_mb
 
 
 # --------------------------------------------------------------------------- #

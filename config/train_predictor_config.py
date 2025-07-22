@@ -13,8 +13,10 @@ clear_previous_checkpoints = False
 reload_reset_iters = False
 
 # Model initialization
-# init_from = "/runpod-volume/checkpoints/o2p39j6g235xhk-add_gpt_backbone/ckpt_predictor_pretrain.pt"
-init_from = "scratch"
+init_from = (
+    "/runpod-volume/checkpoints/3r0xq6xjuv20n3-add_digit_tau/ckpt_predictor_pretrain.pt"
+)
+# init_from = "scratch"
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
