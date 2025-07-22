@@ -74,19 +74,12 @@ compile = False  # Disable compilation for now to see if there are any gradient 
 keep_alive = False  # Auto-stop by default
 check_nans = False  # Check for NaNs in cloud training
 
-# # Loss weights (balanced for full training)
-# sign_loss_weight = 1.0
-# digit_loss_weight = 1.0
-# op_loss_weight = 1.0
-# value_loss_weight = 1.0
-# exec_loss_weight = 0.5
-
-# Loss weights (only train on digits)
+# Loss weights (balanced for full training)
 sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
-value_loss_weight = 0
-exec_loss_weight = 0
+value_loss_weight = 1.0
+exec_loss_weight = 0.5
 
 # Exec loss smoothing to prevent spikes
 exec_loss_ema_decay = 0.95  # EMA decay factor (0.95 = keep 95% of history)

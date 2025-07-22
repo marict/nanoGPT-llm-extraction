@@ -302,6 +302,84 @@ def compute_dag_structure_loss(
     }
 
 
+def compute_gradient_cosines(
+    weighted_losses: Dict[str, torch.Tensor],
+    total_loss: torch.Tensor,
+    model_parameters: torch.nn.ParameterList,
+) -> Dict[str, float]:
+    """Compute cosine similarities between individual loss gradients and total gradient.
+
+    Returns gradient cosines as ⟨g_i, g_total⟩ / ‖g_total‖² for each loss component.
+
+    Args:
+        weighted_losses: Dictionary of loss components (already weighted by cfg weights)
+        total_loss: The total combined loss tensor
+        model_parameters: List of model parameters to compute gradients with respect to
+
+    Returns:
+        Dictionary with keys like "grad_cosine_sign_loss" and float cosine values
+    """
+    # Compute total gradient
+    total_grads = torch.autograd.grad(
+        total_loss,
+        model_parameters,
+        retain_graph=True,
+        create_graph=False,
+        allow_unused=True,
+    )
+
+    # Handle case where some parameters don't contribute to total loss
+    total_grads = [
+        g if g is not None else torch.zeros_like(p)
+        for g, p in zip(total_grads, model_parameters)
+    ]
+
+    # Flatten and concatenate total gradient
+    total_grad_flat = torch.cat([g.flatten() for g in total_grads])
+    total_grad_norm_sq = torch.dot(total_grad_flat, total_grad_flat)
+
+    # Avoid division by zero
+    if total_grad_norm_sq < 1e-12:
+        return {f"grad_cosine_{name}": 0.0 for name in weighted_losses.keys()}
+
+    gradient_cosines = {}
+
+    for loss_name, loss_value in weighted_losses.items():
+        if loss_value.item() == 0.0:
+            gradient_cosines[f"grad_cosine_{loss_name}"] = 0.0
+            continue
+
+        try:
+            # Compute gradient for this loss component
+            loss_grads = torch.autograd.grad(
+                loss_value,
+                model_parameters,
+                retain_graph=True,
+                create_graph=False,
+                allow_unused=True,
+            )
+
+            # Handle case where some parameters don't contribute to this loss
+            loss_grads = [
+                g if g is not None else torch.zeros_like(p)
+                for g, p in zip(loss_grads, model_parameters)
+            ]
+
+            # Flatten and concatenate loss gradient
+            loss_grad_flat = torch.cat([g.flatten() for g in loss_grads])
+
+            # Compute cosine similarity: ⟨g_i, g_total⟩ / ‖g_total‖²
+            cosine = torch.dot(loss_grad_flat, total_grad_flat) / total_grad_norm_sq
+            gradient_cosines[f"grad_cosine_{loss_name}"] = cosine.item()
+
+        except RuntimeError as e:
+            # Handle case where gradient computation fails
+            print(f"Warning: Could not compute gradient for {loss_name}: {e}")
+            gradient_cosines[f"grad_cosine_{loss_name}"] = 0.0
+
+    return gradient_cosines
+
+
 # --------------------------------------------------------------------------- #
 # Utility helpers for digit tensors
 # --------------------------------------------------------------------------- #

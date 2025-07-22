@@ -24,7 +24,8 @@ from data.dagset.streaming import create_dag_structure_dataloaders
 from models.dag_model import GPT, OP_NAMES
 from models.predictor_only_model import PredictorOnlyModel
 from predictor_config import DAGTrainConfig
-from predictor_utils import (compute_dag_structure_loss, evaluate_dag_model,
+from predictor_utils import (compute_dag_structure_loss,
+                             compute_gradient_cosines, evaluate_dag_model,
                              tokenize_texts)
 from python_version_check import check_python_version
 from training_utils import (CHECKPOINT_DIR, apply_overrides, generate_run_name,
@@ -47,6 +48,12 @@ def _empty_metrics() -> dict[str, float]:
         "op_accuracy": 0.0,
         "full_dag_op_match": 0.0,
         "sign_accuracy": 0.0,
+        # Gradient cosine metrics are added dynamically when computed
+        "grad_cosine_sign_loss": 0.0,
+        "grad_cosine_digit_loss": 0.0,
+        "grad_cosine_op_loss": 0.0,
+        "grad_cosine_value_loss": 0.0,
+        "grad_cosine_exec_loss": 0.0,
     }
 
 
@@ -563,6 +570,38 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         cfg,
                     )
 
+                    # Compute gradient cosines when we're doing regular logging
+                    should_compute_gradient_cosines = (
+                        iter_num % cfg.log_interval == 0
+                        and micro_step
+                        == cfg.gradient_accumulation_steps
+                        - 1  # Only on last micro-step
+                        and master_process
+                    )
+
+                    if should_compute_gradient_cosines:
+                        # Compute gradient cosines for analysis
+                        model_params = list(raw_model.parameters())
+                        weighted_losses = {
+                            "sign_loss": cfg.sign_loss_weight * losses["sign_loss"],
+                            "digit_loss": cfg.digit_loss_weight * losses["digit_loss"],
+                            "op_loss": cfg.op_loss_weight * losses["op_loss"],
+                            "value_loss": cfg.value_loss_weight * losses["value_loss"],
+                            "exec_loss": (
+                                cfg.exec_loss_weight * losses["exec_loss"]
+                                if torch.isfinite(losses["exec_loss"]).all()
+                                else torch.tensor(
+                                    0.0, device=losses["exec_loss"].device
+                                )
+                            ),
+                        }
+                        gradient_cosines = compute_gradient_cosines(
+                            weighted_losses,
+                            losses["total_loss"],
+                            model_params,
+                        )
+                        losses.update(gradient_cosines)
+
                     # Apply EMA smoothing to exec_loss for training stability
                     raw_exec_loss = losses["exec_loss"].item()
                     clipped_exec_loss = min(raw_exec_loss, exec_loss_max_clip)
@@ -587,7 +626,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         + cfg.exec_loss_weight * smoothed_exec_loss
                     )
 
-                    # Use smoothed loss for training
+                    # Use smoothed exec loss for training
                     losses["exec_loss_raw"] = losses[
                         "exec_loss"
                     ]  # Keep original for logging
@@ -600,9 +639,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
                     # Accumulate losses for logging
                     for key, value in losses.items():
-                        loss_accum[key] += (
-                            value.item() / cfg.gradient_accumulation_steps
-                        )
+                        if isinstance(value, torch.Tensor):
+                            value = value.item() / cfg.gradient_accumulation_steps
+
+                        loss_accum[key] = value
 
                     # ------------------------------------------------------------------ #
                     # Compute and accumulate training metrics (same as evaluation)
@@ -675,6 +715,30 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     log_msg += f", {internal_msg}"
 
                 log_msg += f", time {dt*1000:.2f}ms"
+
+                # Add gradient cosine information if available
+                if any(
+                    key.startswith("grad_cosine_")
+                    for key in loss_accum.keys()
+                    if loss_accum[key] != 0.0
+                ):
+                    grad_cosine_msg = " [Grad Cosines: "
+                    cosine_parts = []
+                    for key in [
+                        "grad_cosine_sign_loss",
+                        "grad_cosine_digit_loss",
+                        "grad_cosine_op_loss",
+                        "grad_cosine_value_loss",
+                        "grad_cosine_exec_loss",
+                    ]:
+                        if key in loss_accum and loss_accum[key] != 0.0:
+                            short_name = key.replace("grad_cosine_", "").replace(
+                                "_loss", ""
+                            )
+                            cosine_parts.append(f"{short_name}={loss_accum[key]:.3f}")
+                    grad_cosine_msg += ", ".join(cosine_parts) + "]"
+                    log_msg += grad_cosine_msg
+
                 # realtime training log emitted via wandb
                 if master_process:
                     print(log_msg)
@@ -705,13 +769,13 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     if "exec_loss_raw" in loss_accum:
                         log_dict["train/exec_loss_raw"] = loss_accum["exec_loss_raw"]
 
-                    # Add internal losses to wandb logging
+                    # Add internal losses and gradient cosines to wandb logging
                     for key, value in loss_accum.items():
                         if (
                             key.endswith("_loss")
                             and key not in log_dict
                             and key != "total_loss"
-                        ):
+                        ) or key.startswith("grad_cosine_"):
                             log_dict[f"train/{key}"] = value
 
                     # Combine pending validation metrics if they exist
