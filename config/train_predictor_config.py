@@ -78,8 +78,8 @@ check_nans = False  # Check for NaNs in cloud training
 sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
-value_loss_weight = 1.0
-exec_loss_weight = 0.083
+value_loss_weight = 50.0
+exec_loss_weight = 0.0083
 
 # Exec loss smoothing to prevent spikes
 exec_loss_ema_decay = 0.95  # EMA decay factor (0.95 = keep 95% of history)
