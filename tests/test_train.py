@@ -21,8 +21,7 @@ def test_train_script_imports_and_config():
     # This is a much faster test that checks core functionality without subprocess
 
     # Test that we can import train module functions
-    from train import (TrainConfig, apply_overrides, generate_run_name,
-                       parse_args)
+    from train import TrainConfig, apply_overrides, generate_run_name, parse_args
 
     # Test basic config creation
     cfg = TrainConfig()

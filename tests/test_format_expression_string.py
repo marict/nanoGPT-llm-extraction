@@ -6,8 +6,10 @@ Tests for format_expression_string function to verify correct handling of negati
 import pytest
 import sympy
 
-from data.dagset.expression_to_string import (convert_number_to_english,
-                                              format_expression_string)
+from data.dagset.expression_to_string import (
+    convert_number_to_english,
+    format_expression_string,
+)
 
 
 class TestFormatExpressionStringNegativeNumbers:

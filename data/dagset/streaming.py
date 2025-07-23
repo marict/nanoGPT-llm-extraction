@@ -614,6 +614,7 @@ def generate_single_dag_example(
         depth=depth,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
+        base=base,
         english_conversion_probability=english_conversion_probability,
         integer_no_decimal_probability=integer_no_decimal_probability,
         printing_style=printing_style,

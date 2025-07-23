@@ -4,8 +4,12 @@ from pathlib import Path
 
 import torch
 
-from evaluation import (comprehensive_evaluate, evaluate_from_dataset_file,
-                        evaluate_math, load_checkpoint)
+from evaluation import (
+    comprehensive_evaluate,
+    evaluate_from_dataset_file,
+    evaluate_math,
+    load_checkpoint,
+)
 from python_version_check import check_python_version
 
 check_python_version()

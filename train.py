@@ -33,11 +33,20 @@ from data import prepare_dataset
 from evaluation import estimate_loss, evaluate_math
 from models.dag_model import GPT, GPTConfig
 from python_version_check import check_python_version
-from training_utils import (CHECKPOINT_DIR, BaseConfig, _check_for_nonfinite,
-                            apply_overrides, check_disk_space_emergency,
-                            cleanup_disk_space_emergency, generate_run_name,
-                            get_disk_usage_percent, get_lr, load_config_file,
-                            parse_args, update_config)
+from training_utils import (
+    CHECKPOINT_DIR,
+    BaseConfig,
+    apply_overrides,
+    check_disk_space_emergency,
+    check_for_nonfinite,
+    cleanup_disk_space_emergency,
+    generate_run_name,
+    get_disk_usage_percent,
+    get_lr,
+    load_config_file,
+    parse_args,
+    update_config,
+)
 
 TORCH_2_2_1 = torch.__version__ >= "2.2.1"
 CUDA_AVAILABLE = torch.cuda.is_available()
@@ -779,7 +788,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                     scaler.unscale_(optimizer)
                     # Gradient sanity check BEFORE clipping so we detect raw overflows
                     if cfg.check_nans:
-                        _check_for_nonfinite(
+                        check_for_nonfinite(
                             (
                                 (n, p.grad)
                                 for n, p in model.named_parameters()
@@ -791,7 +800,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                 else:
                     scaler.unscale_(optimizer)
                     if cfg.check_nans:
-                        _check_for_nonfinite(
+                        check_for_nonfinite(
                             (
                                 (n, p.grad)
                                 for n, p in model.named_parameters()
@@ -802,7 +811,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                 scaler.step(optimizer)
                 # Parameter sanity check immediately after the update but before scaler.update()
                 if cfg.check_nans:
-                    _check_for_nonfinite(
+                    check_for_nonfinite(
                         ((n, p) for n, p in model.named_parameters()), "PARAM"
                     )
                 scaler.update()

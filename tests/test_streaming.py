@@ -4,13 +4,18 @@ import pytest
 import sympy
 import torch
 
-from data.dagset.expression_to_string import (convert_number_to_english,
-                                              format_expression_string,
-                                              number_to_string)
-from data.dagset.streaming import (DAGStructureDataset, _apply_sympy_op,
-                                   generate_single_dag_example,
-                                   generate_uniform_digit_number,
-                                   plan_to_tensors)
+from data.dagset.expression_to_string import (
+    convert_number_to_english,
+    format_expression_string,
+    number_to_string,
+)
+from data.dagset.streaming import (
+    DAGStructureDataset,
+    _apply_sympy_op,
+    generate_single_dag_example,
+    generate_uniform_digit_number,
+    plan_to_tensors,
+)
 from models.dag_model import OP_NAMES
 
 
@@ -91,8 +96,9 @@ def test_apply_sympy_op_correctness():
 
 
 def test_float_to_digit_onehot_shape_and_properties():
-    from data.dagset.streaming import \
-        float_to_digit_onehot  # local import to avoid circular issues
+    from data.dagset.streaming import (  # local import to avoid circular issues
+        float_to_digit_onehot,
+    )
 
     tensor = float_to_digit_onehot(12.34, max_digits=2, max_decimal_places=2)
     # Expected shape: D = max_digits + max_decimal_places = 4

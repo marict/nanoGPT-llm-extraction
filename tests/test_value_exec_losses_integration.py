@@ -7,8 +7,11 @@ import torch
 
 from data.dagset.streaming import create_dag_structure_dataloaders
 from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
-from predictor_utils import (compute_dag_structure_loss, evaluate_dag_model,
-                             tokenize_texts)
+from predictor_utils import (
+    compute_dag_structure_loss,
+    evaluate_dag_model,
+    tokenize_texts,
+)
 
 
 def test_value_exec_losses_with_real_data():

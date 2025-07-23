@@ -9,12 +9,14 @@ import random
 import pytest
 import sympy
 
-from data.dagset.expression_to_string import (SUPPORTED_STYLES,
-                                              convert_number_to_english,
-                                              format_expression_string,
-                                              render_expr,
-                                              sample_printing_style,
-                                              validate_printing_style_probs)
+from data.dagset.expression_to_string import (
+    SUPPORTED_STYLES,
+    convert_number_to_english,
+    format_expression_string,
+    render_expr,
+    sample_printing_style,
+    validate_printing_style_probs,
+)
 
 
 class TestValidation:

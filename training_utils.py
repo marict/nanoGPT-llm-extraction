@@ -11,7 +11,7 @@ import time
 from ast import literal_eval
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, Iterable, List
 
 import torch
 
@@ -309,3 +309,20 @@ def get_checkpoint_filename(
         return f"ckpt_{safe_name}_{iter_num}_{acc_str}.pt"
     else:
         return f"ckpt_{safe_name}_{iter_num}.pt"
+
+
+def check_for_nonfinite(
+    named_tensors_iter: Iterable[tuple[str, torch.Tensor]], label: str
+) -> None:
+    """Check tensors for NaN/Inf values and print detailed diagnostic info."""
+    for name, tensor in named_tensors_iter:
+        if tensor is None:
+            continue
+        if torch.isnan(tensor).any():
+            print(
+                f"[{label} NAN] {name}  →  min={tensor.min():.3e}  max={tensor.max():.3e}"
+            )
+        elif torch.isinf(tensor).any():
+            print(
+                f"[{label} INF] {name}  →  min={tensor.min():.3e}  max={tensor.max():.3e}"
+            )

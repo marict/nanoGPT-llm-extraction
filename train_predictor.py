@@ -24,13 +24,22 @@ from data.dagset.streaming import create_dag_structure_dataloaders
 from models.dag_model import GPT, OP_NAMES
 from models.predictor_only_model import PredictorOnlyModel
 from predictor_config import DAGTrainConfig
-from predictor_utils import (compute_dag_structure_loss,
-                             compute_gradient_cosines, evaluate_dag_model,
-                             tokenize_texts)
+from predictor_utils import (
+    compute_dag_structure_loss,
+    compute_gradient_cosines,
+    evaluate_dag_model,
+    tokenize_texts,
+)
 from python_version_check import check_python_version
-from training_utils import (CHECKPOINT_DIR, apply_overrides, generate_run_name,
-                            get_lr, load_config_file, parse_args,
-                            update_config)
+from training_utils import (
+    CHECKPOINT_DIR,
+    apply_overrides,
+    generate_run_name,
+    get_lr,
+    load_config_file,
+    parse_args,
+    update_config,
+)
 
 
 # Local helper utilities

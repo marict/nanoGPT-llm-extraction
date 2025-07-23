@@ -3,8 +3,7 @@ import math
 import pytest
 import torch
 
-from models.dag_model import (LOG_LIM, MIN_CLAMP, OP_FUNCS, OP_NAMES,
-                              execute_stack)
+from models.dag_model import LOG_LIM, MIN_CLAMP, OP_FUNCS, OP_NAMES, execute_stack
 
 # -----------------------------------------------------------------------------
 # Helper utilities

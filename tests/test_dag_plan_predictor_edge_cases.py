@@ -2,8 +2,13 @@ from typing import Tuple
 
 import torch
 
-from models.dag_model import (LOG_LIM, DAGPlanPredictor, GPTConfig,
-                              add_log_space, safe_clamp)
+from models.dag_model import (
+    LOG_LIM,
+    DAGPlanPredictor,
+    GPTConfig,
+    add_log_space,
+    safe_clamp,
+)
 
 # -----------------------------------------------------------------------------
 # Helpers

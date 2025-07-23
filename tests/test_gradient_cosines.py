@@ -11,8 +11,7 @@ import torch.nn as nn
 
 from models.dag_model import OP_NAMES
 from predictor_config import DAGTrainConfig
-from predictor_utils import (compute_dag_structure_loss,
-                             compute_gradient_cosines)
+from predictor_utils import compute_dag_structure_loss, compute_gradient_cosines
 
 N_OPS = len(OP_NAMES)
 

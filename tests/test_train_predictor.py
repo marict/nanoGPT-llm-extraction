@@ -22,10 +22,16 @@ from models.predictor_only_model import PredictorOnlyConfig
 from predictor_utils import digits_to_magnitude
 
 N_OPS = len(OP_NAMES)
-from train_predictor import (DAGTrainConfig, PredictorOnlyModel,
-                             apply_overrides, compute_dag_structure_loss,
-                             get_lr, load_config_file, tokenize_texts,
-                             update_config)
+from train_predictor import (
+    DAGTrainConfig,
+    PredictorOnlyModel,
+    apply_overrides,
+    compute_dag_structure_loss,
+    get_lr,
+    load_config_file,
+    tokenize_texts,
+    update_config,
+)
 
 # ------------------------------------------------------------------
 # Helper to adapt to new DAGPlanPredictor outputs (digit probabilities).
