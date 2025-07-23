@@ -604,25 +604,13 @@ def execute_stack(
             f"{digit_probs.dim()}"
         )
 
-    # Expected digit value per slot to build absolute magnitude
-    digits_values = torch.arange(
-        base, device=digit_probs.device, dtype=digit_probs.dtype
-    )
-    expected_digits = (digit_probs * digits_values).sum(-1)  # (B,T,N,D)
+    # Import digits_to_magnitude for magnitude computation
+    from predictor_utils import digits_to_magnitude
 
-    # Convert expected digits to log magnitude
-    # Create correct powers for base conversion:
-    # Integer part: [max_digits-1, max_digits-2, ..., 1, 0]
-    # Decimal part: [-1, -2, ..., -max_decimal_places]
-    powers = torch.arange(
-        max_digits - 1,
-        -max_decimal_places - 1,
-        -1,
-        device=digit_probs.device,
-        dtype=digit_probs.dtype,
-    )
-    # Assemble value from digits and powers using the correct base
-    raw_value = (expected_digits * (float(base) ** powers)).sum(-1)  # (B,T,N)
+    # Convert digit probabilities to magnitude using centralized function
+    raw_value = digits_to_magnitude(
+        digit_probs, max_digits, max_decimal_places, base
+    )  # (B,T,N)
     # Clamp to avoid log(0) and compute natural log
     raw_value = raw_value.clamp_min(MIN_CLAMP)
     initial_log = torch.log(raw_value)
@@ -833,35 +821,15 @@ class DifferentiableDAG(nn.Module):
 
         # Cache for logging
         self.final_hidden = final_hidden
-        # Convert digit_probs to magnitudes for logging purposes
-        digits_vals = (
-            digit_probs
-            * torch.arange(
-                self.plan_predictor.base,
-                device=digit_probs.device,
-                dtype=digit_probs.dtype,
-            )
-        ).sum(-1)
-        int_weights = (
-            self.plan_predictor.base
-            ** torch.arange(
-                self.plan_predictor.max_digits - 1,
-                -1,
-                -1,
-                device=digit_probs.device,
-            )
-        ).to(digit_probs.dtype)
-        frac_weights = (
-            self.plan_predictor.base
-            ** torch.arange(
-                -1,
-                -self.plan_predictor.max_decimal_places - 1,
-                -1,
-                device=digit_probs.device,
-            )
-        ).to(digit_probs.dtype)
-        weights = torch.cat((int_weights, frac_weights))
-        value_abs = (digits_vals * weights).sum(-1)
+        # Convert digit_probs to magnitudes for logging purposes using centralized function
+        from predictor_utils import digits_to_magnitude
+
+        value_abs = digits_to_magnitude(
+            digit_probs,
+            self.plan_predictor.max_digits,
+            self.plan_predictor.max_decimal_places,
+            self.plan_predictor.base,
+        )
         initial_log = torch.log(value_abs.clamp_min(1e-6))
 
         self.final_values = (

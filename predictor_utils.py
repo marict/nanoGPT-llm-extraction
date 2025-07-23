@@ -165,24 +165,10 @@ def _compute_value_loss(
 ) -> torch.Tensor:
     """Compute robust loss between predicted and target initial values in log space."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
-        # Compute predicted log magnitudes directly from digit distributions
-        # This avoids the intermediate step of reconstructing actual values
-        device, dtype = pred_digit_probs.device, pred_digit_probs.dtype
-        digits_vals = (
-            pred_digit_probs * torch.arange(cfg.base, device=device, dtype=dtype)
-        ).sum(
-            -1
-        )  # (..., D)
-
-        # Build decimal place weights for log magnitude computation
-        int_weights = cfg.base ** torch.arange(
-            cfg.max_digits - 1, -1, -1, device=device, dtype=dtype
-        )
-        frac_weights = cfg.base ** torch.arange(
-            -1, -cfg.max_decimal_places - 1, -1, device=device, dtype=dtype
-        )
-        weights = torch.cat((int_weights, frac_weights))  # (D,)
-        pred_magnitude = (digits_vals * weights).sum(-1)  # (B,T,N)
+        # Compute predicted magnitudes using centralized function
+        pred_magnitude = digits_to_magnitude(
+            pred_digit_probs, cfg.max_digits, cfg.max_decimal_places, cfg.base
+        )  # (B,T,N)
 
         # Convert to log space (clamp for numerical stability)
         pred_log_magnitude = torch.log(pred_magnitude.clamp(min=1e-8)).to(torch.float32)
