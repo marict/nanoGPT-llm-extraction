@@ -13,7 +13,7 @@ clear_previous_checkpoints = False
 reload_reset_iters = False
 
 # Model initialization
-init_from = "/runpod-volume/checkpoints/vthtoes0nb3rd6-resume_add_digit_tau/ckpt_predictor_pretrain.pt"
+init_from = "/runpod-volume/checkpoints/b79az4em5z1c3v-resume_reduce_exec_loss/ckpt_predictor_pretrain.pt"
 # init_from = "scratch"
 
 # Dataset configuration
