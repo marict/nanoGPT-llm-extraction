@@ -49,6 +49,7 @@ def _build_test_config(
         exec_loss_weight=exec_loss_weight,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
+        base=10,
     )
 
 

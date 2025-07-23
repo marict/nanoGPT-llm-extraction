@@ -23,6 +23,7 @@ class TestLossRegressions(unittest.TestCase):
         cfg.exec_loss_weight = 1.0
         cfg.max_digits = 4
         cfg.max_decimal_places = 2
+        cfg.base = 10
         return cfg
 
     def test_negative_log_magnitude_support(self):
@@ -37,7 +38,9 @@ class TestLossRegressions(unittest.TestCase):
         D_total = cfg.max_digits + cfg.max_decimal_places
         target_digits = torch.zeros(B, T, nodes, D_total, 10)
         target_digits[..., 0, 3] = 1.0  # first slot digit 3
-        pred_digits = target_digits.clone()
+        # Convert target to logits for prediction
+        pred_digits = torch.full_like(target_digits, -10.0)
+        pred_digits = pred_digits + target_digits * 20.0
 
         target_ops = torch.zeros(B, T, depth, n_ops)
         target_ops[..., 0] = 1.0

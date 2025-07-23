@@ -25,8 +25,8 @@ val_examples_per_batch = 800
 # DAG dataset parameters
 max_dag_depth = 6  # Match the model dag_depth for consistency
 # Choose 4 to match the NALU paper
-max_digits = 4
-max_decimal_places = 4
+max_digits = 3
+max_decimal_places = 3
 base = 32  # Try this experimentally.
 
 # Expression generation settings

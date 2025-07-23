@@ -28,6 +28,7 @@ def test_value_exec_losses_with_real_data():
         value_loss_weight=1.0,
         exec_loss_weight=1.0,
         full_backbone=False,  # Use standalone predictor
+        base=10,
     )
 
     # Create dataloaders with small examples for testing
@@ -155,6 +156,7 @@ def test_evaluation_function_with_new_losses():
         value_loss_weight=1.0,
         exec_loss_weight=1.0,
         full_backbone=False,
+        base=10,
     )
 
     # Create dataloaders
@@ -224,6 +226,7 @@ def test_zero_weights_exclude_from_total():
         value_loss_weight=0.0,  # Zero weight
         exec_loss_weight=0.0,  # Zero weight
         full_backbone=False,
+        base=10,
     )
 
     # Create small dataset

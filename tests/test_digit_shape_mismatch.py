@@ -40,6 +40,7 @@ def _dummy_cfg():
         exec_loss_weight=1.0,
         max_digits=4,
         max_decimal_places=2,
+        base=10,
     )
 
 

@@ -103,7 +103,7 @@ class TestRendering:
         expr = sympy.Add(a, b, evaluate=False)
 
         for style in SUPPORTED_STYLES:
-            result = render_expr(expr, style)
+            result, _ = render_expr(expr, style)
             assert isinstance(result, str)
             assert len(result) > 0
 
@@ -114,7 +114,7 @@ class TestRendering:
         b = sympy.Symbol("2.0")
         expr = sympy.Mul(a, sympy.Pow(b, -1, evaluate=False), evaluate=False)
 
-        sstr_result = render_expr(expr, "sstr")
+        sstr_result, _ = render_expr(expr, "sstr")
 
         # sstr is compact representation
         assert "1.5" in sstr_result
@@ -128,7 +128,7 @@ class TestRendering:
         b = sympy.Symbol("2.0")
         expr = sympy.Mul(a, sympy.Pow(b, -1, evaluate=False), evaluate=False)
 
-        latex_result = render_expr(expr, "latex")
+        latex_result, _ = render_expr(expr, "latex")
 
         # LaTeX uses \frac{}{} for division
         assert "\\frac" in latex_result
@@ -140,7 +140,7 @@ class TestRendering:
         b = sympy.Symbol("2.0")
         expr = sympy.Mul(a, sympy.Pow(b, -1, evaluate=False), evaluate=False)
 
-        pretty_result = render_expr(expr, "pretty")
+        pretty_result, _ = render_expr(expr, "pretty")
 
         # Pretty printing uses a line to represent division
         assert "\n" in pretty_result  # Newlines for fraction layout
@@ -383,7 +383,7 @@ class TestNumericalCorrectness:
 
         # Check that all styles render correctly
         for style in SUPPORTED_STYLES:
-            rendered = render_expr(expr, style)
+            rendered, _ = render_expr(expr, style)
             assert "3" in rendered
             assert "4" in rendered
 

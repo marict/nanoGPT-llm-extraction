@@ -49,8 +49,14 @@ def test_digit_loss_zero_and_nonzero(batch, seq, nodes, digits, depth):
     tgt_digit_idx = torch.randint(0, 10, (batch, seq, nodes, digits))
     tgt_digits = _make_one_hot(tgt_digit_idx, 10)
 
-    # 1) Perfect predictions – digit tensors identical to targets
-    pred_digits_correct = tgt_digits.clone()
+    # 1) Perfect predictions – convert targets to logits that would produce the same one-hot after softmax
+    pred_digits_correct = torch.full_like(
+        tgt_digits, -10.0
+    )  # Start with very negative logits
+    # Set large positive logits where targets are 1
+    pred_digits_correct = (
+        pred_digits_correct + tgt_digits * 20.0
+    )  # This gives 10.0 where target is 1, -10.0 elsewhere
 
     cfg = types.SimpleNamespace(
         sign_loss_weight=0.0,
@@ -60,6 +66,7 @@ def test_digit_loss_zero_and_nonzero(batch, seq, nodes, digits, depth):
         exec_loss_weight=1.0,
         max_digits=3,
         max_decimal_places=1,
+        base=10,
     )
 
     losses_correct = compute_dag_structure_loss(
@@ -78,7 +85,10 @@ def test_digit_loss_zero_and_nonzero(batch, seq, nodes, digits, depth):
 
     # 2) Completely wrong predictions – shift indices by +1 (mod 10)
     wrong_digit_idx = (tgt_digit_idx + 1) % 10
-    pred_digits_wrong = _make_one_hot(wrong_digit_idx, 10)
+    wrong_digits_one_hot = _make_one_hot(wrong_digit_idx, 10)
+    # Convert to logits
+    pred_digits_wrong = torch.full_like(wrong_digits_one_hot, -10.0)
+    pred_digits_wrong = pred_digits_wrong + wrong_digits_one_hot * 20.0
 
     losses_wrong = compute_dag_structure_loss(
         pred_sgn,
