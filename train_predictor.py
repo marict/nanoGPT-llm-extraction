@@ -368,9 +368,11 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 )
 
                 model.eval()
+                eval_start_time = time.time()
                 eval_losses = evaluate_dag_model(
                     raw_model, val_loader_eval, device, ctx, cfg, cfg.eval_iters, seed
                 )
+                eval_time_ms = (time.time() - eval_start_time) * 1000 / cfg.eval_iters
                 if master_process:
                     eval_msg = (
                         f"[val] iter {iter_num}: total_loss {eval_losses['total_loss']:.4f}, "
@@ -397,6 +399,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "val/full_dag_op_match": eval_losses["full_dag_op_match"],
                         "val/sign_accuracy": eval_losses["sign_accuracy"],
                         "val/executed_mse": eval_losses["final_mse"],
+                        "val/time_per_iter_ms": eval_time_ms,
                     }
                     # Store validation metrics for combined logging with training metrics
                     pending_val_metrics = val_log_dict
@@ -770,6 +773,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "train/op_accuracy": loss_accum["op_accuracy"],
                         "train/full_dag_op_match": loss_accum["full_dag_op_match"],
                         "train/sign_accuracy": loss_accum["sign_accuracy"],
+                        "train/time_per_iter_ms": dt * 1000,
                     }
 
                     # Add raw exec_loss for comparison

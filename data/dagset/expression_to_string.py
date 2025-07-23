@@ -47,18 +47,30 @@ def convert_number_to_english(number: float, max_decimal_places: int = 6) -> str
 
 
 def format_expression_string(
-    expression: sympy.Basic,
+    expression: sympy.Basic | None,
     english_conversion_probability: float = 0.0,
     seed: int = 42,
     printing_style_probs: Dict[str, float] | None = None,
+    train: bool = False,
 ) -> tuple[str, str]:
     """Enhanced expression formatting with probabilistic style selection.
+
+    Args:
+        expression: SymPy expression to format (can be None when train=True)
+        english_conversion_probability: Probability of converting operations to English
+        seed: Random seed for consistency
+        printing_style_probs: Style probability distribution
+        train: If True, return minimal placeholder values for performance
 
     Returns:
         Formatted expression string
         Style used for rendering
     """
-    # Validate input type
+    # For training mode, return minimal placeholder values
+    if train:
+        return "expr", ""
+
+    # Validate input type for non-training mode
     if not isinstance(expression, sympy.Basic):
         raise TypeError(
             f"expression must be a SymPy expression, got {type(expression)}"

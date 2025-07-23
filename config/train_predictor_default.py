@@ -13,7 +13,8 @@ name = "dag_predictor-default"
 # Training intervals
 # ------------------
 # Evaluate every step and keep logs chatty for debugging.
-eval_interval = 1
+max_iters = 33
+eval_interval = 3
 log_interval = 1
 eval_iters = 1
 eval_only = False
@@ -65,7 +66,6 @@ dag_depth = 4  # Target DAG depth
 
 # Optimization
 learning_rate = 6e-4
-max_iters = 10
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
@@ -97,6 +97,9 @@ exec_loss_weight = 0.5
 
 # Curriculum Learning Parameters for Enhanced Value-Based Learning
 # ================================================================
+
+# Global curriculum learning toggle
+enable_curriculum_learning = True  # Set to False to disable all curriculum learning
 
 # Value Loss Curriculum (Initial Values)
 value_curriculum_beta_start = 1.0  # Start lenient (larger Huber threshold)

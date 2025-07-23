@@ -168,8 +168,9 @@ def test_batched_target_values_consistency():
     """Test that batched target values match the values from examples."""
     from data.dagset.streaming import create_dag_structure_dataloaders
 
-    # Create a small test dataset
-    train_loader, _ = create_dag_structure_dataloaders(
+    # Create a small test dataset - use validation loader for this test
+    # since DAGTrainExample doesn't store these values for performance
+    _, val_loader = create_dag_structure_dataloaders(
         train_batch_size=3,
         val_batch_size=3,
         max_depth=2,
@@ -178,14 +179,20 @@ def test_batched_target_values_consistency():
         max_decimal_places=2,
     )
 
-    # Get a batch
-    texts, structures, examples = next(iter(train_loader))
+    # Get a batch from validation loader (has full attributes)
+    texts, structures, examples = next(iter(val_loader))
 
     # Verify that batched target values match example values
     batched_initial_values = structures["target_initial_values"]
     batched_final_exec = structures["target_final_exec"]
 
     for i, example in enumerate(examples):
+        # Skip training examples since they don't have these attributes for performance
+        from data.dagset.streaming import DAGTrainExample
+
+        if isinstance(example, DAGTrainExample):
+            continue
+
         # Check initial values
         num_values = min(len(example.initial_values), batched_initial_values.size(1))
         for j in range(num_values):

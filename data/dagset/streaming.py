@@ -36,36 +36,51 @@ from .expression_to_string import format_expression_string
 
 @dataclass
 class DAGExample:
-    """Lightweight container for a DAG computation example."""
+    """Base class for DAG computation examples with essential shared attributes."""
 
     text: str
+    structure_dict: dict[str, torch.Tensor]
     depth: int
     max_digits: int
     max_decimal_places: int
+    base: int
+    seed: int
+
+    def __repr__(self):
+        return self.__str__()
+
+    def __str__(self):
+        return f"{self.__class__.__name__}(seed={self.seed}, text={self.text}, depth={self.depth}, base={self.base})"
+
+
+@dataclass
+class DAGTrainExample(DAGExample):
+    """Lightweight DAG example for training with minimal attributes to reduce memory overhead."""
+
+    pass  # Only inherits the essential base attributes
+
+
+@dataclass
+class DAGValExample(DAGExample):
+    """Full DAG example for validation with all attributes for logging and debugging."""
+
     english_conversion_probability: float
     integer_no_decimal_probability: float
     printing_style: str
     initial_values: list[float]  # for logging
     signs: torch.Tensor  # (D+1)
     digits: torch.Tensor  # (D+1, digits_total, base)
-    base: int
-    # log magnitudes are now computed on-the-fly during structure tensor creation
     operations: torch.Tensor  # (D, num_ops)
     operations_named: list[str]  # (D, num_ops)
-    seed: int
     did_expand: bool
     did_simplify: bool
     final_value_sympy: float | None = None  # exact symbolic evaluation
     final_value_exec: float | None = None  # value from execute_stack
     allowed_operations: list[str] | None = None
     expr: sympy.Basic | None = None
-    structure_dict: dict[str, torch.Tensor] | None = None  # structure format tensors
-
-    def __repr__(self):
-        return self.__str__()
 
     def __str__(self):
-        return f"DAGExample(seed={self.seed}, text={self.text}, depth={self.depth}, initial_values={self.initial_values}, signs={self.signs.shape}, digits={self.digits.shape}, operations={self.operations.shape}, operations_named={self.operations_named}, did_expand={self.did_expand}, did_simplify={self.did_simplify}, final_value_sympy={self.final_value_sympy}, final_value_exec={self.final_value_exec}, allowed_operations={self.allowed_operations}, expr={self.expr}, english_conversion_probability={self.english_conversion_probability}, integer_no_decimal_probability={self.integer_no_decimal_probability}, printing_style={self.printing_style}, base={self.base})"
+        return f"DAGValExample(seed={self.seed}, text={self.text}, depth={self.depth}, initial_values={self.initial_values}, signs={self.signs.shape}, digits={self.digits.shape}, operations={self.operations.shape}, operations_named={self.operations_named}, did_expand={self.did_expand}, did_simplify={self.did_simplify}, final_value_sympy={self.final_value_sympy}, final_value_exec={self.final_value_exec}, allowed_operations={self.allowed_operations}, expr={self.expr}, english_conversion_probability={self.english_conversion_probability}, integer_no_decimal_probability={self.integer_no_decimal_probability}, printing_style={self.printing_style}, base={self.base})"
 
 
 def generate_uniform_digit_number(
@@ -184,11 +199,21 @@ def generate_expression(
     override_initial_values: list[float] | None = None,
     override_operations: list[str] | None = None,
     execute_sympy: bool = True,
-) -> tuple[sympy.Basic, list[float], list[str], float | None, bool, bool, bool]:
+    train: bool = False,
+) -> tuple[
+    sympy.Basic | None,
+    sympy.Basic | None,
+    list[float],
+    list[str],
+    float | None,
+    bool,
+    bool,
+]:
     """Generate a sympy expression.
 
     Returns:
-        Tuple of (sympy_expr, initial_values, operations, final_value, did_simplify, did_expand, is_complex)
+        Tuple of (sympy_expr, sympy_expr_with_vals, initial_values, operations, final_value, did_simplify, did_expand)
+        When train=True, returns (None, None, initial_values, operations, None, False, False) for performance
     """
     # ------------------------------------------------------------------
     # 1. Generate random initial values and operations
@@ -231,8 +256,30 @@ def generate_expression(
             )
             initial_values.append(value)
 
+    # If training mode, skip expensive sympy operations and return minimal values
+    if train:
+        # We swap some operations with identity to play better with the DAG model, but this is not compatible with sympy.
+        operations = [op for op in sym_ops]
+        for i, op in enumerate(operations):
+            if op == "multiply":
+                # If second value is 0, then we can discard the top and replace with 0
+                if initial_values[i] == 0.0:
+                    operations[i] = "identity"
+
+            if op == "divide":
+                num_index = i
+                if initial_values[num_index] == 0.0:
+                    operations[num_index] = "identity"
+
+        # Pad the rest of the operations with identity
+        operations.extend(["identity"] * (depth - len(operations)))
+        # Pad the rest of initial values with 1.0
+        initial_values.extend([1.0] * (depth + 1 - len(initial_values)))
+
+        return (None, None, initial_values, operations, None, False, False)
+
     # ------------------------------------------------------------------
-    # 2. Build SymPy expression from leaves + operations
+    # 2. Build SymPy expression from leaves + operations (full mode)
     # ------------------------------------------------------------------
     # Convert values to symbols (possibly with English names based on probability)
     symbols = []
@@ -402,8 +449,15 @@ def plan_to_tensors(
     base: int = 10,
     depth: int | None = None,
     allowed_operations: list[str] | None = None,
+    train: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Convert a DAG plan to structure tensors for training."""
+    if depth is None:
+        depth = len(operations)
+
+    num_scratch_nodes = depth + 1
+
+    # Use the same logic for both training and validation to avoid complexity
     # Convert initial values to signs and digit one-hots
     signs = torch.tensor([1.0 if v >= 0.0 else -1.0 for v in initial_values])
 
@@ -423,24 +477,27 @@ def plan_to_tensors(
         op_idx = operation_to_index[op]
         operations_one_hot[i, op_idx] = 1.0
 
-    # Execute the DAG to get the final value
-    with torch.no_grad():
-        # Use double precision during reference execution to minimize numerical errors
-        sign_tensor = signs.view(1, 1, -1).to(torch.float64)
-        digit_probs = digits_tensor.unsqueeze(0).unsqueeze(0).to(torch.float64)
-        op_probs = operations_one_hot.unsqueeze(0).unsqueeze(0).to(torch.float64)
+    # Execute the DAG to get the final value (skip for training since it's expensive)
+    if train:
+        final_value_exec = 0.0  # Placeholder for training
+    else:
+        with torch.no_grad():
+            # Use double precision during reference execution to minimize numerical errors
+            sign_tensor = signs.view(1, 1, -1).to(torch.float64)
+            digit_probs = digits_tensor.unsqueeze(0).unsqueeze(0).to(torch.float64)
+            op_probs = operations_one_hot.unsqueeze(0).unsqueeze(0).to(torch.float64)
 
-        final_sgn, final_log = execute_stack(
-            sign_tensor,
-            digit_probs,
-            op_probs,
-            max_digits=max_digits,
-            max_decimal_places=max_decimal_places,
-            base=base,
-            ignore_clip=True,
-        )
+            final_sgn, final_log = execute_stack(
+                sign_tensor,
+                digit_probs,
+                op_probs,
+                max_digits=max_digits,
+                max_decimal_places=max_decimal_places,
+                base=base,
+                ignore_clip=True,
+            )
 
-        final_value_exec = (final_sgn * torch.exp(final_log)).item()
+            final_value_exec = (final_sgn * torch.exp(final_log)).item()
 
     # Return structure dict format for predictor training
     if depth is None:
@@ -558,13 +615,16 @@ def generate_single_dag_example(
     max_decimal_places: int = 6,
     base: int = 10,
     allowed_operations: list[str] | None = None,
-    execute_sympy: bool = True,
     printing_style_probs: dict[str, float] | None = None,
+    train: bool = False,
     # Test-only overrides – callers should provide **both** or **neither**
     _operations_override: list[str] | None = None,
     _initial_values_override: list[float] | None = None,
 ) -> DAGExample:
     """Generate a single DAG computation example as a simple math expression."""
+
+    # Derive execute_sympy from train: execute sympy for validation (train=False), skip for training (train=True)
+    execute_sympy = not train
 
     (
         sym_expr,
@@ -588,6 +648,7 @@ def generate_single_dag_example(
         override_initial_values=_initial_values_override,
         override_operations=_operations_override,
         execute_sympy=execute_sympy,
+        train=train,
     )
 
     # Now we render the expression - no need for English conversion of operands
@@ -597,6 +658,7 @@ def generate_single_dag_example(
         seed=seed,
         english_conversion_probability=english_conversion_probability,
         printing_style_probs=printing_style_probs,
+        train=train,
     )
     # Use plan_to_tensors to get the structure dict directly
     structure_dict = plan_to_tensors(
@@ -607,45 +669,62 @@ def generate_single_dag_example(
         base=base,
         depth=depth,
         allowed_operations=allowed_operations,
+        train=train,
     )
 
-    example = DAGExample(
-        text=text,
-        depth=depth,
-        max_digits=max_digits,
-        max_decimal_places=max_decimal_places,
-        base=base,
-        english_conversion_probability=english_conversion_probability,
-        integer_no_decimal_probability=integer_no_decimal_probability,
-        printing_style=printing_style,
-        initial_values=initial_values,
-        structure_dict=structure_dict,
-        signs=structure_dict["initial_sgn"],
-        digits=structure_dict["initial_digits"],
-        operations=structure_dict["operation_probs"],
-        final_value_exec=structure_dict["final_value_exec"].item(),
-        final_value_sympy=final_value_sympy,
-        operations_named=operations,
-        seed=seed,
-        did_expand=did_expand,
-        did_simplify=did_simplify,
-        allowed_operations=allowed_operations,
-        expr=sym_expr_with_vals,
-    )
+    if train:
+        # For training, only create essential attributes to minimize overhead
+        example = DAGTrainExample(
+            text=text,
+            structure_dict=structure_dict,
+            # Minimal required attributes with default values
+            depth=depth,
+            max_digits=max_digits,
+            max_decimal_places=max_decimal_places,
+            base=base,
+            seed=seed,
+        )
+    else:
+        # Full example creation for evaluation/debugging (original behavior)
+        example = DAGValExample(
+            text=text,
+            depth=depth,
+            max_digits=max_digits,
+            max_decimal_places=max_decimal_places,
+            base=base,
+            english_conversion_probability=english_conversion_probability,
+            integer_no_decimal_probability=integer_no_decimal_probability,
+            printing_style=printing_style,
+            initial_values=initial_values,
+            structure_dict=structure_dict,
+            signs=structure_dict["initial_sgn"],
+            digits=structure_dict["initial_digits"],
+            operations=structure_dict["operation_probs"],
+            final_value_exec=structure_dict["final_value_exec"].item(),
+            final_value_sympy=final_value_sympy,
+            operations_named=operations,
+            seed=seed,
+            did_expand=did_expand,
+            did_simplify=did_simplify,
+            allowed_operations=allowed_operations,
+            expr=sym_expr_with_vals,
+        )
 
-    if (
-        final_value_sympy != np.inf
-        and execute_sympy
-        and not math.isclose(
-            example.final_value_exec,
-            example.final_value_sympy,
-            abs_tol=1e-2,
-            rel_tol=1e-2,
-        )
-    ):
-        logging.warning(
-            f"\n\n-------------------WARNING: Final value mismatch between sympy and tensor execute: {example.final_value_exec} != {example.final_value_sympy}, \nexample: {example}\n\n-------------------"
-        )
+        # Skip expensive validation during training
+        if (
+            not train
+            and final_value_sympy != np.inf
+            and execute_sympy
+            and not math.isclose(
+                example.final_value_exec,
+                example.final_value_sympy,
+                abs_tol=1e-2,
+                rel_tol=1e-2,
+            )
+        ):
+            logging.warning(
+                f"\n\n-------------------WARNING: Final value mismatch between sympy and tensor execute: {example.final_value_exec} != {example.final_value_sympy}, \nexample: {example}\n\n-------------------"
+            )
 
     return example
 
@@ -717,8 +796,8 @@ class DAGStructureDataset:
         self.op_idx_to_name = {i: name for i, name in enumerate(OP_NAMES)}
 
     def generate_batch(
-        self, batch_size: int, seed: int = 42, execute_sympy: bool = True
-    ) -> Tuple[List[str], Dict[str, torch.Tensor], List["DAGExample"]]:
+        self, batch_size: int, seed: int = 42, train: bool = False
+    ) -> Tuple[List[str], Dict[str, torch.Tensor], List[DAGExample]]:
         """Generate a batch of structure examples.
 
         Args:
@@ -729,7 +808,7 @@ class DAGStructureDataset:
         """
         texts: list[str] = []
         structures: list[Dict[str, torch.Tensor]] = []
-        examples: list[DAGExample] = []
+        examples: List[DAGExample] = []
 
         for i in range(batch_size):
             # Use fixed depth - all examples in dataset should have the same depth
@@ -749,8 +828,8 @@ class DAGStructureDataset:
                     max_decimal_places=self.max_decimal_places,
                     base=self.base,
                     allowed_operations=self.allowed_operations,
-                    execute_sympy=execute_sympy,
                     printing_style_probs=self.printing_style_probs,
+                    train=train,
                 )
             except Exception:
                 logging.error(
@@ -771,7 +850,7 @@ class DAGStructureDataset:
         return texts, batched_structure, examples
 
     def _batch_structures(
-        self, structures: List[Dict[str, torch.Tensor]], examples: List["DAGExample"]
+        self, structures: List[Dict[str, torch.Tensor]], examples: List[DAGExample]
     ) -> Dict[str, torch.Tensor]:
         """Batch structure tensors with proper padding.
 
@@ -815,17 +894,30 @@ class DAGStructureDataset:
             # Store depth
             batched_depths[i] = depth
 
-            # Extract target initial values from example
-            num_values = min(len(example.initial_values), max_nodes)
-            batched_target_initial_values[i, :num_values] = torch.tensor(
-                example.initial_values[:num_values], dtype=torch.float32
-            )
-
-            # Extract target final execution value from example
-            if example.final_value_exec is not None:
-                batched_target_final_exec[i] = torch.tensor(
-                    example.final_value_exec, dtype=torch.float32
+            # Extract target initial values - check example type
+            if isinstance(example, DAGTrainExample):
+                # Training examples don't store initial_values for memory efficiency
+                # Leave as zeros (already initialized)
+                pass
+            else:
+                # Evaluation mode: use example attributes
+                num_values = min(len(example.initial_values), max_nodes)
+                batched_target_initial_values[i, :num_values] = torch.tensor(
+                    example.initial_values[:num_values], dtype=torch.float32
                 )
+
+            # Extract target final execution value - check example type
+            if isinstance(example, DAGTrainExample):
+                # Training mode: use structure_dict value
+                if "final_value_exec" in structure:
+                    batched_target_final_exec[i] = structure["final_value_exec"]
+            else:
+                # Evaluation mode: use example attribute
+                if example.final_value_exec is not None:
+                    batched_target_final_exec[i] = torch.tensor(
+                        example.final_value_exec, dtype=torch.float32
+                    )
+            # If value not available, leave as zero (already initialized)
 
         return {
             "initial_sgn": batched_initial_sgn,
@@ -838,8 +930,8 @@ class DAGStructureDataset:
         }
 
     def create_dataloader(
-        self, batch_size: int = 32, seed: int = 42, execute_sympy: bool = True
-    ) -> Iterator[Tuple[List[str], Dict[str, torch.Tensor], List["DAGExample"]]]:
+        self, batch_size: int = 32, seed: int = 42, train: bool = False
+    ) -> Iterator[Tuple[List[str], Dict[str, torch.Tensor], List[DAGExample]]]:
         """Create an infinite dataloader for structure examples.
 
         Args:
@@ -851,7 +943,7 @@ class DAGStructureDataset:
         i = 0
         while True:
             texts, structures, examples = self.generate_batch(
-                batch_size, seed=seed + i, execute_sympy=execute_sympy
+                batch_size, seed=seed + i, train=train
             )
             i += 1
             yield texts, structures, examples
@@ -920,10 +1012,10 @@ def create_dag_structure_dataloaders(
 
     # Create dataloaders
     train_loader = train_dataset.create_dataloader(
-        train_batch_size, seed=seed, execute_sympy=False
+        train_batch_size, seed=seed, train=True
     )
     val_loader = val_dataset.create_dataloader(
-        val_batch_size, seed=seed, execute_sympy=True
+        val_batch_size, seed=seed, train=False  # Always full examples for validation
     )
 
     return train_loader, val_loader
