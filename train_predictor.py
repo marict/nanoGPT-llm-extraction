@@ -403,33 +403,9 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "best_val_loss": best_val_loss,
                     }
 
-                    if cfg.save_best and is_new_best:
-                        # Save a single checkpoint for the best model
-                        val_acc = eval_losses.get("op_accuracy", None)
-
-                        if getattr(cfg, "overwrite_previous", False):
-                            # Still keep a separate *best* checkpoint, but store it within the
-                            # run-specific folder so it doesn't clash with other runs.
-                            checkpoint_filename = (
-                                f"{safe_run_name}/ckpt_{cfg.name}_best.pt"
-                            )
-                        else:
-                            rel_name = checkpoint_manager.generate_checkpoint_filename(
-                                cfg.name,
-                                iter_num,
-                                val_acc=val_acc,
-                                is_best=True,
-                            )
-                            checkpoint_filename = f"{safe_run_name}/{rel_name}"
-                        # verbose checkpoint message removed
-                        checkpoint_manager.save_checkpoint(
-                            checkpoint_data, checkpoint_filename
-                        )
-
-                    if cfg.always_save_checkpoint or (
-                        not cfg.save_best and is_new_best
-                    ):
-                        # Save a checkpoint with the iteration number
+                    # Default behavior: only save on new best validation loss
+                    # Override: always save if always_save_checkpoint is enabled
+                    if cfg.always_save_checkpoint or is_new_best:
                         val_acc = eval_losses.get("op_accuracy", None)
 
                         if getattr(cfg, "overwrite_previous", False):
@@ -439,9 +415,16 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                                 cfg.name,
                                 iter_num,
                                 val_acc=val_acc,
+                                is_best=is_new_best,
                             )
                             checkpoint_filename = f"{safe_run_name}/{rel_name}"
-                        # verbose checkpoint message removed
+
+                        if is_new_best:
+                            print(
+                                f"[{time.time() - setup_start:.2f}s] 🎯 NEW BEST validation loss: {best_val_loss:.6f} "
+                                f"(iter {iter_num}) - saving checkpoint: {checkpoint_filename}"
+                            )
+
                         checkpoint_manager.save_checkpoint(
                             checkpoint_data, checkpoint_filename
                         )
@@ -668,6 +651,16 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 # Backward pass
                 scaler.scale(loss).backward()
 
+                # Check for NaN/Inf gradients in training (not just analysis)
+                for n, p in model.named_parameters():
+                    if p.grad is not None and (
+                        torch.isnan(p.grad).any() or torch.isinf(p.grad).any()
+                    ):
+                        print(
+                            f"[GRAD NAN] {n}  →  min={p.grad.min():.3e}  max={p.grad.max():.3e}"
+                        )
+                        break
+
             # Optimization step
             if cfg.grad_clip > 0:
                 scaler.unscale_(optimizer)
@@ -771,11 +764,13 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
                     # Add internal losses and gradient cosines to wandb logging
                     for key, value in loss_accum.items():
-                        if (
+                        if key.startswith("grad_cosine_"):
+                            log_dict[f"grad/{key}"] = value
+                        elif (
                             key.endswith("_loss")
                             and key not in log_dict
                             and key != "total_loss"
-                        ) or key.startswith("grad_cosine_"):
+                        ):
                             log_dict[f"train/{key}"] = value
 
                     # Combine pending validation metrics if they exist
