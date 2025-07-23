@@ -401,7 +401,6 @@ def plan_to_tensors(
     base: int = 10,
     depth: int | None = None,
     allowed_operations: list[str] | None = None,
-    _print_exec_intermediates: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Convert a DAG plan to structure tensors for training."""
     # Convert initial values to signs and digit one-hots
@@ -438,7 +437,6 @@ def plan_to_tensors(
             max_decimal_places=max_decimal_places,
             base=base,
             ignore_clip=True,
-            _print_exec_intermediates=_print_exec_intermediates,
         )
 
         final_value_exec = (
@@ -564,7 +562,6 @@ def generate_single_dag_example(
     execute_sympy: bool = True,
     printing_style_probs: dict[str, float] | None = None,
     # Test-only overrides – callers should provide **both** or **neither**
-    _print_exec_intermediates: bool = False,
     _operations_override: list[str] | None = None,
     _initial_values_override: list[float] | None = None,
 ) -> DAGExample:
@@ -592,7 +589,6 @@ def generate_single_dag_example(
         override_initial_values=_initial_values_override,
         override_operations=_operations_override,
         execute_sympy=execute_sympy,
-        _print_exec_intermediates=_print_exec_intermediates,
     )
 
     # Now we render the expression - no need for English conversion of operands
@@ -612,7 +608,6 @@ def generate_single_dag_example(
         base=base,
         depth=depth,
         allowed_operations=allowed_operations,
-        _print_exec_intermediates=_print_exec_intermediates,
     )
 
     example = DAGExample(
