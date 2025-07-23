@@ -72,6 +72,8 @@ def _compute_digit_loss(
     pred_digit_probs: torch.Tensor,  # Now expects probabilities, not logits
     target_digits: torch.Tensor,
     device_type: str,
+    iter_num: int = 0,  # Add iteration number for curriculum
+    cfg=None,  # Add config for curriculum parameters
 ) -> torch.Tensor:
     """Compute cross-entropy loss for digit prediction."""
     B, T, N, D, base = pred_digit_probs.shape
@@ -117,6 +119,25 @@ def _compute_digit_loss(
         else:
             digit_loss = torch.tensor(0.0, device=pred_digit_probs.device)
 
+        # Add entropy regularization for sharper predictions (curriculum)
+        if cfg is not None and valid_mask.any():
+            entropy_weight_start = getattr(cfg, "digit_entropy_weight_start", 0.0)
+            entropy_weight_end = getattr(cfg, "digit_entropy_weight_end", 0.05)
+            entropy_curriculum_steps = getattr(
+                cfg, "digit_entropy_curriculum_steps", 6000
+            )
+
+            progress = min(iter_num / entropy_curriculum_steps, 1.0)
+            current_entropy_weight = entropy_weight_start + progress * (
+                entropy_weight_end - entropy_weight_start
+            )
+
+            # Entropy penalty: encourage confidence (low entropy)
+            pred_entropy = (
+                -(pred_flat[valid_mask] * log_probs[valid_mask]).sum(dim=-1).mean()
+            )
+            digit_loss = digit_loss + current_entropy_weight * pred_entropy
+
     return digit_loss
 
 
@@ -140,6 +161,7 @@ def _compute_value_loss(
     target_initial_values: torch.Tensor,
     cfg,
     device_type: str,
+    iter_num: int = 0,  # Add iteration number for curriculum
 ) -> torch.Tensor:
     """Compute robust loss between predicted and target initial values in log space."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
@@ -170,22 +192,38 @@ def _compute_value_loss(
             torch.float32
         )
 
-        # Core magnitude loss in log space (direct smooth_l1_loss)
-        magnitude_loss = F.smooth_l1_loss(
-            pred_log_magnitude, target_log_magnitude, beta=1.0
+        # Curriculum learning: progressive precision requirements
+        curriculum_beta = getattr(cfg, "value_curriculum_beta_start", 1.0)
+        curriculum_beta_end = getattr(cfg, "value_curriculum_beta_end", 0.1)
+        curriculum_steps = getattr(cfg, "value_curriculum_steps", 5000)
+
+        # Linear annealing from start to end beta over curriculum_steps
+        progress = min(iter_num / curriculum_steps, 1.0)
+        current_beta = curriculum_beta + progress * (
+            curriculum_beta_end - curriculum_beta
         )
 
-        # Smooth sign penalty using continuous sign values
-        # pred_sgn is already in [-1,1] from tanh, target signs are ±1
+        # Core magnitude loss in log space with curriculum beta
+        magnitude_loss = F.smooth_l1_loss(
+            pred_log_magnitude, target_log_magnitude, beta=current_beta
+        )
+
+        # Progressive sign penalty - start lenient, get stricter
         target_sign_smooth = torch.sign(target_initial_values)  # ±1
         sign_mask = target_initial_values.abs() > 1e-8  # ignore target zeros
 
+        # Curriculum for sign penalty weight
+        sign_weight_start = getattr(cfg, "sign_penalty_start", 0.05)
+        sign_weight_end = getattr(cfg, "sign_penalty_end", 0.2)
+        current_sign_weight = sign_weight_start + progress * (
+            sign_weight_end - sign_weight_start
+        )
+
         # Smooth sign loss: penalize when pred_sgn and target_sign have different signs
-        # Use smooth penalty instead of hard mismatch counting
         sign_diff = (
             pred_sgn.to(torch.float32) - target_sign_smooth.to(torch.float32)
         ) * sign_mask.float()
-        sign_penalty = 0.1 * (sign_diff**2).mean()  # smooth quadratic penalty
+        sign_penalty = current_sign_weight * (sign_diff**2).mean()
 
         return magnitude_loss + sign_penalty
 
@@ -197,6 +235,7 @@ def _compute_exec_loss(
     target_final_exec: torch.Tensor,
     cfg,
     device_type: str,
+    iter_num: int = 0,  # Add iteration number for curriculum
 ) -> torch.Tensor:
     """Execution loss using natural log magnitudes directly (avoids exp** blow-up)."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
@@ -220,20 +259,43 @@ def _compute_exec_loss(
         # Target natural log magnitude - ensure float32
         tgt_ln = torch.log(target_flat.abs() + 1e-8).to(torch.float32)
 
-        # Magnitude loss components (inlined from safe_big_loss):
-        # A) Huber loss in log space (weight 1.0)
-        log_loss = F.smooth_l1_loss(pred_final_ln, tgt_ln, beta=1.0)
+        # Curriculum parameters for exec loss
+        exec_beta_start = getattr(cfg, "exec_curriculum_beta_start", 1.0)
+        exec_beta_end = getattr(cfg, "exec_curriculum_beta_end", 0.05)
+        exec_curriculum_steps = getattr(cfg, "exec_curriculum_steps", 8000)
 
-        # B) Relative multiplicative error approximation (reduced weight and clamped)
-        log_diff = (pred_final_ln - tgt_ln).abs().clamp(max=6.0)  # Reduced from 12.0
-        # Clamp the exponential to prevent massive values
-        rel_term = (torch.exp(log_diff) - 1.0).clamp(
-            max=100.0
-        )  # Prevent massive relative errors
-        rel_loss = 0.01 * rel_term.mean()  # Reduced weight from 0.2 to 0.01
+        # Progressive precision requirements
+        progress = min(iter_num / exec_curriculum_steps, 1.0)
+        current_beta = exec_beta_start + progress * (exec_beta_end - exec_beta_start)
 
-        # C) Overflow penalty (weight 0.05) - using natural log bounds
-        overflow_pen = 0.05 * (pred_final_ln.abs() > 27.6).float().mean()
+        # Magnitude loss components (enhanced with curriculum):
+        # A) Huber loss in log space with progressive beta
+        log_loss = F.smooth_l1_loss(pred_final_ln, tgt_ln, beta=current_beta)
+
+        # B) Relative multiplicative error with adaptive scaling
+        log_diff = (pred_final_ln - tgt_ln).abs()
+
+        # Adaptive scaling: harder to satisfy as training progresses
+        rel_weight_start = getattr(cfg, "exec_rel_weight_start", 0.005)
+        rel_weight_end = getattr(cfg, "exec_rel_weight_end", 0.03)
+        current_rel_weight = rel_weight_start + progress * (
+            rel_weight_end - rel_weight_start
+        )
+
+        # More aggressive penalty for larger errors
+        rel_term = torch.exp(log_diff.clamp(max=8.0)) - 1.0
+        rel_loss = current_rel_weight * rel_term.clamp(max=200.0).mean()
+
+        # C) Overflow penalty with progressive strictness
+        overflow_threshold_start = getattr(cfg, "exec_overflow_start", 30.0)
+        overflow_threshold_end = getattr(cfg, "exec_overflow_end", 25.0)
+        current_overflow_threshold = overflow_threshold_start + progress * (
+            overflow_threshold_end - overflow_threshold_start
+        )
+
+        overflow_pen = (
+            0.1 * (pred_final_ln.abs() > current_overflow_threshold).float().mean()
+        )
 
         mag_loss = log_loss + rel_loss + overflow_pen
 
@@ -260,6 +322,7 @@ def compute_dag_structure_loss(
     target_initial_values: torch.Tensor,  # (B,T,N) - target initial values as floats
     target_final_exec: torch.Tensor,  # (B,T) - target final execution values as floats
     cfg: DAGTrainConfig,
+    iter_num: int = 0,  # Add iteration number for curriculum learning
 ) -> Dict[str, torch.Tensor]:
     """Compute robust DAG-structure prediction loss.
 
@@ -276,13 +339,21 @@ def compute_dag_structure_loss(
 
     # Compute individual loss components (now pass probabilities, not logits)
     sign_loss = _compute_sign_loss(pred_sgn, target_sgn, device_type)
-    digit_loss = _compute_digit_loss(pred_digit_probs, target_digits, device_type)
+    digit_loss = _compute_digit_loss(
+        pred_digit_probs, target_digits, device_type, iter_num, cfg
+    )
     op_loss = _compute_op_loss(pred_ops, target_ops, device_type)
     value_loss = _compute_value_loss(
-        pred_sgn, pred_digit_probs, target_initial_values, cfg, device_type
+        pred_sgn, pred_digit_probs, target_initial_values, cfg, device_type, iter_num
     )
     exec_loss = _compute_exec_loss(
-        pred_sgn, pred_digit_probs, pred_ops, target_final_exec, cfg, device_type
+        pred_sgn,
+        pred_digit_probs,
+        pred_ops,
+        target_final_exec,
+        cfg,
+        device_type,
+        iter_num,
     )
 
     # Combine all losses with their respective weights
@@ -563,6 +634,7 @@ def evaluate_dag_model(
                     target_initial_values,
                     target_final_exec,
                     cfg,
+                    0,  # Use iter_num=0 for evaluation (no curriculum during eval)
                 )
 
                 # Metrics

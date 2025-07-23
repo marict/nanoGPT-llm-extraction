@@ -35,7 +35,7 @@ max_dag_depth = 6  # Match the model dag_depth for consistency
 # Choose 4 to match the NALU paper
 max_digits = 4
 max_decimal_places = 4
-base = 32  # Dataset generation now supports configurable bases
+base = 10  # Dataset generation now supports configurable bases
 
 # Expression generation settings
 english_conversion_probability = 0.5
@@ -93,7 +93,36 @@ sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
 value_loss_weight = 1.0  # MSE loss on initial values
-exec_loss_weight = 0
+exec_loss_weight = 0.5
+
+# Curriculum Learning Parameters for Enhanced Value-Based Learning
+# ================================================================
+
+# Value Loss Curriculum (Initial Values)
+value_curriculum_beta_start = 1.0  # Start lenient (larger Huber threshold)
+value_curriculum_beta_end = 0.1  # End strict (smaller Huber threshold)
+value_curriculum_steps = max_iters * 0.1  # Steps to transition over
+sign_penalty_start = 0.05  # Start with low sign penalty weight
+sign_penalty_end = 0.2  # End with higher sign penalty weight
+
+# Exec Loss Curriculum (Final Execution Values)
+exec_curriculum_beta_start = 1.0  # Start lenient for Huber loss
+exec_curriculum_beta_end = 0.05  # End very strict
+exec_curriculum_steps = max_iters * 0.16  # Longer transition for exec loss
+exec_rel_weight_start = 0.005  # Start with low relative error weight
+exec_rel_weight_end = 0.03  # End with higher relative error weight
+exec_overflow_start = 30.0  # Start with lenient overflow threshold
+exec_overflow_end = 25.0  # End with stricter overflow threshold
+
+# Digit Loss Curriculum (Digit Prediction Confidence)
+digit_entropy_weight_start = 0.0  # Start with no entropy penalty
+digit_entropy_weight_end = 0.05  # End with entropy penalty for sharper predictions
+digit_entropy_curriculum_steps = max_iters * 0.12  # Steps to ramp up entropy penalty
+
+# Exec loss smoothing to prevent spikes
+exec_loss_ema_decay = 0.95  # EMA decay factor (0.95 = keep 95% of history)
+exec_loss_max_clip = 5.0  # Maximum allowed exec_loss value
+exec_loss_warmup_steps = max_iters * 0.002  # Steps before EMA kicks in
 
 # Random seeds
 seed = 42
