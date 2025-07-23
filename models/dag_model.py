@@ -627,20 +627,21 @@ def execute_stack(
     expected_digits = (digit_probs * digits_values).sum(-1)  # (B,T,N,D)
 
     # Convert expected digits to log magnitude
-    # for operations.
+    # Create correct powers for base conversion:
+    # Integer part: [max_digits-1, max_digits-2, ..., 1, 0]
+    # Decimal part: [-1, -2, ..., -max_decimal_places]
     powers = torch.arange(
-        max_digits + max_decimal_places - 1,
-        -1,
+        max_digits - 1,
+        -max_decimal_places - 1,
         -1,
         device=digit_probs.device,
         dtype=digit_probs.dtype,
     )
-    # Assemble integer value from digits and powers
-    raw_int_value = (expected_digits * (float(base) ** powers)).sum(-1)  # (B,T,N)
-    # Separate fixed scale (constant)
-    scale = max_decimal_places
-    raw_int_value = raw_int_value.clamp_min(MIN_CLAMP)
-    initial_log = torch.log10(raw_int_value) - scale
+    # Assemble value from digits and powers using the correct base
+    raw_value = (expected_digits * (float(base) ** powers)).sum(-1)  # (B,T,N)
+    # Clamp to avoid log(0) and compute log base 10
+    raw_value = raw_value.clamp_min(MIN_CLAMP)
+    initial_log = torch.log10(raw_value)
 
     B, T, num_initial = initial_sgn.shape
     depth = ops.shape[2]

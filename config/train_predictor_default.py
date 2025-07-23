@@ -35,6 +35,7 @@ max_dag_depth = 6  # Match the model dag_depth for consistency
 # Choose 4 to match the NALU paper
 max_digits = 4
 max_decimal_places = 4
+base = 32  # Dataset generation now supports configurable bases
 
 # Expression generation settings
 english_conversion_probability = 0.5
@@ -83,7 +84,7 @@ cyclical_lr_amplitude = 0.1
 backend = "gloo"
 # Keep this for mixed-precision support on modern CPUs/GPUs; fine on most hardware.
 dtype = "bfloat16"
-compile = False
+compile = True
 keep_alive = False
 check_nans = False
 
@@ -92,7 +93,7 @@ sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
 value_loss_weight = 1.0  # MSE loss on initial values
-exec_loss_weight = 1.0  # MSE loss on final execution values
+exec_loss_weight = 0
 
 # Random seeds
 seed = 42

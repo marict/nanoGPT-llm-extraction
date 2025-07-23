@@ -14,7 +14,7 @@ reload_reset_iters = False
 
 # Model initialization
 # init_from = "/runpod-volume/checkpoints/vthtoes0nb3rd6-resume_add_digit_tau/ckpt_predictor_pretrain.pt"
-# init_from = "scratch"
+init_from = "scratch"
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
@@ -27,6 +27,7 @@ max_dag_depth = 6  # Match the model dag_depth for consistency
 # Choose 4 to match the NALU paper
 max_digits = 4
 max_decimal_places = 4
+base = 32  # Try this experimentally.
 
 # Expression generation settings
 english_conversion_probability = 0.5

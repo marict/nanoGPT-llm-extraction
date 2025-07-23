@@ -71,13 +71,29 @@ def generate_uniform_digit_number(
     seed: int | None = None,
     max_digits: int = 4,
     max_decimal_places: int = 6,
+    base: int = 10,
     allow_zero: bool = True,
     integer_no_decimal_probability: float = 0.0,
 ) -> float | int:
-    """Generate a random number within digit constraints.
+    """Generate a random number within digit constraints for the specified base.
 
     A random number with controlled digit constraints, as float or int.
+    For a given base, generates numbers using digits 0 to (base-1).
+
+    Args:
+        seed: Random seed for reproducibility
+        max_digits: Maximum number of integer digits in the specified base
+        max_decimal_places: Maximum number of decimal places in the specified base
+        base: Number base (2-36 supported)
+        allow_zero: Whether to allow zero values
+        integer_no_decimal_probability: Probability of returning integer instead of float
+
+    Returns:
+        A number appropriate for the specified base
     """
+    if base < 2 or base > 36:
+        raise ValueError(f"Base must be between 2 and 36, got {base}")
+
     rng = random.Random(seed or random.randint(0, 10000))
 
     # Determine if we're generating a positive or negative number
@@ -88,24 +104,24 @@ def generate_uniform_digit_number(
 
     # 2. Generate random integer digits (first digit can't be 0 for multi-digit integers)
     if num_int_digits > 1:
-        first_digit = rng.randint(1, 9)
-        other_digits = [rng.randint(0, 9) for _ in range(num_int_digits - 1)]
+        first_digit = rng.randint(1, base - 1)
+        other_digits = [rng.randint(0, base - 1) for _ in range(num_int_digits - 1)]
         int_digits = [first_digit] + other_digits
     else:
         # For single digit, if we don't allow zero, force non-zero
         if not allow_zero:
-            int_digits = [rng.randint(1, 9)]
+            int_digits = [rng.randint(1, base - 1)]
         else:
-            int_digits = [rng.randint(0, 9)]
+            int_digits = [rng.randint(0, base - 1)]
 
     # 3. Generate a random number of decimal places
     num_decimal_places = rng.randint(0, max_decimal_places)
 
-    # 4. Generate random decimal digits
-    decimal_digits = [rng.randint(0, 9) for _ in range(num_decimal_places)]
+    # 4. Generate random decimal digits for the specified base
+    decimal_digits = [rng.randint(0, base - 1) for _ in range(num_decimal_places)]
 
-    # 5. Combine integer and decimal parts
-    int_part = sum(d * (10**i) for i, d in enumerate(reversed(int_digits)))
+    # 5. Combine integer and decimal parts using the specified base
+    int_part = sum(d * (base**i) for i, d in enumerate(reversed(int_digits)))
 
     # If int_part is 0, and we have decimal places, make sure at least one decimal digit is non-zero
     # to avoid generating a complete zero when not allowed
@@ -113,14 +129,14 @@ def generate_uniform_digit_number(
         if all(d == 0 for d in decimal_digits):
             # Replace a random decimal digit with non-zero
             idx = rng.randint(0, len(decimal_digits) - 1)
-            decimal_digits[idx] = rng.randint(1, 9)
+            decimal_digits[idx] = rng.randint(1, base - 1)
 
     # Check if the number is a whole number (no decimal places)
     is_whole_number = num_decimal_places == 0
 
-    # Calculate the actual result as a float initially
+    # Calculate the actual result as a float initially using the specified base
     if num_decimal_places > 0:
-        decimal_part = sum(d * (10 ** -(i + 1)) for i, d in enumerate(decimal_digits))
+        decimal_part = sum(d * (base ** -(i + 1)) for i, d in enumerate(decimal_digits))
         result = int_part + decimal_part
     else:
         result = float(int_part)
@@ -158,6 +174,7 @@ def generate_expression(
     seed: int,
     max_digits: int,
     max_decimal_places: int,
+    base: int = 10,
     allowed_operations: list[str] | None,
     expression_simplification_probability: float,
     expression_expansion_probability: float,
@@ -166,7 +183,6 @@ def generate_expression(
     override_initial_values: list[float] | None = None,
     override_operations: list[str] | None = None,
     execute_sympy: bool = True,
-    _print_exec_intermediates: bool = False,
 ) -> tuple[sympy.Basic, list[float], list[str], float | None, bool, bool, bool]:
     """Generate a sympy expression.
 
@@ -208,6 +224,7 @@ def generate_expression(
                 seed=seed + i,
                 max_digits=max_digits,
                 max_decimal_places=max_decimal_places,
+                base=base,
                 allow_zero=False,
                 integer_no_decimal_probability=integer_no_decimal_probability,
             )
@@ -310,51 +327,67 @@ def float_to_digit_onehot(
 ) -> torch.Tensor:
     """Convert a float into a one-hot tensor of shape (D, base) where D = max_digits + max_decimal_places.
 
-    The number is first clipped to the largest representable value to avoid overflow.  The integer part is
+    The number is first clipped to the largest representable value to avoid overflow. The integer part is
     left-padded with zeros and the fractional part is right-padded with zeros so that their total length
     equals *max_digits + max_decimal_places*.
+
+    Args:
+        value: The float value to convert
+        max_digits: Maximum number of integer digits
+        max_decimal_places: Maximum number of decimal places
+        base: Number base for digit representation (2-36 supported)
     """
-    # For now, only base 10 is supported in this function
-    if base != 10:
-        raise NotImplementedError(
-            f"float_to_digit_onehot only supports base 10, got base {base}"
-        )
+    if base < 2 or base > 36:
+        raise ValueError(f"Base must be between 2 and 36, got {base}")
 
     # Clip magnitude so that it fits in the available digits
-    limit = 10**max_digits - 10 ** (-max_decimal_places)
+    limit = base**max_digits - base ** (-max_decimal_places)
     abs_val = min(abs(value), limit)
 
-    # Build fixed-width string representation without sign and without decimal point
-    # We first format with the desired number of decimal places, then pad the integer
-    # part with leading zeros to exactly *max_digits* characters. Python's format
-    # specification does not support fixed-width integer padding when combined
-    # with a fractional component, so we handle the padding manually.
+    # Convert to the target base
+    # First convert integer part
+    int_part = int(abs_val)
+    frac_part = abs_val - int_part
 
-    s = f"{abs_val:.{max_decimal_places}f}"  # e.g. 1.2300 (variable int width)
-    int_part, frac_part = s.split(".")
-
-    # Left-pad the integer part so that it always has *max_digits* characters.
-    # This guarantees the total digit count equals D = max_digits + max_decimal_places.
-    if len(int_part) > max_digits:
-        # This should not happen thanks to the earlier clipping, but guard anyway.
-        int_part = int_part[-max_digits:]
+    # Convert integer part to target base
+    if int_part == 0:
+        int_digits = [0]
     else:
-        int_part = int_part.zfill(max_digits)
+        int_digits = []
+        temp = int_part
+        while temp > 0:
+            int_digits.append(temp % base)
+            temp = temp // base
+        int_digits.reverse()  # Most significant digit first
 
-    # Ensure the fractional part has exactly *max_decimal_places* digits
-    if len(frac_part) < max_decimal_places:
-        frac_part = frac_part.ljust(max_decimal_places, "0")
-    elif len(frac_part) > max_decimal_places:
-        frac_part = frac_part[:max_decimal_places]
+    # Pad or truncate integer part to exactly max_digits
+    if len(int_digits) > max_digits:
+        int_digits = int_digits[-max_digits:]  # Keep least significant digits
+    else:
+        int_digits = [0] * (max_digits - len(int_digits)) + int_digits  # Pad with zeros
 
-    s_digits = int_part + frac_part
+    # Convert fractional part to target base
+    frac_digits = []
+    temp_frac = frac_part
+    for _ in range(max_decimal_places):
+        temp_frac *= base
+        digit = int(temp_frac)
+        frac_digits.append(digit)
+        temp_frac -= digit
+
+    # Combine integer and fractional digits
+    all_digits = int_digits + frac_digits
 
     D = max_digits + max_decimal_places
-    assert len(s_digits) == D, f"Expected {D} digits, got {len(s_digits)}"
+    assert len(all_digits) == D, f"Expected {D} digits, got {len(all_digits)}"
 
+    # Create one-hot encoding
     one_hot = torch.zeros(D, base)
-    for i, ch in enumerate(s_digits):
-        one_hot[i, int(ch)] = 1.0
+    for i, digit in enumerate(all_digits):
+        # Clamp digit to valid range (should not be needed but safety check)
+        digit = min(max(digit, 0), base - 1)
+        one_hot[i, digit] = 1.0
+
     return one_hot
 
 
@@ -526,6 +559,7 @@ def generate_single_dag_example(
     expression_simplification_probability: float = 0.0,
     max_digits: int = 4,
     max_decimal_places: int = 6,
+    base: int = 10,
     allowed_operations: list[str] | None = None,
     execute_sympy: bool = True,
     printing_style_probs: dict[str, float] | None = None,
@@ -549,6 +583,7 @@ def generate_single_dag_example(
         seed=seed,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
+        base=base,
         allowed_operations=allowed_operations,
         expression_simplification_probability=expression_simplification_probability,
         expression_expansion_probability=expression_expansion_probability,
@@ -574,6 +609,7 @@ def generate_single_dag_example(
         operations=operations,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
+        base=base,
         depth=depth,
         allowed_operations=allowed_operations,
         _print_exec_intermediates=_print_exec_intermediates,
@@ -637,6 +673,7 @@ class DAGStructureDataset:
         expression_expansion_probability: float = 0.0,
         max_digits: int = 4,
         max_decimal_places: int = 6,
+        base: int = 10,
         allowed_operations: list[str] | None = None,
         printing_style_probs: dict[str, float] | None = None,
     ):
@@ -657,6 +694,7 @@ class DAGStructureDataset:
         self.printing_style_probs = printing_style_probs
         self.max_digits = max_digits
         self.max_decimal_places = max_decimal_places
+        self.base = base
         # If a subset of operations is provided, validate and store mapping.
         if allowed_operations is not None:
             invalid_ops = [op for op in allowed_operations if op not in OP_NAMES]
@@ -714,6 +752,7 @@ class DAGStructureDataset:
                     expression_expansion_probability=self.expression_expansion_probability,
                     max_digits=self.max_digits,
                     max_decimal_places=self.max_decimal_places,
+                    base=self.base,
                     allowed_operations=self.allowed_operations,
                     execute_sympy=execute_sympy,
                     printing_style_probs=self.printing_style_probs,
@@ -756,9 +795,8 @@ class DAGStructureDataset:
         batched_initial_sgn = torch.zeros(batch_size, max_nodes)
         batched_initial_log = torch.zeros(batch_size, max_nodes)
         D_total = self.max_digits + self.max_decimal_places
-        # NOTE: Hardcoded to base 10 since data generation currently only supports base 10
-        # This is consistent with the validation check in float_to_digit_onehot
-        batched_initial_digits = torch.zeros(batch_size, max_nodes, D_total, 10)
+        # Use the configured base instead of hardcoding base 10
+        batched_initial_digits = torch.zeros(batch_size, max_nodes, D_total, self.base)
         batched_operation_probs = torch.zeros(batch_size, max_depth, len(OP_NAMES))
         batched_depths = torch.zeros(batch_size, dtype=torch.long)
 
@@ -835,6 +873,7 @@ def create_dag_structure_dataloaders(
     expression_expansion_probability: float = 0.0,
     max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
     max_decimal_places: int = 6,  # Auto-derived from max_digits for uniform string distribution
+    base: int = 10,  # Number base for digit representation
     allowed_operations: list[str] | None = None,
     printing_style_probs: dict[str, float] | None = None,
 ) -> Tuple[Iterator, Iterator]:
@@ -865,6 +904,7 @@ def create_dag_structure_dataloaders(
         expression_expansion_probability=expression_expansion_probability,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
+        base=base,
         allowed_operations=allowed_operations,
         printing_style_probs=printing_style_probs,
     )
@@ -878,6 +918,7 @@ def create_dag_structure_dataloaders(
         expression_expansion_probability=expression_expansion_probability,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
+        base=base,
         allowed_operations=allowed_operations,
         printing_style_probs=printing_style_probs,
     )
