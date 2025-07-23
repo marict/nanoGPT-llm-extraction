@@ -25,11 +25,10 @@ from tensor_utils import index_copy_like
 from .base_model import BaseGPTModel
 from .components import Block, LayerNorm
 
-LN10 = math.log(10.0)
-
-
 # Log-space arithmetic utilities
-LOG_LIM = 10.0  # Bound on log-magnitudes to avoid numerical instabilities
+LOG_LIM = (
+    23.026  # Bound on ln-magnitudes to avoid numerical instabilities (≈ 10.0 * ln(10))
+)
 MIN_CLAMP = 1e-6
 
 
@@ -118,25 +117,16 @@ def divide_log_space(
 def _add_logs_same_sign(
     sgn: torch.Tensor, lx: torch.Tensor, ly: torch.Tensor, ignore_clip: bool = False
 ):
-    # ``torch.logaddexp`` assumes natural logarithm inputs. Our internal
-    # representation uses log₁₀, so convert before/after to ensure numerical
-    # correctness (resolves large discrepancies caught by SymPy equivalence
-    # tests).
-
-    # Convert to double precision for higher numerical accuracy before calling
-    # torch.logaddexp which operates in the natural logarithm domain.  The
-    # original implementation down-cast to ``float32`` for speed, but this
-    # introduced small discrepancies (≈1e-5 relative) that can accumulate in
-    # deep subtraction chains and trigger the SymPy equivalence assertion.
-    # MPS backend (Apple Silicon) does not support ``float64``.  Detect this
-    # case and fall back to ``float32`` to avoid runtime errors while still
-    # using higher precision on CUDA/CPU devices that *do* support doubles.
+    # torch.logaddexp operates in natural logarithm domain, which matches our
+    # internal representation. Convert to double precision for higher numerical
+    # accuracy during calculations. MPS backend (Apple Silicon) does not support
+    # float64, so fall back to float32 on those devices.
     target_dtype = torch.float64 if lx.device.type != "mps" else torch.float32
 
-    lx_n = lx.to(target_dtype) * LN10
-    ly_n = ly.to(target_dtype) * LN10
+    lx_n = lx.to(target_dtype)
+    ly_n = ly.to(target_dtype)
     l_out_n = torch.logaddexp(lx_n, ly_n)
-    l_out = (l_out_n / LN10).to(lx.dtype)
+    l_out = l_out_n.to(lx.dtype)
     if not ignore_clip:
         l_out = _clip_log(l_out)
     return sgn, l_out
@@ -207,14 +197,8 @@ def add_log_space(
 
     # For near-cancellation cases: use direct linear arithmetic
     # Convert back to linear space, compute difference, then back to log space
-    big_val = torch.pow(
-        torch.tensor(10.0, dtype=target_dtype, device=big_log.device),
-        big_log.to(target_dtype),
-    )
-    small_val = torch.pow(
-        torch.tensor(10.0, dtype=target_dtype, device=small_log.device),
-        small_log.to(target_dtype),
-    )
+    big_val = torch.exp(big_log.to(target_dtype))
+    small_val = torch.exp(small_log.to(target_dtype))
 
     # Compute linear difference with correct signs
     big_signed = torch.where(
@@ -228,14 +212,14 @@ def add_log_space(
     # Convert back to log space
     linear_abs = torch.abs(linear_result)
     linear_sgn = torch.sign(linear_result).to(sx.dtype)
-    linear_log = torch.log10(linear_abs.clamp_min(MIN_CLAMP)).to(lx.dtype)
+    linear_log = torch.log(linear_abs.clamp_min(MIN_CLAMP)).to(lx.dtype)
 
     # For non-near-cancellation cases: use original log-space approach
     delta_n = (small_log.to(target_dtype) - big_log.to(target_dtype)).clamp(
         max=-1e-3, min=-LOG_LIM
-    ) * LN10
+    )
     diff_n = torch.log1p(-torch.exp(delta_n))  # natural log domain
-    diff = (diff_n / LN10).to(lx.dtype)
+    diff = diff_n.to(lx.dtype)
 
     # Perfect cancellation case
     zero_res = small_log == big_log
@@ -605,11 +589,11 @@ def execute_stack(
         )
 
     # Check if max value would exceed LOG_LIM
-    max_value_log = max_digits * math.log10(base)
+    max_value_log = max_digits * math.log(base)
     if max_value_log > LOG_LIM:
         raise RuntimeError(
             f"max_digits ({max_digits}) with base ({base}) would create numbers larger than {base}^{max_digits} "
-            f"(log₁₀ ≈ {max_value_log:.1f}) which exceeds LOG_LIM={LOG_LIM} and would be clipped, making sympy comparisons invalid"
+            f"(ln ≈ {max_value_log:.1f}) which exceeds LOG_LIM={LOG_LIM} and would be clipped, making sympy comparisons invalid"
         )
 
     # ------------------------------------------------------------------
@@ -639,9 +623,9 @@ def execute_stack(
     )
     # Assemble value from digits and powers using the correct base
     raw_value = (expected_digits * (float(base) ** powers)).sum(-1)  # (B,T,N)
-    # Clamp to avoid log(0) and compute log base 10
+    # Clamp to avoid log(0) and compute natural log
     raw_value = raw_value.clamp_min(MIN_CLAMP)
-    initial_log = torch.log10(raw_value)
+    initial_log = torch.log(raw_value)
 
     B, T, num_initial = initial_sgn.shape
     depth = ops.shape[2]
@@ -671,7 +655,7 @@ def execute_stack(
     def _log_to_value(sgn: torch.Tensor, log: torch.Tensor) -> float:
         """Convert sign/log representation back to readable value."""
         if sgn.numel() == 1 and log.numel() == 1:
-            return float(sgn.item() * (10 ** log.item()))
+            return float(sgn.item() * math.exp(log.item()))
         return "BATCH_DATA"
 
     if _print_exec_intermediates:
@@ -878,10 +862,10 @@ class DifferentiableDAG(nn.Module):
         ).to(digit_probs.dtype)
         weights = torch.cat((int_weights, frac_weights))
         value_abs = (digits_vals * weights).sum(-1)
-        initial_log = torch.log(value_abs.clamp_min(1e-6)) / math.log(10.0)
+        initial_log = torch.log(value_abs.clamp_min(1e-6))
 
         self.final_values = (
-            (initial_sgn * 10**initial_log).permute(0, 2, 1).contiguous()
+            (initial_sgn * torch.exp(initial_log)).permute(0, 2, 1).contiguous()
         )
 
         return final_hidden
@@ -1049,7 +1033,6 @@ class GPT(BaseGPTModel):
         from transformers import GPT2LMHeadModel
 
         print("loading weights from pretrained gpt: %s" % model_type)
-
         # Model configurations
         config_args = {
             "gpt2": dict(n_layer=12, n_head=12, n_embd=768),  # 124M params

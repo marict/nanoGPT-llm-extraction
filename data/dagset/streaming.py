@@ -47,7 +47,8 @@ class DAGExample:
     printing_style: str
     initial_values: list[float]  # for logging
     signs: torch.Tensor  # (D+1)
-    digits: torch.Tensor  # (D+1, digits_total, 10)
+    digits: torch.Tensor  # (D+1, digits_total, base)
+    base: int
     # log magnitudes are now computed on-the-fly during structure tensor creation
     operations: torch.Tensor  # (D, num_ops)
     operations_named: list[str]  # (D, num_ops)
@@ -64,7 +65,7 @@ class DAGExample:
         return self.__str__()
 
     def __str__(self):
-        return f"DAGExample(seed={self.seed}, text={self.text}, depth={self.depth}, initial_values={self.initial_values}, signs={self.signs.shape}, digits={self.digits.shape}, operations={self.operations.shape}, operations_named={self.operations_named}, did_expand={self.did_expand}, did_simplify={self.did_simplify}, final_value_sympy={self.final_value_sympy}, final_value_exec={self.final_value_exec}, allowed_operations={self.allowed_operations}, expr={self.expr}, english_conversion_probability={self.english_conversion_probability}, integer_no_decimal_probability={self.integer_no_decimal_probability}, printing_style={self.printing_style})"
+        return f"DAGExample(seed={self.seed}, text={self.text}, depth={self.depth}, initial_values={self.initial_values}, signs={self.signs.shape}, digits={self.digits.shape}, operations={self.operations.shape}, operations_named={self.operations_named}, did_expand={self.did_expand}, did_simplify={self.did_simplify}, final_value_sympy={self.final_value_sympy}, final_value_exec={self.final_value_exec}, allowed_operations={self.allowed_operations}, expr={self.expr}, english_conversion_probability={self.english_conversion_probability}, integer_no_decimal_probability={self.integer_no_decimal_probability}, printing_style={self.printing_style}, base={self.base})"
 
 
 def generate_uniform_digit_number(
@@ -439,9 +440,7 @@ def plan_to_tensors(
             ignore_clip=True,
         )
 
-        final_value_exec = (
-            final_sgn * torch.pow(torch.tensor(10.0, dtype=final_log.dtype), final_log)
-        ).item()
+        final_value_exec = (final_sgn * torch.exp(final_log)).item()
 
     # Return structure dict format for predictor training
     if depth is None:

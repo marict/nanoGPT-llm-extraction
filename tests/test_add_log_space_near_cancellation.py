@@ -21,9 +21,9 @@ def test_specific_failing_case():
 
     # Convert to sign/log representation
     sx = torch.tensor([1.0], dtype=torch.float64)
-    lx = torch.tensor([math.log10(abs(val_x))], dtype=torch.float64)
+    lx = torch.tensor([math.log(abs(val_x))], dtype=torch.float64)
     sy = torch.tensor([-1.0], dtype=torch.float64)
-    ly = torch.tensor([math.log10(abs(val_y))], dtype=torch.float64)
+    ly = torch.tensor([math.log(abs(val_y))], dtype=torch.float64)
 
     print(f"Input values: {val_x} + ({val_y}) = {expected}")
     print(f"Log magnitudes: lx={lx.item():.6f}, ly={ly.item():.6f}")
@@ -33,7 +33,7 @@ def test_specific_failing_case():
     result_sgn, result_log = add_log_space(sx, lx, sy, ly, ignore_clip=True)
 
     # Convert back to linear value
-    result_value = result_sgn.item() * (10 ** result_log.item())
+    result_value = result_sgn.item() * math.exp(result_log.item())
 
     print(f"Result: {result_value}")
     print(f"Expected: {expected}")
@@ -71,13 +71,13 @@ def test_near_cancellation_cases():
 
         # Convert to sign/log representation
         sx = torch.tensor([1.0 if val_x >= 0 else -1.0], dtype=torch.float64)
-        lx = torch.tensor([math.log10(abs(val_x))], dtype=torch.float64)
+        lx = torch.tensor([math.log(abs(val_x))], dtype=torch.float64)
         sy = torch.tensor([1.0 if val_y >= 0 else -1.0], dtype=torch.float64)
-        ly = torch.tensor([math.log10(abs(val_y))], dtype=torch.float64)
+        ly = torch.tensor([math.log(abs(val_y))], dtype=torch.float64)
 
         # Test add_log_space
         result_sgn, result_log = add_log_space(sx, lx, sy, ly, ignore_clip=True)
-        result_value = result_sgn.item() * (10 ** result_log.item())
+        result_value = result_sgn.item() * math.exp(result_log.item())
 
         rel_error = (
             abs(result_value - expected) / abs(expected)
@@ -110,13 +110,13 @@ def test_normal_cases_still_work():
 
         # Convert to sign/log representation
         sx = torch.tensor([1.0 if val_x >= 0 else -1.0], dtype=torch.float64)
-        lx = torch.tensor([math.log10(abs(val_x))], dtype=torch.float64)
+        lx = torch.tensor([math.log(abs(val_x))], dtype=torch.float64)
         sy = torch.tensor([1.0 if val_y >= 0 else -1.0], dtype=torch.float64)
-        ly = torch.tensor([math.log10(abs(val_y))], dtype=torch.float64)
+        ly = torch.tensor([math.log(abs(val_y))], dtype=torch.float64)
 
         # Test add_log_space
         result_sgn, result_log = add_log_space(sx, lx, sy, ly, ignore_clip=True)
-        result_value = result_sgn.item() * (10 ** result_log.item())
+        result_value = result_sgn.item() * math.exp(result_log.item())
 
         rel_error = (
             abs(result_value - expected) / abs(expected)
@@ -140,15 +140,13 @@ def test_batch_near_cancellation():
 
     # Convert to tensors
     sx = torch.tensor([1.0 if vx >= 0 else -1.0 for vx in vals_x], dtype=torch.float64)
-    lx = torch.tensor([math.log10(abs(vx)) for vx in vals_x], dtype=torch.float64)
+    lx = torch.tensor([math.log(abs(vx)) for vx in vals_x], dtype=torch.float64)
     sy = torch.tensor([1.0 if vy >= 0 else -1.0 for vy in vals_y], dtype=torch.float64)
-    ly = torch.tensor([math.log10(abs(vy)) for vy in vals_y], dtype=torch.float64)
+    ly = torch.tensor([math.log(abs(vy)) for vy in vals_y], dtype=torch.float64)
 
     # Test batch operation
     result_sgn, result_log = add_log_space(sx, lx, sy, ly, ignore_clip=True)
-    result_values = (
-        result_sgn * torch.pow(torch.tensor(10.0, dtype=torch.float64), result_log)
-    ).tolist()
+    result_values = (result_sgn * torch.exp(result_log)).tolist()
 
     for i, (result, expect) in enumerate(zip(result_values, expected)):
         rel_error = abs(result - expect) / abs(expect) if expect != 0 else abs(result)

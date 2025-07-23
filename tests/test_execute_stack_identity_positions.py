@@ -67,5 +67,5 @@ def test_identity_operations(test_case):
     )
 
     # Convert result to value and verify
-    result = final_sgn.item() * (10 ** final_log.item())
+    result = final_sgn.item() * math.exp(final_log.item())
     assert math.isclose(result, expected, rel_tol=1e-4, abs_tol=1e-4)

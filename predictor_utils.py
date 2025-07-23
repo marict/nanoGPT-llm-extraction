@@ -163,12 +163,10 @@ def _compute_value_loss(
         pred_magnitude = (digits_vals * weights).sum(-1)  # (B,T,N)
 
         # Convert to log space (clamp for numerical stability)
-        pred_log_magnitude = torch.log10(pred_magnitude.clamp(min=1e-8)).to(
-            torch.float32
-        )
+        pred_log_magnitude = torch.log(pred_magnitude.clamp(min=1e-8)).to(torch.float32)
 
         # Target log magnitudes
-        target_log_magnitude = torch.log10(target_initial_values.abs() + 1e-8).to(
+        target_log_magnitude = torch.log(target_initial_values.abs() + 1e-8).to(
             torch.float32
         )
 
@@ -200,11 +198,11 @@ def _compute_exec_loss(
     cfg,
     device_type: str,
 ) -> torch.Tensor:
-    """Execution loss using log10 magnitudes directly (avoids 10** blow-up)."""
+    """Execution loss using natural log magnitudes directly (avoids exp** blow-up)."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
 
-        # Execute: returns sign tensor and log10(|value|) tensor
-        pred_final_sgn, pred_final_log10 = execute_stack(
+        # Execute: returns sign tensor and ln(|value|) tensor
+        pred_final_sgn, pred_final_ln = execute_stack(
             pred_sgn,
             pred_digit_probs,
             pred_ops,
@@ -215,29 +213,27 @@ def _compute_exec_loss(
         )
 
         # Flatten and ensure float32 for smooth_l1_loss compatibility
-        pred_final_log10 = pred_final_log10.reshape(-1).to(torch.float32)
+        pred_final_ln = pred_final_ln.reshape(-1).to(torch.float32)
         pred_final_sgn = pred_final_sgn.reshape(-1).to(torch.float32)
         target_flat = target_final_exec.reshape(-1).to(torch.float32)
 
-        # Target log10 magnitude - ensure float32
-        tgt_log10 = torch.log10(target_flat.abs() + 1e-8).to(torch.float32)
+        # Target natural log magnitude - ensure float32
+        tgt_ln = torch.log(target_flat.abs() + 1e-8).to(torch.float32)
 
         # Magnitude loss components (inlined from safe_big_loss):
         # A) Huber loss in log space (weight 1.0)
-        log_loss = F.smooth_l1_loss(pred_final_log10, tgt_log10, beta=1.0)
+        log_loss = F.smooth_l1_loss(pred_final_ln, tgt_ln, beta=1.0)
 
         # B) Relative multiplicative error approximation (reduced weight and clamped)
-        log_diff = (
-            (pred_final_log10 - tgt_log10).abs().clamp(max=6.0)
-        )  # Reduced from 12.0
+        log_diff = (pred_final_ln - tgt_ln).abs().clamp(max=6.0)  # Reduced from 12.0
         # Clamp the exponential to prevent massive values
-        rel_term = (10**log_diff - 1.0).clamp(
+        rel_term = (torch.exp(log_diff) - 1.0).clamp(
             max=100.0
         )  # Prevent massive relative errors
         rel_loss = 0.01 * rel_term.mean()  # Reduced weight from 0.2 to 0.01
 
-        # C) Overflow penalty (weight 0.05)
-        overflow_pen = 0.05 * (pred_final_log10.abs() > 12.0).float().mean()
+        # C) Overflow penalty (weight 0.05) - using natural log bounds
+        overflow_pen = 0.05 * (pred_final_ln.abs() > 27.6).float().mean()
 
         mag_loss = log_loss + rel_loss + overflow_pen
 
@@ -615,14 +611,8 @@ def evaluate_dag_model(
                 )
 
                 # Convert to real numbers
-                tgt_final_val = tgt_final_sgn * torch.pow(
-                    torch.tensor(10.0, device=device, dtype=tgt_final_log.dtype),
-                    tgt_final_log,
-                )
-                pred_final_val = pred_final_sgn * torch.pow(
-                    torch.tensor(10.0, device=device, dtype=pred_final_log.dtype),
-                    pred_final_log,
-                )
+                tgt_final_val = tgt_final_sgn * torch.exp(tgt_final_log)
+                pred_final_val = pred_final_sgn * torch.exp(pred_final_log)
 
                 final_mse = F.mse_loss(pred_final_val, tgt_final_val)
 
@@ -669,6 +659,7 @@ def evaluate_dag_model(
                     print(f"Sample RNG seed: {sample_seed}")
                     print(f"Depth: {sample_obj.depth}")
                     print(f"Max digits: {sample_obj.max_digits}")
+                    print(f"Base: {sample_obj.base}")
                     print(f"Max decimal places: {sample_obj.max_decimal_places}")
                     print(f"Printing style: {sample_obj.printing_style}")
                     print(

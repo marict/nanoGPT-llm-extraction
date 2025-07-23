@@ -95,7 +95,7 @@ def run_execute_stack(initial_values, operations, max_digits=4, max_decimal_plac
     )
 
     # The dag stores zeros as a scaled value.
-    soft_zero = max_digits + max_decimal_places - math.log10(MIN_CLAMP)
+    soft_zero = max_digits + max_decimal_places - math.log(MIN_CLAMP)
     if final_log.item() - soft_zero < 1e-6:
         final_log = torch.tensor(0.0)
 
@@ -122,7 +122,7 @@ def test_single_op_correctness(op_name):
     mag = digits_to_magnitude(
         digit_probs[0, 0], max_digits=4, max_decimal_places=6, base=10
     )
-    log = torch.log10(mag.clamp_min(1e-6))
+    log = torch.log(mag.clamp_min(1e-6))
 
     ref_sgn, ref_log = OP_FUNCS[OP_NAMES.index(op_name)](
         sgn[0:1], log[0:1], sgn[1:2], log[1:2]
@@ -136,7 +136,7 @@ def test_single_op_correctness(op_name):
     # Apply the same soft_zero logic that run_execute_stack uses
     max_digits, max_decimal_places = 4, 6
 
-    soft_zero = max_digits + max_decimal_places - math.log10(MIN_CLAMP)
+    soft_zero = max_digits + max_decimal_places - math.log(MIN_CLAMP)
     if ref_log - soft_zero < 1e-6:
         ref_log = 0.0
 

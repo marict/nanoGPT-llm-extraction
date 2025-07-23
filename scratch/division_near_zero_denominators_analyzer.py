@@ -100,7 +100,7 @@ def debug_execute_stack_directly(example):
         # Extract result
         sgn = final_sgn[0, 0].cpu()
         log_val = final_log[0, 0].cpu()
-        direct_result = float(sgn * (10**log_val))
+        direct_result = float(sgn * math.exp(log_val))
 
         print(f"\nDIRECT EXECUTE_STACK RESULT: {direct_result:.8g}")
         print(f"EXAMPLE'S FINAL_VALUE_EXEC:  {example.final_value_exec:.8g}")
