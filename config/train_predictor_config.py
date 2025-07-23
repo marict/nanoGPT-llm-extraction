@@ -13,7 +13,7 @@ clear_previous_checkpoints = False
 reload_reset_iters = False
 
 # Model initialization
-init_from = "/runpod-volume/checkpoints/vthtoes0nb3rd6-resume_add_digit_tau/ckpt_predictor_pretrain.pt"
+# init_from = "/runpod-volume/checkpoints/vthtoes0nb3rd6-resume_add_digit_tau/ckpt_predictor_pretrain.pt"
 # init_from = "scratch"
 
 # Dataset configuration
@@ -79,7 +79,7 @@ sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
 value_loss_weight = 1.0
-exec_loss_weight = 0.5
+exec_loss_weight = 0
 
 # Exec loss smoothing to prevent spikes
 exec_loss_ema_decay = 0.95  # EMA decay factor (0.95 = keep 95% of history)
