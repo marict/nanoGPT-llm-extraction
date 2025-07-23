@@ -306,14 +306,19 @@ def generate_expression(
 
 
 def float_to_digit_onehot(
-    value: float, max_digits: int, max_decimal_places: int
+    value: float, max_digits: int, max_decimal_places: int, base: int = 10
 ) -> torch.Tensor:
-    """Convert a float into a one-hot tensor of shape (D, 10) where D = max_digits + max_decimal_places.
+    """Convert a float into a one-hot tensor of shape (D, base) where D = max_digits + max_decimal_places.
 
     The number is first clipped to the largest representable value to avoid overflow.  The integer part is
     left-padded with zeros and the fractional part is right-padded with zeros so that their total length
     equals *max_digits + max_decimal_places*.
     """
+    # For now, only base 10 is supported in this function
+    if base != 10:
+        raise NotImplementedError(
+            f"float_to_digit_onehot only supports base 10, got base {base}"
+        )
 
     # Clip magnitude so that it fits in the available digits
     limit = 10**max_digits - 10 ** (-max_decimal_places)
@@ -347,7 +352,7 @@ def float_to_digit_onehot(
     D = max_digits + max_decimal_places
     assert len(s_digits) == D, f"Expected {D} digits, got {len(s_digits)}"
 
-    one_hot = torch.zeros(D, 10)
+    one_hot = torch.zeros(D, base)
     for i, ch in enumerate(s_digits):
         one_hot[i, int(ch)] = 1.0
     return one_hot
@@ -360,6 +365,7 @@ def plan_to_tensors(
     *,
     max_digits: int,
     max_decimal_places: int,
+    base: int = 10,
     depth: int | None = None,
     allowed_operations: list[str] | None = None,
     _print_exec_intermediates: bool = False,
@@ -370,9 +376,9 @@ def plan_to_tensors(
 
     digits_onehots: list[torch.Tensor] = []
     for v in initial_values:
-        one_hot = float_to_digit_onehot(v, max_digits, max_decimal_places)
+        one_hot = float_to_digit_onehot(v, max_digits, max_decimal_places, base)
         digits_onehots.append(one_hot)
-    # (num_nodes, D, 10)
+    # (num_nodes, D, base)
     digits_tensor = torch.stack(digits_onehots, dim=0)
 
     # Convert operations to one-hot encoded tensors
@@ -397,6 +403,7 @@ def plan_to_tensors(
             op_probs,
             max_digits=max_digits,
             max_decimal_places=max_decimal_places,
+            base=base,
             ignore_clip=True,
             _print_exec_intermediates=_print_exec_intermediates,
         )
@@ -415,7 +422,7 @@ def plan_to_tensors(
     initial_sgn = torch.zeros(num_scratch_nodes)
     initial_log = torch.zeros(num_scratch_nodes)
     digits_template = torch.zeros(
-        num_scratch_nodes, max_digits + max_decimal_places, 10
+        num_scratch_nodes, max_digits + max_decimal_places, base
     )
 
     # Fill tensors from the computed values up to the available nodes
@@ -749,6 +756,8 @@ class DAGStructureDataset:
         batched_initial_sgn = torch.zeros(batch_size, max_nodes)
         batched_initial_log = torch.zeros(batch_size, max_nodes)
         D_total = self.max_digits + self.max_decimal_places
+        # NOTE: Hardcoded to base 10 since data generation currently only supports base 10
+        # This is consistent with the validation check in float_to_digit_onehot
         batched_initial_digits = torch.zeros(batch_size, max_nodes, D_total, 10)
         batched_operation_probs = torch.zeros(batch_size, max_depth, len(OP_NAMES))
         batched_depths = torch.zeros(batch_size, dtype=torch.long)

@@ -11,8 +11,16 @@ from models.dag_model import (LOG_LIM, MIN_CLAMP, OP_FUNCS, OP_NAMES,
 # -----------------------------------------------------------------------------
 
 
-def float_to_digit_onehot(value: float, max_digits: int, max_decimal_places: int):
-    """Return (D,10) one-hot tensor for the absolute value of *value*."""
+def float_to_digit_onehot(
+    value: float, max_digits: int, max_decimal_places: int, base: int = 10
+):
+    """Return (D,base) one-hot tensor for the absolute value of *value*."""
+    # For now, only base 10 is supported in this test helper
+    if base != 10:
+        raise NotImplementedError(
+            f"Test helper float_to_digit_onehot only supports base 10, got base {base}"
+        )
+
     limit = 10**max_digits - 10 ** (-max_decimal_places)
     abs_val = min(abs(value), limit)
 
@@ -22,7 +30,7 @@ def float_to_digit_onehot(value: float, max_digits: int, max_decimal_places: int
     frac_part = (frac_part + "0" * max_decimal_places)[:max_decimal_places]
     digits = int_part + frac_part
 
-    one_hot = torch.zeros(len(digits), 10, dtype=torch.float32)
+    one_hot = torch.zeros(len(digits), base, dtype=torch.float32)
     for i, ch in enumerate(digits):
         one_hot[i, int(ch)] = 1.0
     return one_hot
@@ -82,6 +90,7 @@ def run_execute_stack(initial_values, operations, max_digits=4, max_decimal_plac
         op_probs,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
+        base=10,
         ignore_clip=True,
     )
 
@@ -107,11 +116,13 @@ def test_single_op_correctness(op_name):
 
     # Derive sign/log from helper to compare with reference op funcs
     sgn = sign_tensor[0, 0]
-    mag = (digit_probs[0, 0] * torch.arange(10)).sum(-1)
-    int_weights = 10 ** torch.arange(3, -1, -1)
-    frac_weights = 10 ** torch.arange(-1, -7, -1)
-    weights = torch.cat((int_weights, frac_weights))
-    log = torch.log10((mag * weights).sum(-1).clamp_min(1e-6))
+    # Use the base-aware digits_to_magnitude function
+    from predictor_utils import digits_to_magnitude
+
+    mag = digits_to_magnitude(
+        digit_probs[0, 0], max_digits=4, max_decimal_places=6, base=10
+    )
+    log = torch.log10(mag.clamp_min(1e-6))
 
     ref_sgn, ref_log = OP_FUNCS[OP_NAMES.index(op_name)](
         sgn[0:1], log[0:1], sgn[1:2], log[1:2]
@@ -241,6 +252,7 @@ def test_stack_underflow_error():
             op_probs,
             max_digits=4,
             max_decimal_places=6,
+            base=10,
         )
 
 
@@ -270,6 +282,7 @@ def test_gradient_propagation():
         op_probs,
         max_digits=4,
         max_decimal_places=6,
+        base=10,
     )
     loss = (final_log + final_sgn).sum()
     loss.backward()
@@ -306,6 +319,7 @@ def test_random_plans_smoke():
             op_probs,
             max_digits=4,
             max_decimal_places=6,
+            base=10,
         )
         assert torch.isfinite(final_sgn).all()
         assert torch.isfinite(final_log).all()

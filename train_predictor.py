@@ -572,7 +572,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                             "value_loss": cfg.value_loss_weight * losses["value_loss"],
                             "exec_loss": (
                                 cfg.exec_loss_weight * losses["exec_loss"]
-                                if torch.isfinite(losses["exec_loss"]).all()
+                                if not cfg.check_nans
+                                or torch.isfinite(losses["exec_loss"]).all()
                                 else torch.tensor(
                                     0.0, device=losses["exec_loss"].device
                                 )
@@ -651,15 +652,16 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 # Backward pass
                 scaler.scale(loss).backward()
 
-                # Check for NaN/Inf gradients in training (not just analysis)
-                for n, p in model.named_parameters():
-                    if p.grad is not None and (
-                        torch.isnan(p.grad).any() or torch.isinf(p.grad).any()
-                    ):
-                        print(
-                            f"[GRAD NAN] {n}  →  min={p.grad.min():.3e}  max={p.grad.max():.3e}"
-                        )
-                        break
+                # Check for NaN/Inf gradients in training (conditional on config)
+                if cfg.check_nans:
+                    for n, p in model.named_parameters():
+                        if p.grad is not None and (
+                            torch.isnan(p.grad).any() or torch.isinf(p.grad).any()
+                        ):
+                            print(
+                                f"[GRAD NAN] {n}  →  min={p.grad.min():.3e}  max={p.grad.max():.3e}"
+                            )
+                            break
 
             # Optimization step
             if cfg.grad_clip > 0:

@@ -36,6 +36,6 @@ def test_leading_trailing_zero_rendering(
     one_hot = _string_to_digit_onehot(digit_str)
 
     # Compute magnitude using utility under test
-    mag = digits_to_magnitude(one_hot, max_digits, max_decimal_places)
+    mag = digits_to_magnitude(one_hot, max_digits, max_decimal_places, base=10)
 
     assert pytest.approx(mag.item(), rel=1e-6) == expected

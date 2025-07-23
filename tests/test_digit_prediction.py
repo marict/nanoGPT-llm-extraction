@@ -74,7 +74,10 @@ class TestDigitPrediction(unittest.TestCase):
             # Compute log magnitudes for comparison
             magnitude_from_log = torch.log(
                 digits_to_magnitude(
-                    digit_probs, max_digits=max_digits, max_decimal_places=max_decimals
+                    digit_probs,
+                    max_digits=max_digits,
+                    max_decimal_places=max_decimals,
+                    base=10,
                 ).clamp_min(1e-6)
             ) / math.log(10.0)
 
@@ -83,6 +86,7 @@ class TestDigitPrediction(unittest.TestCase):
             digit_probs,
             max_digits=max_digits,
             max_decimal_places=max_decimals,
+            base=10,
         )  # (B,T,N)
 
         # They should match closely – both derive from the same probabilities.

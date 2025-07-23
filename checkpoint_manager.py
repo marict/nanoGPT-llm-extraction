@@ -684,6 +684,7 @@ class CheckpointManager:
                 "max_decimal_places": (saved_cfg or {}).get(
                     "max_decimal_places", getattr(cfg, "max_decimal_places", 6)
                 ),
+                "base": (saved_cfg or {}).get("base", getattr(cfg, "base", 10)),
             }
             model_config = GPTConfig(**model_cfg_dict)
             model = GPT(model_config)
@@ -709,6 +710,7 @@ class CheckpointManager:
                 "max_decimal_places": (saved_cfg or {}).get(
                     "max_decimal_places", getattr(cfg, "max_decimal_places", 6)
                 ),
+                "base": (saved_cfg or {}).get("base", getattr(cfg, "base", 10)),
             }
             model_config = PredictorOnlyConfig(**model_cfg_dict)
             model = PredictorOnlyModel(model_config)

@@ -337,11 +337,12 @@ class DAGPlanPredictor(nn.Module):
         # Digits per number (fixed width)
         self.max_digits = config.max_digits
         self.max_decimal_places = config.max_decimal_places
+        self.base = config.base
         self.digits_per_number = self.max_digits + self.max_decimal_places
 
-        # One sign + 10-way per digit slot per node
+        # One sign + base-way per digit slot per node
         initial_values_output_dim = self.num_scratch_nodes * (
-            1 + self.digits_per_number * 10
+            1 + self.digits_per_number * self.base
         )
         self.initial_values_predictor = nn.Sequential(
             nn.Linear(config.n_embd, config.n_embd),
@@ -356,10 +357,11 @@ class DAGPlanPredictor(nn.Module):
             for node in range(self.num_scratch_nodes):
                 for dig in range(self.digits_per_number):
                     offset = (
-                        digit_bias_start + (node * self.digits_per_number + dig) * 10
+                        digit_bias_start
+                        + (node * self.digits_per_number + dig) * self.base
                     )
                     bias[offset] = 3.0
-                    bias[offset + 1 : offset + 10] = -3.0
+                    bias[offset + 1 : offset + self.base] = -3.0
 
             # Initialize weights for initial_values_predictor
             for layer in self.initial_values_predictor:
@@ -434,13 +436,13 @@ class DAGPlanPredictor(nn.Module):
 
         # Process initial values
         slice_sign = self.num_scratch_nodes
-        slice_digits = self.num_scratch_nodes * self.digits_per_number * 10
+        slice_digits = self.num_scratch_nodes * self.digits_per_number * self.base
 
         digit_logits = initial_values_raw[..., slice_sign : slice_sign + slice_digits]
 
         # Ensure contiguous memory layout before reshaping.
         digit_logits = digit_logits.contiguous().view(
-            B, T, self.num_scratch_nodes, self.digits_per_number, 10
+            B, T, self.num_scratch_nodes, self.digits_per_number, self.base
         )
 
         # Store the last digit logits predicted for logging / compatibility
@@ -449,7 +451,7 @@ class DAGPlanPredictor(nn.Module):
         # Apply learnable temperature scaling to digit logits before softmax
         # Follow the same pattern as operation prediction for consistency
         digit_tau = (F.softplus(self.log_digit_tau) + 1e-4).to(digit_logits.dtype)
-        digit_scale = math.sqrt(10)  # 10 digit classes, same pattern as ops
+        digit_scale = math.sqrt(self.base)  # base digit classes, same pattern as ops
         digit_probs = F.softmax(
             digit_logits * digit_scale / digit_tau, dim=-1
         ).contiguous()
@@ -570,11 +572,12 @@ def _debug_apply_op(op_name: str, second: float, top: float) -> float:
 
 def execute_stack(
     initial_sgn: torch.Tensor,  # (B,T,N) values in [-1,1] (tanh output)
-    digit_probs: torch.Tensor,  # (B,T,N,D,10) – probabilities (softmaxed)
+    digit_probs: torch.Tensor,  # (B,T,N,D,base) – probabilities (softmaxed)
     ops: torch.Tensor,  # (B,T,depth,n_ops) operation probabilities per step
     *,
     max_digits: int,
     max_decimal_places: int,
+    base: int,
     ignore_clip: bool = False,
     _print_exec_intermediates: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -585,10 +588,11 @@ def execute_stack(
 
     Args:
         initial_sgn:  (B,T,N) continuous sign values (range [-1,1])
-        digit_probs: (B,T,N,D,10) probabilities over each digit slot
+        digit_probs: (B,T,N,D,base) probabilities over each digit slot
         ops:         (B,T,depth,n_ops) operation probabilities per step
         max_digits:  number of integer digit slots (D_int)
         max_decimal_places: number of fractional digit slots (D_frac)
+        base: number base for digit representation
 
     Returns:
         final_sgn, final_log: (B,T) tensors representing the output scalar in
@@ -600,22 +604,26 @@ def execute_stack(
             f"max_digits + max_decimal_places ({max_digits + max_decimal_places}) must match digit_probs.shape[3]: ({digit_probs.shape[3]})"
         )
 
-    if max_digits > 10:
+    # Check if max value would exceed LOG_LIM
+    max_value_log = max_digits * math.log10(base)
+    if max_value_log > LOG_LIM:
         raise RuntimeError(
-            f"max_digits ({max_digits}) must be <= 10 because numbers larger than 10¹⁰ would exceed "
-            f"LOG_LIM={LOG_LIM} and be clipped, making sympy comparisons invalid"
+            f"max_digits ({max_digits}) with base ({base}) would create numbers larger than {base}^{max_digits} "
+            f"(log₁₀ ≈ {max_value_log:.1f}) which exceeds LOG_LIM={LOG_LIM} and would be clipped, making sympy comparisons invalid"
         )
 
     # ------------------------------------------------------------------
-    # Digit probabilities tensor must be 5-D: (B, T, N, D, 10)
+    # Digit probabilities tensor must be 5-D: (B, T, N, D, base)
     if digit_probs.dim() != 5:
         raise RuntimeError(
-            "digit_probs tensor must have shape (B, T, N, D, 10); got dim="
+            "digit_probs tensor must have shape (B, T, N, D, base); got dim="
             f"{digit_probs.dim()}"
         )
 
     # Expected digit value per slot to build absolute magnitude
-    digits_values = torch.arange(10, device=digit_probs.device, dtype=digit_probs.dtype)
+    digits_values = torch.arange(
+        base, device=digit_probs.device, dtype=digit_probs.dtype
+    )
     expected_digits = (digit_probs * digits_values).sum(-1)  # (B,T,N,D)
 
     # Convert expected digits to log magnitude
@@ -628,7 +636,7 @@ def execute_stack(
         dtype=digit_probs.dtype,
     )
     # Assemble integer value from digits and powers
-    raw_int_value = (expected_digits * (10.0**powers)).sum(-1)  # (B,T,N)
+    raw_int_value = (expected_digits * (float(base) ** powers)).sum(-1)  # (B,T,N)
     # Separate fixed scale (constant)
     scale = max_decimal_places
     raw_int_value = raw_int_value.clamp_min(MIN_CLAMP)
@@ -825,6 +833,7 @@ class DifferentiableDAG(nn.Module):
             operation_probs,
             max_digits=self.plan_predictor.max_digits,
             max_decimal_places=self.plan_predictor.max_decimal_places,
+            base=self.plan_predictor.base,
         )
 
         if ENABLE_DEBUG_NAN_CHECKS:
@@ -842,10 +851,14 @@ class DifferentiableDAG(nn.Module):
         # Convert digit_probs to magnitudes for logging purposes
         digits_vals = (
             digit_probs
-            * torch.arange(10, device=digit_probs.device, dtype=digit_probs.dtype)
+            * torch.arange(
+                self.plan_predictor.base,
+                device=digit_probs.device,
+                dtype=digit_probs.dtype,
+            )
         ).sum(-1)
         int_weights = (
-            10
+            self.plan_predictor.base
             ** torch.arange(
                 self.plan_predictor.max_digits - 1,
                 -1,
@@ -854,7 +867,7 @@ class DifferentiableDAG(nn.Module):
             )
         ).to(digit_probs.dtype)
         frac_weights = (
-            10
+            self.plan_predictor.base
             ** torch.arange(
                 -1,
                 -self.plan_predictor.max_decimal_places - 1,
@@ -896,6 +909,7 @@ class GPTConfig:
     # Digit configuration for initial value prediction
     max_digits: int = 4  # Integer digits
     max_decimal_places: int = 6  # Fractional digits
+    base: int = 10  # Number base for digit prediction (10=decimal, 16=hex, etc.)
 
 
 # Main GPT model

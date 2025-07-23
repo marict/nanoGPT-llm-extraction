@@ -92,6 +92,7 @@ def debug_execute_stack_directly(example):
             ops=operation_probs,
             max_digits=example.max_digits,
             max_decimal_places=example.max_decimal_places,
+            base=10,
             ignore_clip=True,
             _print_exec_intermediates=True,
         )

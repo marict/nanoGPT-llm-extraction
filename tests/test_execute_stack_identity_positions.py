@@ -62,6 +62,7 @@ def test_identity_operations(test_case):
         op_probs,
         max_digits=2,
         max_decimal_places=3,
+        base=10,
         ignore_clip=True,
     )
 

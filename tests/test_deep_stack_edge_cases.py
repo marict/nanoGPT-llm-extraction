@@ -7,7 +7,15 @@ from models.dag_model import LOG_LIM, OP_NAMES, execute_stack  # type: ignore
 # -----------------------------------------------------------------------------
 
 
-def float_to_digit_onehot(value: float, max_digits: int, max_decimal_places: int):
+def float_to_digit_onehot(
+    value: float, max_digits: int, max_decimal_places: int, base: int = 10
+):
+    """Return (D,base) one-hot tensor for the absolute value of *value*."""
+    # For now, only base 10 is supported in this test helper
+    if base != 10:
+        raise NotImplementedError(
+            f"Test helper float_to_digit_onehot only supports base 10, got base {base}"
+        )
 
     limit = 10**max_digits - 10 ** (-max_decimal_places)
     abs_val = min(abs(value), limit)
@@ -16,7 +24,7 @@ def float_to_digit_onehot(value: float, max_digits: int, max_decimal_places: int
     int_part = int_part.zfill(max_digits)[-max_digits:]
     frac_part = (frac_part + "0" * max_decimal_places)[:max_decimal_places]
     digits = int_part + frac_part
-    one_hot = torch.zeros(len(digits), 10, dtype=torch.float32)
+    one_hot = torch.zeros(len(digits), base, dtype=torch.float32)
     for i, ch in enumerate(digits):
         one_hot[i, int(ch)] = 1.0
     return one_hot
@@ -75,6 +83,7 @@ def test_deep_magnitude_clipping():
         op_probs,
         max_digits=4,
         max_decimal_places=6,
+        base=10,
     )
 
     # Ensure outputs are finite and clipped within ±LOG_LIM.

@@ -74,9 +74,9 @@ def _compute_digit_loss(
     device_type: str,
 ) -> torch.Tensor:
     """Compute cross-entropy loss for digit prediction."""
-    B, T, N, D, _ = pred_digit_probs.shape
+    B, T, N, D, base = pred_digit_probs.shape
 
-    # Sanity check: model and dataset must agree on digit slots
+    # Sanity check: model and dataset must agree on digit slots and base
     if target_digits.shape[-2] != D:
         raise ValueError(
             "Shape mismatch between model-predicted digits and target digits: "
@@ -86,6 +86,13 @@ def _compute_digit_loss(
             "propagated via the training config)."
         )
 
+    if target_digits.shape[-1] != base:
+        raise ValueError(
+            "Shape mismatch between model-predicted base and target base: "
+            f"predicted base={base} , target base={target_digits.shape[-1]}. "
+            "Ensure that `base` is set to the same value for both the dataset and the model."
+        )
+
     with torch.amp.autocast(device_type=device_type, enabled=False):
         # Check if predictions and targets are identical (perfect match)
         # This special case should return zero loss
@@ -93,12 +100,14 @@ def _compute_digit_loss(
             return torch.tensor(0.0, device=pred_digit_probs.device)
 
         # Use reshape to handle potential non-contiguous tensors (view can fail)
-        pred_flat = pred_digit_probs.reshape(-1, 10).to(torch.float32)  # (B*T*N*D, 10)
+        pred_flat = pred_digit_probs.reshape(-1, base).to(
+            torch.float32
+        )  # (B*T*N*D, base)
 
         # Expect probabilities - clamp for numerical stability and take log
         log_probs = torch.log(pred_flat.clamp(min=1e-8))
 
-        target_flat = target_digits.reshape(-1, 10)
+        target_flat = target_digits.reshape(-1, base)
         target_idx = target_flat.argmax(dim=-1)
 
         # Mask out positions where the target has no valid digit information (all zeros)
@@ -138,16 +147,16 @@ def _compute_value_loss(
         # This avoids the intermediate step of reconstructing actual values
         device, dtype = pred_digit_probs.device, pred_digit_probs.dtype
         digits_vals = (
-            pred_digit_probs * torch.arange(10, device=device, dtype=dtype)
+            pred_digit_probs * torch.arange(cfg.base, device=device, dtype=dtype)
         ).sum(
             -1
         )  # (..., D)
 
         # Build decimal place weights for log magnitude computation
-        int_weights = 10 ** torch.arange(
+        int_weights = cfg.base ** torch.arange(
             cfg.max_digits - 1, -1, -1, device=device, dtype=dtype
         )
-        frac_weights = 10 ** torch.arange(
+        frac_weights = cfg.base ** torch.arange(
             -1, -cfg.max_decimal_places - 1, -1, device=device, dtype=dtype
         )
         weights = torch.cat((int_weights, frac_weights))  # (D,)
@@ -201,6 +210,7 @@ def _compute_exec_loss(
             pred_ops,
             max_digits=cfg.max_digits,
             max_decimal_places=cfg.max_decimal_places,
+            base=cfg.base,
             ignore_clip=True,  # raw for loss
         )
 
@@ -412,25 +422,29 @@ def digits_to_magnitude(
     digits: torch.Tensor,
     max_digits: int,
     max_decimal_places: int,
+    base: int = 10,
 ) -> torch.Tensor:
     """Convert a digit tensor to absolute magnitude.
 
     Args:
-        digits: (..., D, 10) tensor where the last dimension contains digit
+        digits: (..., D, base) tensor where the last dimension contains digit
             probabilities (or one-hot values) for each decimal place.
         max_digits: integer digits (D1).
         max_decimal_places: fractional digits (D2).
+        base: number base for digit representation.
 
     Returns:
         magnitude: tensor with shape digits.shape[:-2]
     """
     device, dtype = digits.device, digits.dtype
-    digits_vals = (digits * torch.arange(10, device=device, dtype=dtype)).sum(
+    digits_vals = (digits * torch.arange(base, device=device, dtype=dtype)).sum(
         -1
     )  # (..., D)
 
-    int_weights = 10 ** torch.arange(max_digits - 1, -1, -1, device=device, dtype=dtype)
-    frac_weights = 10 ** torch.arange(
+    int_weights = base ** torch.arange(
+        max_digits - 1, -1, -1, device=device, dtype=dtype
+    )
+    frac_weights = base ** torch.arange(
         -1, -max_decimal_places - 1, -1, device=device, dtype=dtype
     )
     weights = torch.cat((int_weights, frac_weights))  # (D,)
@@ -586,6 +600,7 @@ def evaluate_dag_model(
                     tgt_ops_seq,
                     max_digits=cfg.max_digits,
                     max_decimal_places=cfg.max_decimal_places,
+                    base=cfg.base,
                     ignore_clip=False,  # Consistent with training behavior
                 )
 
@@ -595,6 +610,7 @@ def evaluate_dag_model(
                     pred_ops,
                     max_digits=cfg.max_digits,
                     max_decimal_places=cfg.max_decimal_places,
+                    base=cfg.base,
                     ignore_clip=False,  # Consistent with training behavior
                 )
 
@@ -634,6 +650,7 @@ def evaluate_dag_model(
                         pred_digits_vec,
                         cfg.max_digits,
                         cfg.max_decimal_places,
+                        cfg.base,
                     )
 
                     pred_real_vals = (

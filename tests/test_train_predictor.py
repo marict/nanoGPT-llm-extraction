@@ -36,7 +36,7 @@ def _derive_log_from_digits(
     digit_probs: torch.Tensor, max_digits: int, max_decimals: int
 ) -> torch.Tensor:
     """Return log10 magnitudes computed from digit probability tensor."""
-    magnitude = digits_to_magnitude(digit_probs, max_digits, max_decimals)
+    magnitude = digits_to_magnitude(digit_probs, max_digits, max_decimals, base=10)
     return torch.log(magnitude.clamp_min(1e-6)) / math.log(10.0)
 
 
