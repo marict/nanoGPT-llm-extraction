@@ -5,9 +5,9 @@
 name = "predictor_pretrain"
 
 # Training intervals
-eval_interval = 100  # We don't need to do this very often because train is seeing unseen data as well.
+eval_interval = 50  # We don't need to do this very often because train is seeing unseen data as well.
 log_interval = 1  # Log every iteration for better monitoring
-eval_iters = 10  # Reduced from 5 - each eval iter is much more informative
+eval_iters = 10
 eval_only = False
 clear_previous_checkpoints = False
 reload_reset_iters = False
@@ -24,10 +24,10 @@ val_examples_per_batch = 800
 
 # DAG dataset parameters
 max_dag_depth = 6  # Match the model dag_depth for consistency
-# Choose 4 to match the NALU paper
-max_digits = 4
-max_decimal_places = 4
-base = 10
+# The original NALU paper had values in range 9999
+max_digits = 3
+max_decimal_places = 3
+base = 22
 
 # Expression generation settings
 english_conversion_probability = 0.5
