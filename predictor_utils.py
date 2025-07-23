@@ -319,14 +319,23 @@ def compute_gradient_cosines(
     Returns:
         Dictionary with keys like "grad_cosine_sign_loss" and float cosine values
     """
+    # Early validation: check if total_loss is finite (single tensor check)
+    if not torch.isfinite(total_loss):
+        print(f"Warning: total_loss is not finite: {total_loss.item()}")
+        return {f"grad_cosine_{name}": 0.0 for name in weighted_losses.keys()}
+
     # Compute total gradient
-    total_grads = torch.autograd.grad(
-        total_loss,
-        model_parameters,
-        retain_graph=True,
-        create_graph=False,
-        allow_unused=True,
-    )
+    try:
+        total_grads = torch.autograd.grad(
+            total_loss,
+            model_parameters,
+            retain_graph=True,
+            create_graph=False,
+            allow_unused=True,
+        )
+    except RuntimeError as e:
+        print(f"Warning: Could not compute total gradient: {e}")
+        return {f"grad_cosine_{name}": 0.0 for name in weighted_losses.keys()}
 
     # Handle case where some parameters don't contribute to total loss
     total_grads = [
@@ -334,18 +343,25 @@ def compute_gradient_cosines(
         for g, p in zip(total_grads, model_parameters)
     ]
 
-    # Flatten and concatenate total gradient
+    # Flatten and concatenate total gradient (defer NaN check until after computation)
     total_grad_flat = torch.cat([g.flatten() for g in total_grads])
     total_grad_norm_sq = torch.dot(total_grad_flat, total_grad_flat)
 
-    # Avoid division by zero
-    if total_grad_norm_sq < 1e-12:
+    # Combined check: finite and non-zero
+    if not torch.isfinite(total_grad_norm_sq) or total_grad_norm_sq < 1e-12:
+        if not torch.isfinite(total_grad_norm_sq):
+            print(
+                f"Warning: total_grad_norm_sq is not finite: {total_grad_norm_sq.item()}"
+            )
         return {f"grad_cosine_{name}": 0.0 for name in weighted_losses.keys()}
 
     gradient_cosines = {}
 
     for loss_name, loss_value in weighted_losses.items():
-        if loss_value.item() == 0.0:
+        # Quick checks first: finite and non-zero
+        if not torch.isfinite(loss_value) or loss_value.item() == 0.0:
+            if not torch.isfinite(loss_value):
+                print(f"Warning: {loss_name} is not finite: {loss_value.item()}")
             gradient_cosines[f"grad_cosine_{loss_name}"] = 0.0
             continue
 
@@ -369,8 +385,15 @@ def compute_gradient_cosines(
             loss_grad_flat = torch.cat([g.flatten() for g in loss_grads])
 
             # Compute cosine similarity: ⟨g_i, g_total⟩ / ‖g_total‖²
-            cosine = torch.dot(loss_grad_flat, total_grad_flat) / total_grad_norm_sq
-            gradient_cosines[f"grad_cosine_{loss_name}"] = cosine.item()
+            dot_product = torch.dot(loss_grad_flat, total_grad_flat)
+            cosine = dot_product / total_grad_norm_sq
+
+            # Single final check for NaN in result
+            if not torch.isfinite(cosine):
+                print(f"Warning: cosine for {loss_name} is not finite")
+                gradient_cosines[f"grad_cosine_{loss_name}"] = 0.0
+            else:
+                gradient_cosines[f"grad_cosine_{loss_name}"] = cosine.item()
 
         except RuntimeError as e:
             # Handle case where gradient computation fails
