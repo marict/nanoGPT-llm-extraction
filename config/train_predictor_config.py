@@ -10,7 +10,7 @@ log_interval = 1  # Log every iteration for better monitoring
 eval_iters = 10
 eval_only = False
 clear_previous_checkpoints = False
-reload_reset_iters = False
+reload_reset_iters = True
 
 # Model initialization
 init_from = "/runpod-volume/checkpoints/932rfb4cs2izun-resume_add_digit_tau_2/ckpt_predictor_pretrain.pt"
