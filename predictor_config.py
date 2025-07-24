@@ -75,6 +75,9 @@ class DAGTrainConfig(BaseConfig):
     value_loss_weight: float = 1.0
     exec_loss_weight: float = 1.0
 
+    # Curriculum learning (safe default: disabled)
+    enable_curriculum_learning: bool = False
+
     # Random seeds
     seed: int = 42
 

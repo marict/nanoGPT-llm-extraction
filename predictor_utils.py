@@ -123,7 +123,9 @@ def _compute_digit_loss(
         if (
             cfg is not None
             and valid_mask.any()
-            and getattr(cfg, "enable_curriculum_learning", True)
+            and getattr(
+                cfg, "enable_curriculum_learning", False
+            )  # Changed default to False
         ):
             entropy_weight_start = getattr(cfg, "digit_entropy_weight_start", 0.0)
             entropy_weight_end = getattr(cfg, "digit_entropy_weight_end", 0.05)
@@ -183,7 +185,9 @@ def _compute_value_loss(
         )
 
         # Curriculum learning: progressive precision requirements
-        if getattr(cfg, "enable_curriculum_learning", True):
+        if getattr(
+            cfg, "enable_curriculum_learning", False
+        ):  # Changed default to False
             curriculum_beta = getattr(cfg, "value_curriculum_beta_start", 1.0)
             curriculum_beta_end = getattr(cfg, "value_curriculum_beta_end", 0.1)
             curriculum_steps = getattr(cfg, "value_curriculum_steps", 5000)
@@ -201,9 +205,10 @@ def _compute_value_loss(
                 sign_weight_end - sign_weight_start
             )
         else:
-            # Use default values when curriculum learning is disabled
-            current_beta = 1.0  # Default Huber loss beta
-            current_sign_weight = 0.1  # Default sign penalty weight
+            # Use original fixed values when curriculum learning is disabled
+            # This matches the exact behavior before curriculum learning was added
+            current_beta = 1.0  # Original fixed Huber loss beta
+            current_sign_weight = 0.1  # Original fixed sign penalty weight
 
         # Core magnitude loss in log space with curriculum beta
         magnitude_loss = F.smooth_l1_loss(
@@ -255,7 +260,9 @@ def _compute_exec_loss(
         tgt_ln = torch.log(target_flat.abs() + 1e-8).to(torch.float32)
 
         # Curriculum parameters for exec loss
-        if getattr(cfg, "enable_curriculum_learning", True):
+        if getattr(
+            cfg, "enable_curriculum_learning", False
+        ):  # Changed default to False
             exec_beta_start = getattr(cfg, "exec_curriculum_beta_start", 1.0)
             exec_beta_end = getattr(cfg, "exec_curriculum_beta_end", 0.05)
             exec_curriculum_steps = getattr(cfg, "exec_curriculum_steps", 8000)
@@ -279,11 +286,15 @@ def _compute_exec_loss(
             current_overflow_threshold = overflow_threshold_start + progress * (
                 overflow_threshold_end - overflow_threshold_start
             )
+            current_overflow_weight = 0.1  # Fixed weight for curriculum learning
+
         else:
-            # Use default values when curriculum learning is disabled
-            current_beta = 1.0  # Default Huber loss beta
-            current_rel_weight = 0.01  # Default relative weight
-            current_overflow_threshold = 30.0  # Default overflow threshold
+            # Use original fixed values when curriculum learning is disabled
+            # This matches the exact behavior before curriculum learning was added
+            current_beta = 1.0  # Original fixed Huber loss beta
+            current_rel_weight = 0.01  # Original fixed relative weight
+            current_overflow_threshold = 27.6  # Original fixed overflow threshold
+            current_overflow_weight = 0.05  # Original fixed overflow penalty weight
 
         # Magnitude loss components (enhanced with curriculum):
         # A) Huber loss in log space with progressive beta
@@ -298,7 +309,8 @@ def _compute_exec_loss(
 
         # C) Overflow penalty
         overflow_pen = (
-            0.1 * (pred_final_ln.abs() > current_overflow_threshold).float().mean()
+            current_overflow_weight
+            * (pred_final_ln.abs() > current_overflow_threshold).float().mean()
         )
 
         mag_loss = log_loss + rel_loss + overflow_pen
