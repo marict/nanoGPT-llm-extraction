@@ -114,33 +114,6 @@ def _compute_digit_loss(
         else:
             digit_loss = torch.tensor(0.0, device=pred_digit_logits.device)
 
-        # Add entropy regularization for sharper predictions (curriculum)
-        if (
-            cfg is not None
-            and valid_mask.any()
-            and getattr(
-                cfg, "enable_curriculum_learning", False
-            )  # Changed default to False
-        ):
-            entropy_weight_start = getattr(cfg, "digit_entropy_weight_start", 0.0)
-            entropy_weight_end = getattr(cfg, "digit_entropy_weight_end", 0.05)
-            entropy_curriculum_steps = getattr(
-                cfg, "digit_entropy_curriculum_steps", 6000
-            )
-
-            progress = min(iter_num / entropy_curriculum_steps, 1.0)
-            current_entropy_weight = entropy_weight_start + progress * (
-                entropy_weight_end - entropy_weight_start
-            )
-
-            # Entropy penalty: encourage confidence (low entropy)
-            # Convert logits to probabilities for entropy computation
-            pred_probs = F.softmax(pred_logits_flat, dim=-1)
-            pred_entropy = (
-                -(pred_probs[valid_mask] * log_probs[valid_mask]).sum(dim=-1).mean()
-            )
-            digit_loss = digit_loss + current_entropy_weight * pred_entropy
-
     return digit_loss
 
 
@@ -185,31 +158,9 @@ def _compute_value_loss(
             torch.float32
         )
 
-        # Curriculum learning: progressive precision requirements
-        if getattr(
-            cfg, "enable_curriculum_learning", False
-        ):  # Changed default to False
-            curriculum_beta = getattr(cfg, "value_curriculum_beta_start", 1.0)
-            curriculum_beta_end = getattr(cfg, "value_curriculum_beta_end", 0.1)
-            curriculum_steps = getattr(cfg, "value_curriculum_steps", 5000)
-
-            # Linear annealing from start to end beta over curriculum_steps
-            progress = min(iter_num / curriculum_steps, 1.0)
-            current_beta = curriculum_beta + progress * (
-                curriculum_beta_end - curriculum_beta
-            )
-
-            # Curriculum for sign penalty weight
-            sign_weight_start = getattr(cfg, "sign_penalty_start", 0.05)
-            sign_weight_end = getattr(cfg, "sign_penalty_end", 0.2)
-            current_sign_weight = sign_weight_start + progress * (
-                sign_weight_end - sign_weight_start
-            )
-        else:
-            # Use original fixed values when curriculum learning is disabled
-            # This matches the exact behavior before curriculum learning was added
-            current_beta = 1.0  # Original fixed Huber loss beta
-            current_sign_weight = 0.1  # Original fixed sign penalty weight
+        # Curriculum code removed – use fixed constants
+        current_beta = 1.0  # Fixed Huber loss beta
+        current_sign_weight = 0.1  # Fixed sign penalty weight
 
         # Core magnitude loss in log space with curriculum beta
         magnitude_loss = F.smooth_l1_loss(
@@ -262,42 +213,11 @@ def _compute_exec_loss(
         # Target natural log magnitude - ensure float32
         tgt_ln = torch.log(target_flat.abs() + 1e-8).to(torch.float32)
 
-        # Curriculum parameters for exec loss
-        if getattr(
-            cfg, "enable_curriculum_learning", False
-        ):  # Changed default to False
-            exec_beta_start = getattr(cfg, "exec_curriculum_beta_start", 1.0)
-            exec_beta_end = getattr(cfg, "exec_curriculum_beta_end", 0.05)
-            exec_curriculum_steps = getattr(cfg, "exec_curriculum_steps", 8000)
-
-            # Progressive precision requirements
-            progress = min(iter_num / exec_curriculum_steps, 1.0)
-            current_beta = exec_beta_start + progress * (
-                exec_beta_end - exec_beta_start
-            )
-
-            # Adaptive scaling: harder to satisfy as training progresses
-            rel_weight_start = getattr(cfg, "exec_rel_weight_start", 0.005)
-            rel_weight_end = getattr(cfg, "exec_rel_weight_end", 0.03)
-            current_rel_weight = rel_weight_start + progress * (
-                rel_weight_end - rel_weight_start
-            )
-
-            # Overflow penalty with progressive strictness
-            overflow_threshold_start = getattr(cfg, "exec_overflow_start", 30.0)
-            overflow_threshold_end = getattr(cfg, "exec_overflow_end", 25.0)
-            current_overflow_threshold = overflow_threshold_start + progress * (
-                overflow_threshold_end - overflow_threshold_start
-            )
-            current_overflow_weight = 0.1  # Fixed weight for curriculum learning
-
-        else:
-            # Use original fixed values when curriculum learning is disabled
-            # This matches the exact behavior before curriculum learning was added
-            current_beta = 1.0  # Original fixed Huber loss beta
-            current_rel_weight = 0.01  # Original fixed relative weight
-            current_overflow_threshold = 27.6  # Original fixed overflow threshold
-            current_overflow_weight = 0.05  # Original fixed overflow penalty weight
+        # Curriculum code removed – use fixed constants
+        current_beta = 1.0
+        current_rel_weight = 0.01
+        current_overflow_threshold = 27.6
+        current_overflow_weight = 0.05
 
         # Magnitude loss components (enhanced with curriculum):
         # A) Huber loss in log space with progressive beta
