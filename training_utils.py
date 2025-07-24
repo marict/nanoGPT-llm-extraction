@@ -158,7 +158,7 @@ class BaseConfig:
     overwrite_previous: bool = True
 
     # Evaluation
-    eval_only: bool = False
+    eval_once: bool = False
     eval_interval: int = 250
     log_interval: int = 1
     eval_iters: int = 200

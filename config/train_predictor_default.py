@@ -13,11 +13,11 @@ name = "dag_predictor-default"
 # Training intervals
 # ------------------
 # Evaluate every step and keep logs chatty for debugging.
-max_iters = 33
+max_iters = 10
 eval_interval = 3
 log_interval = 1
 eval_iters = 1
-eval_only = False
+eval_once = False
 always_save_checkpoint = True
 # Remove any stale checkpoints when starting a new run.
 clear_previous_checkpoints = True

@@ -8,7 +8,7 @@ name = "predictor_pretrain"
 eval_interval = 50
 log_interval = 10
 eval_iters = 10
-eval_only = False
+eval_once = False
 clear_previous_checkpoints = False
 reload_reset_iters = False
 

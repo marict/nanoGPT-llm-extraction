@@ -2,7 +2,7 @@
 
 batch_size = 8
 eval_iters = 500
-eval_only = True
+eval_once = True
 init_from = "resume"
 
 dag_depth = 4

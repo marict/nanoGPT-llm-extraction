@@ -724,7 +724,10 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                 except Exception as e:
                     print(f"Warning: Error during evaluation: {e}")
 
-            if iter_num == 0 and cfg.eval_only:
+            if iter_num == 0 and cfg.eval_once:
+                print(
+                    "🎯 EVAL_ONCE: Evaluation completed. Exiting after single evaluation run."
+                )
                 break
 
             try:

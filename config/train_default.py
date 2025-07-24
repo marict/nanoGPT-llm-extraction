@@ -4,7 +4,7 @@
 eval_interval = 3
 log_interval = 1
 eval_iters = 1
-eval_only = False
+eval_once = False
 always_save_checkpoint = True
 init_from = "scratch"
 

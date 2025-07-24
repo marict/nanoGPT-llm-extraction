@@ -446,7 +446,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 model.train()
 
             # Early stopping
-            if iter_num == 0 and cfg.eval_only:
+            if iter_num == 0 and cfg.eval_once:
+                print(
+                    "🎯 EVAL_ONCE: Evaluation completed. Exiting after single evaluation run."
+                )
                 break
 
             # Forward and backward pass

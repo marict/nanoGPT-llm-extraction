@@ -97,7 +97,7 @@ class TestDAGTrainConfig(unittest.TestCase):
             "eval_interval",
             "log_interval",
             "eval_iters",
-            "eval_only",
+            "eval_once",
             "always_save_checkpoint",
             "clear_previous_checkpoints",
             "init_from",
