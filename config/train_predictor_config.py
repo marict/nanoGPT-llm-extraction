@@ -13,8 +13,8 @@ clear_previous_checkpoints = False
 reload_reset_iters = False
 
 # Model initialization
-# init_from = "/runpod-volume/checkpoints/vthtoes0nb3rd6-resume_add_digit_tau/ckpt_predictor_pretrain.pt"
-init_from = "scratch"
+init_from = "/runpod-volume/checkpoints/932rfb4cs2izun-resume_add_digit_tau_2/ckpt_predictor_pretrain.pt"
+# init_from = "scratch"
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
@@ -25,9 +25,9 @@ val_examples_per_batch = 800
 # DAG dataset parameters
 max_dag_depth = 6  # Match the model dag_depth for consistency
 # The original NALU paper had values in range 9999
-max_digits = 3
-max_decimal_places = 3
-base = 22
+max_digits = 4
+max_decimal_places = 4
+base = 10
 
 # Expression generation settings
 english_conversion_probability = 0.5
@@ -86,7 +86,7 @@ exec_loss_weight = 0.5
 # ================================================================
 
 # Global curriculum learning toggle
-enable_curriculum_learning = True  # Set to False to disable all curriculum learning
+enable_curriculum_learning = False  # Set to False to disable all curriculum learning
 
 # Value Loss Curriculum (Initial Values)
 value_curriculum_beta_start = 1.0  # Start lenient (larger Huber threshold)
