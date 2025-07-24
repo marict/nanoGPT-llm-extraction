@@ -127,7 +127,6 @@ def log_git_commit_info() -> None:
             commit_msg = "no message"
 
         print(f"  Message: {commit_msg}")
-        print(f"Repository info: {commit_hash[:12]} on {branch} - {commit_msg}")
 
     except subprocess.CalledProcessError as e:
         print(f"  ERROR: Git command failed: {e}")
