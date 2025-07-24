@@ -10,7 +10,7 @@ log_interval = 1  # Log every iteration for better monitoring
 eval_iters = 10
 eval_only = False
 clear_previous_checkpoints = False
-reload_reset_iters = True
+reload_reset_iters = False
 
 # Model initialization
 init_from = "/runpod-volume/checkpoints/932rfb4cs2izun-resume_add_digit_tau_2/ckpt_predictor_pretrain.pt"
@@ -86,7 +86,7 @@ exec_loss_weight = 0.5
 # ================================================================
 
 # Global curriculum learning toggle
-enable_curriculum_learning = False  # Set to False to disable all curriculum learning
+enable_curriculum_learning = True  # Set to False to disable all curriculum learning
 
 # Value Loss Curriculum (Initial Values)
 value_curriculum_beta_start = 1.0  # Start lenient (larger Huber threshold)
