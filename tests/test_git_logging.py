@@ -35,14 +35,14 @@ def test_log_git_commit_info_success():
 
         output = captured_output.getvalue()
         assert (
-            "Repository info: a1b2c3d4 on main - Add new feature for improved training"
+            "Repository info: a1b2c3d4e5f6 on main - Add new feature for improved training"
             in output
         )
 
 
 def test_log_git_commit_info_long_commit_message():
     """Test git logging with a long commit message that gets truncated."""
-    long_message = "This is a very long commit message that should be truncated at 60 characters to prevent issues"
+    long_message = "This is a very long commit message that should be truncated at 120 characters to prevent issues with very long commit messages that exceed the display limit set for readability and to avoid overwhelming the logs with extremely verbose commit descriptions"
 
     mock_outputs = {
         ("git", "rev-parse", "HEAD"): "a1b2c3d4e5f6789012345678901234567890abcd\n",
@@ -65,9 +65,9 @@ def test_log_git_commit_info_long_commit_message():
 
         output = captured_output.getvalue()
         # Should contain truncated message with "..."
-        expected_msg = long_message[:60] + "..."
+        expected_msg = long_message[:120] + "..."
         assert expected_msg in output
-        assert "Repository info: a1b2c3d4 on feature-branch -" in output
+        assert "Repository info: a1b2c3d4e5f6 on feature-branch -" in output
 
 
 def test_log_git_commit_info_branch_failure():
@@ -94,7 +94,7 @@ def test_log_git_commit_info_branch_failure():
             log_git_commit_info()
 
         output = captured_output.getvalue()
-        assert "Repository info: a1b2c3d4 on unknown - Test commit" in output
+        assert "Repository info: a1b2c3d4e5f6 on unknown - Test commit" in output
 
 
 def test_log_git_commit_info_git_not_available():

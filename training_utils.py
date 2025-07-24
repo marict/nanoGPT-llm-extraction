@@ -92,7 +92,7 @@ def log_git_commit_info() -> None:
             timeout=5,
         )
         commit_hash = result.stdout.strip()
-        print(f"  Commit hash: {commit_hash[:8]}...")
+        print(f"  Commit hash: {commit_hash}")
 
         # Get current branch
         try:
@@ -120,14 +120,14 @@ def log_git_commit_info() -> None:
                 check=True,
                 timeout=5,
             )
-            commit_msg = msg_result.stdout.strip()[:60]
-            if len(msg_result.stdout.strip()) > 60:
+            commit_msg = msg_result.stdout.strip()[:120]
+            if len(msg_result.stdout.strip()) > 120:
                 commit_msg += "..."
         except subprocess.CalledProcessError:
             commit_msg = "no message"
 
         print(f"  Message: {commit_msg}")
-        print(f"Repository info: {commit_hash[:8]} on {branch} - {commit_msg}")
+        print(f"Repository info: {commit_hash[:12]} on {branch} - {commit_msg}")
 
     except subprocess.CalledProcessError as e:
         print(f"  ERROR: Git command failed: {e}")
