@@ -128,9 +128,9 @@ def _create_docker_script(training_command: str, commit_hash: str | None = None)
     if commit_hash:
         base_commands.append(f"cd /workspace/repo && git checkout {commit_hash}")
 
-    # Add commit hash logging for verification
+    # Add commit hash logging for verification (using different wording to avoid GraphQL keywords)
     base_commands.append(
-        'cd /workspace/repo && echo "Current commit: $(git rev-parse HEAD) ($(git log -1 --oneline))"'
+        'cd /workspace/repo && echo "Repository version: $(git rev-parse HEAD)"'
     )
 
     # Add the container setup command

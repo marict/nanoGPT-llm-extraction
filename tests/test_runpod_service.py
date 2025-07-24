@@ -96,7 +96,7 @@ class TestDockerScriptCreation(unittest.TestCase):
             "apt-get update && apt-get install -y git",
             "cd /workspace",
             "( [ -d repo/.git ] && git -C repo pull || git clone https://github.com/marict/nanoGPT-llm-extraction.git repo )",
-            'cd /workspace/repo && echo "🔍 Current commit: $(git rev-parse HEAD) ($(git log -1 --oneline))"',
+            'cd /workspace/repo && echo "Repository version: $(git rev-parse HEAD)"',
             "bash /workspace/repo/scripts/container_setup.sh python train.py config.py",
         ]
         expected = " && ".join(expected_commands)
@@ -114,7 +114,7 @@ class TestDockerScriptCreation(unittest.TestCase):
             "cd /workspace",
             "( [ -d repo/.git ] && git -C repo pull || git clone https://github.com/marict/nanoGPT-llm-extraction.git repo )",
             f"cd /workspace/repo && git checkout {commit_hash}",
-            'cd /workspace/repo && echo "🔍 Current commit: $(git rev-parse HEAD) ($(git log -1 --oneline))"',
+            'cd /workspace/repo && echo "Repository version: $(git rev-parse HEAD)"',
             "bash /workspace/repo/scripts/container_setup.sh python train.py config.py",
         ]
         expected = " && ".join(expected_commands)
@@ -131,7 +131,7 @@ class TestDockerScriptCreation(unittest.TestCase):
             "apt-get update && apt-get install -y git",
             "cd /workspace",
             "( [ -d repo/.git ] && git -C repo pull || git clone https://github.com/marict/nanoGPT-llm-extraction.git repo )",
-            'cd /workspace/repo && echo "🔍 Current commit: $(git rev-parse HEAD) ($(git log -1 --oneline))"',
+            'cd /workspace/repo && echo "Repository version: $(git rev-parse HEAD)"',
             "bash /workspace/repo/scripts/container_setup.sh python train.py config.py",
         ]
         expected = " && ".join(expected_commands)

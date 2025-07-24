@@ -37,6 +37,7 @@ from training_utils import (
     generate_run_name,
     get_lr,
     load_config_file,
+    log_git_commit_info,
     parse_args,
     update_config,
 )
@@ -130,6 +131,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     print(
         f"[{time.time() - setup_start:.2f}s] DDP setup completed in {time.time() - ddp_start:.2f}s"
     )
+    log_git_commit_info()
 
     # Determine model name and create appropriate config
     # Model configuration will be created (or reconstructed) later by the

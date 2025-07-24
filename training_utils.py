@@ -7,6 +7,7 @@ import random
 import runpy
 import shutil
 import string
+import subprocess
 import time
 from ast import literal_eval
 from dataclasses import dataclass
@@ -23,6 +24,64 @@ import torch
 CHECKPOINT_DIR = (
     "/runpod-volume/checkpoints" if os.path.exists("/runpod-volume") else "checkpoints"
 )
+
+
+# --------------------------------------------------------------------------- #
+# Git utilities for debugging and tracking
+# --------------------------------------------------------------------------- #
+
+
+def log_git_commit_info() -> None:
+    """Log current git commit information for debugging and tracking."""
+    try:
+        # Get current commit hash
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        commit_hash = result.stdout.strip()
+
+        # Get current branch
+        try:
+            branch_result = subprocess.run(
+                ["git", "branch", "--show-current"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=5,
+            )
+            branch = branch_result.stdout.strip()
+        except subprocess.CalledProcessError:
+            branch = "unknown"
+
+        # Get short commit message (first line only, limit to 60 chars)
+        try:
+            msg_result = subprocess.run(
+                ["git", "log", "-1", "--format=%s"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=5,
+            )
+            commit_msg = msg_result.stdout.strip()[:60]
+            if len(msg_result.stdout.strip()) > 60:
+                commit_msg += "..."
+        except subprocess.CalledProcessError:
+            commit_msg = "no message"
+
+        print(f"Repository info: {commit_hash[:8]} on {branch} - {commit_msg}")
+
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+    ) as e:
+        print(f"Could not retrieve git information: {e}")
+    except Exception as e:
+        print(f"Unexpected error getting git info: {e}")
 
 
 # --------------------------------------------------------------------------- #
