@@ -130,7 +130,7 @@ def _create_docker_script(training_command: str, commit_hash: str | None = None)
 
     # Add commit hash logging for verification
     base_commands.append(
-        'cd /workspace/repo && echo "🔍 Current commit: $(git rev-parse HEAD) ($(git log -1 --oneline))"'
+        'cd /workspace/repo && echo "Current commit: $(git rev-parse HEAD) ($(git log -1 --oneline))"'
     )
 
     # Add the container setup command
