@@ -604,10 +604,9 @@ def execute_stack(
             f"{digit_probs.dim()}"
         )
 
-    # Import digits_to_magnitude for magnitude computation
+    # Convert digit probabilities to magnitude using centralized function
     from predictor_utils import digits_to_magnitude
 
-    # Convert digit probabilities to magnitude using centralized function
     raw_value = digits_to_magnitude(
         digit_probs, max_digits, max_decimal_places, base
     )  # (B,T,N)

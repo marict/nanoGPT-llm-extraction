@@ -5,7 +5,7 @@
 name = "predictor_pretrain"
 
 # Training intervals
-eval_interval = 10
+eval_interval = 20
 log_interval = 1
 eval_iters = 10
 eval_once = False
@@ -20,11 +20,11 @@ init_from = "scratch"
 dataset = "dagset"  # Use DAG dataset for predictor training
 
 # DAG dataset parameters
-max_dag_depth = 4  # Must match dag_depth in model config
+max_dag_depth = 2  # Must match dag_depth in model config
 # The original NALU paper had values in range 9999
-max_digits = 3
-max_decimal_places = 3
-base = 22
+max_digits = 2
+max_decimal_places = 2
+base = 10
 
 # Expression generation settings
 english_conversion_probability = 0.5
@@ -44,8 +44,8 @@ batch_size = 256
 block_size = 128
 
 # Model architecture (larger for RunPod training)
-n_head = 6
-n_layer = 1
+n_head = 4
+n_layer = 4
 n_embd = n_head * 64
 dropout = 0.1
 bias = True
@@ -62,8 +62,8 @@ grad_clip = 1.0
 # Learning rate schedule
 warmup_iters = max_iters * 0.02  # 1/50 of max_iters
 lr_decay_iters = max_iters  # Updated to match max_iters
-min_lr = 2e-4
-learning_rate = 3e-4
+min_lr = 2e-5
+learning_rate = 3e-5
 
 # System settings (optimized for RunPod)
 backend = "nccl"

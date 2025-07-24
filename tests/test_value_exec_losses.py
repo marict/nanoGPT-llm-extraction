@@ -374,15 +374,27 @@ def test_loss_weights_applied():
     tgt_digits = torch.zeros(batch, seq, nodes, digits, 10)
     pred_digits = torch.zeros(batch, seq, nodes, digits, 10)
 
+    # Initialize all positions as digit 0
+    tgt_digits[..., 0] = 1.0
+    pred_digits[..., 0] = 1.0
+
     # Set some random but different digit distributions
+    tgt_digits[0, 0, 0, 0, 0] = 0.0
     tgt_digits[0, 0, 0, 0, 1] = 1.0  # digit 1
+    tgt_digits[0, 0, 0, 1, 0] = 0.0
     tgt_digits[0, 0, 0, 1, 2] = 1.0  # digit 2
+    tgt_digits[0, 0, 1, 0, 0] = 0.0
     tgt_digits[0, 0, 1, 0, 4] = 1.0  # digit 4
+    tgt_digits[0, 0, 1, 1, 0] = 0.0
     tgt_digits[0, 0, 1, 1, 5] = 1.0  # digit 5
 
+    pred_digits[0, 0, 0, 0, 0] = 0.0
     pred_digits[0, 0, 0, 0, 3] = 1.0  # digit 3 (different)
+    pred_digits[0, 0, 0, 1, 0] = 0.0
     pred_digits[0, 0, 0, 1, 4] = 1.0  # digit 4 (different)
+    pred_digits[0, 0, 1, 0, 0] = 0.0
     pred_digits[0, 0, 1, 0, 6] = 1.0  # digit 6 (different)
+    pred_digits[0, 0, 1, 1, 0] = 0.0
     pred_digits[0, 0, 1, 1, 7] = 1.0  # digit 7 (different)
 
     # Test with different weights

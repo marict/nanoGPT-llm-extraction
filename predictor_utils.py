@@ -107,7 +107,7 @@ def _compute_digit_loss(
     with torch.amp.autocast(device_type=device_type, enabled=False):
         logits_flat = pred_digit_logits.reshape(-1, base).to(
             torch.float32
-        )  # (B*T*N*D, base)
+        )  # (B*T*N*D,base)
 
         target_flat = target_digits.reshape(-1, base)
         row_sums = target_flat.sum(dim=-1)
@@ -132,7 +132,7 @@ def _compute_digit_loss(
                 f"Found rows that sum to values != 1. Example flat indices: {first_bad}."
             )
 
-        target_idx = target_flat.argmax(dim=-1)  # (B*T*N*D,)
+        target_idx = target_flat.argmax(dim=-1)
 
         # Standard cross-entropy over raw logits
         digit_loss = F.cross_entropy(logits_flat, target_idx, reduction="mean")
@@ -266,10 +266,10 @@ def _compute_exec_loss(
 # --------------------------------------------------------------------------- #
 def compute_dag_structure_loss(
     pred_sgn: torch.Tensor,  # (B,T,N)
-    pred_digit_logits: torch.Tensor,  # (B,T,N,D,10) raw logits (not probabilities)
+    pred_digit_logits: torch.Tensor,  # (B,T,N,D,base) raw logits (not probabilities)
     pred_ops: torch.Tensor,  # (B,T,depth,n_ops)
     target_sgn: torch.Tensor,  # (B,T,N)
-    target_digits: torch.Tensor,  # (B,T,N,D,10) one-hot
+    target_digits: torch.Tensor,  # (B,T,N,D,base) one-hot
     target_ops: torch.Tensor,
     target_initial_values: torch.Tensor,  # (B,T,N) - target initial values as floats
     target_final_exec: torch.Tensor,  # (B,T) - target final execution values as floats

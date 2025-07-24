@@ -37,6 +37,8 @@ class TestLossRegressions(unittest.TestCase):
         # Digits tensor – all zeros except one example digit 3
         D_total = cfg.max_digits + cfg.max_decimal_places
         target_digits = torch.zeros(B, T, nodes, D_total, 10)
+        target_digits[..., 0] = 1.0  # Initialize all positions as digit 0
+        target_digits[..., 0, 0] = 0.0  # Clear the 0 for first position
         target_digits[..., 0, 3] = 1.0  # first slot digit 3
         # Convert target to logits for prediction
         pred_digits = torch.full_like(target_digits, -10.0)
@@ -74,6 +76,7 @@ class TestLossRegressions(unittest.TestCase):
         target_sgn = pred_sgn.clone()
         D_total = cfg.max_digits + cfg.max_decimal_places
         pred_digits = torch.zeros(B, T, nodes, D_total, 10)
+        pred_digits[..., 0] = 1.0  # Initialize all positions as digit 0
         target_digits = pred_digits.clone()
 
         # Target op: always "add"
