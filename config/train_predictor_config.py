@@ -71,7 +71,7 @@ learning_rate = 3e-4
 # System settings (optimized for RunPod)
 backend = "nccl"
 dtype = "bfloat16"  # Use bfloat16 for efficiency if available
-compile = False  # Disable compilation for now to see if there are any gradient issues.
+compile = True
 keep_alive = False  # Auto-stop by default
 check_nans = False  # Check for NaNs in cloud training
 
