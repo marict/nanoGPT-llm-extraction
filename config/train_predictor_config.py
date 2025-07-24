@@ -22,9 +22,9 @@ dataset = "dagset"  # Use DAG dataset for predictor training
 # DAG dataset parameters
 max_dag_depth = 6  # Match the model dag_depth for consistency
 # The original NALU paper had values in range 9999
-max_digits = 14
-max_decimal_places = 14
-base = 2
+max_digits = 4
+max_decimal_places = 4
+base = 10
 
 # Expression generation settings
 english_conversion_probability = 0.5
