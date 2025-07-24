@@ -322,7 +322,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     # Initialize EMA smoothing for exec_loss to prevent spikes
     exec_loss_ema = None
     exec_loss_ema_decay = getattr(
-        cfg, "exec_loss_ema_decay", 0.9
+        cfg, "exec_loss_ema_decay", 0.8
     )  # Less aggressive decay for more noticeable smoothing
     exec_loss_max_clip = getattr(cfg, "exec_loss_max_clip", 5.0)
     exec_loss_warmup_steps = getattr(

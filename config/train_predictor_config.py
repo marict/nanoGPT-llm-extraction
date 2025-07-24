@@ -6,7 +6,7 @@ name = "predictor_pretrain"
 
 # Training intervals
 eval_interval = 50  # We don't need to do this very often because train is seeing unseen data as well.
-log_interval = 1  # Log every iteration for better monitoring
+log_interval = 10
 eval_iters = 10
 eval_only = False
 clear_previous_checkpoints = False
