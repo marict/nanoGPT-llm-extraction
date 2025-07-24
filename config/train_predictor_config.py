@@ -83,7 +83,7 @@ exec_loss_weight = 0.5
 # ================================================================
 
 # Global curriculum learning toggle
-enable_curriculum_learning = True  # Set to False to disable all curriculum learning
+enable_curriculum_learning = False  # Set to False to disable all curriculum learning
 
 # Value Loss Curriculum (Initial Values)
 value_curriculum_beta_start = 1.0  # Start lenient (larger Huber threshold)
