@@ -9,10 +9,6 @@ and `train()`.
 from __future__ import annotations
 
 import os
-
-# Direct W&B to store its local run directory in transient /tmp storage to keep
-# the persistent volume from filling with log files.
-os.environ.setdefault("WANDB_DIR", "/tmp/wandb")
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -22,7 +18,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import tiktoken
 import torch
-from torch.distributed import destroy_process_group, init_process_group
+from torch.distributed import destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import runpod_service
@@ -33,8 +29,10 @@ from data import prepare_dataset
 from evaluation import estimate_loss, evaluate_math
 from models.dag_model import GPT, GPTConfig
 from python_version_check import check_python_version
+
+# Centralised runtime constants & env tweaks
+from runtime import CHECKPOINT_DIR, CUDA_AVAILABLE, TORCH_2_2_1
 from training_utils import (
-    CHECKPOINT_DIR,
     BaseConfig,
     apply_overrides,
     check_disk_space_emergency,
@@ -47,19 +45,11 @@ from training_utils import (
     log_config_values,
     log_git_commit_info,
     parse_args,
+    setup_distributed,
     update_config,
 )
 
-TORCH_2_2_1 = torch.__version__ >= "2.2.1"
-CUDA_AVAILABLE = torch.cuda.is_available()
-
-# Optional safetensors for pure-tensor checkpoints
-try:
-    import safetensors.torch as _st  # type: ignore
-
-    _HAVE_ST = True
-except ModuleNotFoundError:
-    _HAVE_ST = False
+# (TORCH_2_2_1, CUDA_AVAILABLE) already imported from runtime
 
 
 # -----------------------------------------------------------------------------
@@ -141,20 +131,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     print(f"[{time.time() - setup_start:.2f}s] PyTorch version: {torch.__version__}")
 
     ddp_start = time.time()
-    ddp = int(os.environ.get("RANK", -1)) != -1
-    if ddp:
-        init_process_group(backend=cfg.backend)
-        ddp_rank = int(os.environ["RANK"])
-        ddp_local_rank = int(os.environ["LOCAL_RANK"])
-        ddp_world_size = int(os.environ["WORLD_SIZE"])
-        device = f"cuda:{ddp_local_rank}"
-        torch.cuda.set_device(device)
-        master_process = ddp_rank == 0
-        assert cfg.gradient_accumulation_steps % ddp_world_size == 0
-        cfg.gradient_accumulation_steps //= ddp_world_size
-    else:
-        master_process = True
-        ddp_world_size = 1
+    ddp, master_process, ddp_world_size, device = setup_distributed(cfg)
     print(
         f"[{time.time() - setup_start:.2f}s] DDP setup completed in {time.time() - ddp_start:.2f}s"
     )

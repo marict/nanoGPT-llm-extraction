@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List
 
 import torch
+from torch.distributed import init_process_group
 
 # -----------------------------------------------------------------------------
 # Configuration constants
@@ -416,3 +417,41 @@ def check_for_nonfinite(
             print(
                 f"[{label} INF] {name}  →  min={tensor.min():.3e}  max={tensor.max():.3e}"
             )
+
+
+def setup_distributed(cfg):
+    """Centralise DistributedDataParallel initialisation logic.
+
+    This was duplicated across *train.py* and *train_predictor.py*.
+    The helper performs the same steps and mutates ``cfg`` in-place
+    to adjust ``gradient_accumulation_steps`` when applicable.
+
+    Returns
+    -------
+    tuple
+        (ddp_enabled, master_process, world_size, device_str)
+    """
+    ddp = int(os.environ.get("RANK", -1)) != -1
+
+    if ddp:
+        init_process_group(backend=cfg.backend)
+        ddp_rank = int(os.environ["RANK"])
+        ddp_local_rank = int(os.environ["LOCAL_RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
+
+        device = f"cuda:{ddp_local_rank}"
+        torch.cuda.set_device(device)
+        master_process = ddp_rank == 0
+
+        # Ensure gradient_accumulation_steps divides world_size
+        if hasattr(cfg, "gradient_accumulation_steps"):
+            assert (
+                cfg.gradient_accumulation_steps % world_size == 0
+            ), "gradient_accumulation_steps must be divisible by world_size"
+            cfg.gradient_accumulation_steps //= world_size
+
+        return True, master_process, world_size, device
+
+    # Single-process fallback
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    return False, True, 1, device

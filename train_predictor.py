@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import argparse
 import os
-
-# Ensure W&B run data is written to ephemeral storage rather than the project volume.
-os.environ.setdefault("WANDB_DIR", "/tmp/wandb")
 import random
 import time
 from contextlib import nullcontext
@@ -14,7 +11,7 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from torch.distributed import destroy_process_group, init_process_group
+from torch.distributed import destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import runpod_service
@@ -31,8 +28,10 @@ from predictor_utils import (
     tokenize_texts,
 )
 from python_version_check import check_python_version
+
+# Centralised runtime constants & env tweaks
+from runtime import CHECKPOINT_DIR, CUDA_AVAILABLE, TORCH_2_2_1
 from training_utils import (
-    CHECKPOINT_DIR,
     apply_overrides,
     generate_run_name,
     get_lr,
@@ -40,6 +39,7 @@ from training_utils import (
     log_config_values,
     log_git_commit_info,
     parse_args,
+    setup_distributed,
     update_config,
 )
 
@@ -68,24 +68,7 @@ def _empty_metrics() -> dict[str, float]:
     }
 
 
-TORCH_2_2_1 = torch.__version__ >= "2.2.1"
-CUDA_AVAILABLE = torch.cuda.is_available()
-
-# Optional safetensors for pure-tensor checkpoints
-try:
-    import safetensors.torch as _st  # type: ignore
-
-    _HAVE_ST = True
-except ModuleNotFoundError:
-    _HAVE_ST = False
-
-
-# Configuration constants
-
-# Checkpoint directory
-CHECKPOINT_DIR = (
-    "/runpod-volume/checkpoints" if os.path.exists("/runpod-volume") else "checkpoints"
-)
+# (TORCH_2_2_1, CUDA_AVAILABLE, CHECKPOINT_DIR) come from runtime
 
 
 def parse_args() -> argparse.ArgumentParser:  # type: ignore[override]
@@ -113,22 +96,9 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     # (prints removed to keep script minimal)
     # W&B URL debug print removed
 
-    # DDP setup (simplified for DAG training)
-    ddp = int(os.environ.get("RANK", -1)) != -1
-    if ddp:
-        init_process_group(backend=cfg.backend)
-        ddp_rank = int(os.environ["RANK"])
-        ddp_local_rank = int(os.environ["LOCAL_RANK"])
-        ddp_world_size = int(os.environ["WORLD_SIZE"])
-        device = f"cuda:{ddp_local_rank}"
-        torch.cuda.set_device(device)
-        master_process = ddp_rank == 0
-        assert cfg.gradient_accumulation_steps % ddp_world_size == 0
-        cfg.gradient_accumulation_steps //= ddp_world_size
-    else:
-        master_process = True
-        ddp_world_size = 1
+    # DDP setup
     ddp_start = time.time()
+    ddp, master_process, ddp_world_size, device = setup_distributed(cfg)
     print(
         f"[{time.time() - setup_start:.2f}s] DDP setup completed in {time.time() - ddp_start:.2f}s"
     )

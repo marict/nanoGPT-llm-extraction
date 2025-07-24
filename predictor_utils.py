@@ -69,16 +69,26 @@ def _compute_sign_loss(
 
 
 def _compute_digit_loss(
-    pred_digit_logits: torch.Tensor,  # Now expects raw logits for better stability
+    pred_digit_logits: torch.Tensor,
     target_digits: torch.Tensor,
     device_type: str,
-    iter_num: int = 0,  # Add iteration number for curriculum
-    cfg=None,  # Add config for curriculum parameters
+    *args,
+    **kwargs,
 ) -> torch.Tensor:
-    """Compute cross-entropy loss for digit prediction."""
+    """Compute cross-entropy loss for digit prediction.
+
+    Key changes compared to the previous implementation:
+    1. Positions whose target vector is all zeros are *not* ignored. They are
+       interpreted as the digit `0` class, providing the model with an explicit
+       training signal to predict zeros when no digit information is present.
+    2. Accepts arbitrary *args / **kwargs so that callers that (mistakenly) pass
+       additional arguments such as `iter_num` or `cfg` will not crash.
+    """
+
+    # Unpack shape information -------------------------------------------------
     B, T, N, D, base = pred_digit_logits.shape
 
-    # Sanity check: model and dataset must agree on digit slots and base
+    # Sanity checks ------------------------------------------------------------
     if target_digits.shape[-2] != D:
         raise ValueError(
             "Shape mismatch between model-predicted digits and target digits: "
@@ -95,24 +105,25 @@ def _compute_digit_loss(
             "Ensure that `base` is set to the same value for both the dataset and the model."
         )
 
+    # Loss computation ---------------------------------------------------------
     with torch.amp.autocast(device_type=device_type, enabled=False):
-        # Use reshape to handle potential non-contiguous tensors (view can fail)
-        pred_logits_flat = pred_digit_logits.reshape(-1, base).to(
+        logits_flat = pred_digit_logits.reshape(-1, base).to(
             torch.float32
         )  # (B*T*N*D, base)
-
-        # Use F.log_softmax for better numerical stability than manual log computation
-        log_probs = F.log_softmax(pred_logits_flat, dim=-1)
-
         target_flat = target_digits.reshape(-1, base)
-        target_idx = target_flat.argmax(dim=-1)
 
-        # Mask out positions where the target has no valid digit information (all zeros)
-        valid_mask = target_flat.sum(dim=-1) > 0  # (B*T*N*D)
-        if valid_mask.any():
-            digit_loss = F.nll_loss(log_probs[valid_mask], target_idx[valid_mask])
-        else:
-            digit_loss = torch.tensor(0.0, device=pred_digit_logits.device)
+        # Treat rows with no one-hot information (all zeros) as the digit 0 class
+        zero_rows = target_flat.sum(dim=-1) == 0  # (B*T*N*D)
+        if zero_rows.any():
+            target_flat = (
+                target_flat.clone()
+            )  # avoid modifying original tensor in-place
+            target_flat[zero_rows, 0] = 1.0  # set class 0 probability to 1
+
+        target_idx = target_flat.argmax(dim=-1)  # (B*T*N*D,)
+
+        # Standard cross-entropy over raw logits
+        digit_loss = F.cross_entropy(logits_flat, target_idx, reduction="mean")
 
     return digit_loss
 
