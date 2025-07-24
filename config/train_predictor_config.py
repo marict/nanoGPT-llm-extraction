@@ -5,7 +5,7 @@
 name = "predictor_pretrain"
 
 # Training intervals
-eval_interval = 50  # We don't need to do this very often because train is seeing unseen data as well.
+eval_interval = 50
 log_interval = 10
 eval_iters = 10
 eval_only = False
@@ -13,13 +13,11 @@ clear_previous_checkpoints = False
 reload_reset_iters = False
 
 # Model initialization
-init_from = "/runpod-volume/checkpoints/932rfb4cs2izun-resume_add_digit_tau_2/ckpt_predictor_pretrain.pt"
+# init_from = "/runpod-volume/checkpoints/932rfb4cs2izun-resume_add_digit_tau_2/ckpt_predictor_pretrain.pt"
+init_from = "scratch"
 
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
-
-train_examples_per_batch = 4000
-val_examples_per_batch = 800
 
 # DAG dataset parameters
 max_dag_depth = 6  # Match the model dag_depth for consistency

@@ -76,8 +76,6 @@ class TestDAGTrainConfig(unittest.TestCase):
             "digit_loss_weight",
             "op_loss_weight",
             "max_dag_depth",
-            "train_examples_per_batch",
-            "val_examples_per_batch",
             "gradient_accumulation_steps",
             "dropout",
             "bias",

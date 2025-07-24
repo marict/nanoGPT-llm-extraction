@@ -103,8 +103,6 @@ class TrainConfig(BaseConfig):
 
     # DAG streaming dataset parameters
     max_dag_depth: int = 8
-    train_examples_per_batch: int = 1000
-    val_examples_per_batch: int = 100
     seed: int = 42
 
     # Loss weights for DAG predictor training

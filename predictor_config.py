@@ -29,8 +29,6 @@ class DAGTrainConfig(BaseConfig):
     max_digits: int = 4
     max_decimal_places: int | None = None
     base: int = 10  # Number base for digit prediction (10=decimal, 16=hex, etc.)
-    train_examples_per_batch: int = 1000
-    val_examples_per_batch: int = 100
 
     # English conversion
     english_conversion_probability: float = 0.0

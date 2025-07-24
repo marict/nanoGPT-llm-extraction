@@ -28,9 +28,6 @@ init_from = "scratch"  # or "resume"
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
 
-train_examples_per_batch = 100
-val_examples_per_batch = 20
-
 # DAG dataset parameters
 max_dag_depth = 6  # Match the model dag_depth for consistency
 # Choose 4 to match the NALU paper
@@ -61,7 +58,7 @@ n_head = 1
 n_layer = 2
 n_embd = 32
 dropout = 0.0
-bias = False
+bias = True  # Enable bias for ALU weight patching compatibility
 dag_depth = 4  # Target DAG depth
 
 # Optimization
