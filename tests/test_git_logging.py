@@ -116,6 +116,7 @@ def test_log_git_commit_info_in_actual_repo():
 
     output = captured_output.getvalue()
     # Should contain the basic format even if we can't predict exact values
-    # Should have the format: hash on branch - message
-    assert " on " in output
-    assert " - " in output
+    assert "Git repository analysis:" in output
+    assert "Commit hash:" in output
+    assert "Branch:" in output
+    assert "Message:" in output

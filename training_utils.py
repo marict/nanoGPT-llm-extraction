@@ -26,46 +26,20 @@ CHECKPOINT_DIR = (
 )
 
 
-# --------------------------------------------------------------------------- #
-# Early log capture for W&B replay
-# --------------------------------------------------------------------------- #
+def log_config_values(cfg: BaseConfig) -> None:
+    """Log all configuration values from the config object."""
+    print("=== Training Configuration ===")
 
+    # Get all config attributes
+    config_dict = cfg.__dict__ if hasattr(cfg, "__dict__") else vars(cfg)
 
-class EarlyLogCapture:
-    """Capture early logs before W&B initialization and replay them later."""
+    # Sort keys for consistent output
+    for key in sorted(config_dict.keys()):
+        if not key.startswith("_"):  # Skip private attributes
+            value = config_dict[key]
+            print(f"{key}: {value}")
 
-    def __init__(self):
-        self.captured_logs = []
-        self.enabled = True
-
-    def log(self, message: str) -> None:
-        """Capture a log message and also print it immediately."""
-        if self.enabled:
-            self.captured_logs.append(message)
-        print(message)
-
-    def replay_to_wandb(self) -> None:
-        """Replay all captured logs and disable further capture."""
-        if self.captured_logs:
-            print("=== Replaying early logs to W&B ===")
-            for log_msg in self.captured_logs:
-                print(f"[REPLAY] {log_msg}")
-        self.enabled = False
-        self.captured_logs.clear()
-
-
-# Global instance for early log capture
-_early_log_capture = EarlyLogCapture()
-
-
-def early_log(message: str) -> None:
-    """Log a message, capturing it for later W&B replay if before W&B init."""
-    _early_log_capture.log(message)
-
-
-def replay_early_logs_to_wandb() -> None:
-    """Replay captured early logs to W&B and disable further capture."""
-    _early_log_capture.replay_to_wandb()
+    print("=" * 50)
 
 
 # --------------------------------------------------------------------------- #
