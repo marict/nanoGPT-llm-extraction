@@ -108,15 +108,29 @@ def _compute_digit_loss(
         logits_flat = pred_digit_logits.reshape(-1, base).to(
             torch.float32
         )  # (B*T*N*D, base)
-        target_flat = target_digits.reshape(-1, base)
 
-        # Treat rows with no one-hot information (all zeros) as the digit 0 class
-        zero_rows = target_flat.sum(dim=-1) == 0  # (B*T*N*D)
-        if zero_rows.any():
-            target_flat = (
-                target_flat.clone()
-            )  # avoid modifying original tensor in-place
-            target_flat[zero_rows, 0] = 1.0  # set class 0 probability to 1
+        target_flat = target_digits.reshape(-1, base)
+        row_sums = target_flat.sum(dim=-1)
+
+        # Validation: every row must be a valid one-hot distribution
+        if (row_sums == 0).any():
+            offending = torch.nonzero(row_sums == 0).flatten()[:5].tolist()
+            raise ValueError(
+                "Encountered target digit rows with all zeros (invalid one-hot). "
+                f"Example flat indices: {offending}. This indicates a bug in the "
+                "dataset generation pipeline."
+            )
+
+        # Allow a tiny numerical tolerance when checking that rows sum to 1.0
+        if not torch.allclose(row_sums, torch.ones_like(row_sums), atol=1e-6):
+            bad = torch.nonzero(
+                ~torch.isclose(row_sums, torch.ones_like(row_sums), atol=1e-6)
+            )
+            first_bad = bad.flatten()[:5].tolist()
+            raise ValueError(
+                "Target digit rows are expected to be one-hot (sum to 1). "
+                f"Found rows that sum to values != 1. Example flat indices: {first_bad}."
+            )
 
         target_idx = target_flat.argmax(dim=-1)  # (B*T*N*D,)
 
@@ -284,9 +298,7 @@ def compute_dag_structure_loss(
 
     # Compute individual loss components (now pass logits directly for better numerical stability)
     sign_loss = _compute_sign_loss(pred_sgn, target_sgn, device_type)
-    digit_loss = _compute_digit_loss(
-        pred_digit_logits, target_digits, device_type, iter_num, cfg
-    )
+    digit_loss = _compute_digit_loss(pred_digit_logits, target_digits, device_type)
     op_loss = _compute_op_loss(pred_ops, target_ops, device_type)
     value_loss = _compute_value_loss(
         pred_sgn, pred_digit_logits, target_initial_values, cfg, device_type, iter_num
