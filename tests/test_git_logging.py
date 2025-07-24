@@ -109,8 +109,7 @@ def test_log_git_commit_info_git_not_available():
             log_git_commit_info()
 
         output = captured_output.getvalue()
-        assert "Could not retrieve git information" in output
-        assert "git not found" in output
+        assert "ERROR: Git command not found" in output
 
 
 def test_log_git_commit_info_timeout():
@@ -125,7 +124,7 @@ def test_log_git_commit_info_timeout():
             log_git_commit_info()
 
         output = captured_output.getvalue()
-        assert "Could not retrieve git information" in output
+        assert "ERROR: Git command timed out" in output
 
 
 def test_log_git_commit_info_all_commands_fail():
@@ -140,7 +139,7 @@ def test_log_git_commit_info_all_commands_fail():
             log_git_commit_info()
 
         output = captured_output.getvalue()
-        assert "Could not retrieve git information" in output
+        assert "ERROR: Git command failed" in output
 
 
 def test_log_git_commit_info_in_actual_repo():

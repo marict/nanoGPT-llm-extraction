@@ -27,12 +27,61 @@ CHECKPOINT_DIR = (
 
 
 # --------------------------------------------------------------------------- #
+# Early log capture for W&B replay
+# --------------------------------------------------------------------------- #
+
+
+class EarlyLogCapture:
+    """Capture early logs before W&B initialization and replay them later."""
+
+    def __init__(self):
+        self.captured_logs = []
+        self.enabled = True
+
+    def log(self, message: str) -> None:
+        """Capture a log message and also print it immediately."""
+        if self.enabled:
+            self.captured_logs.append(message)
+        print(message)
+
+    def replay_to_wandb(self) -> None:
+        """Replay all captured logs and disable further capture."""
+        if self.captured_logs:
+            print("=== Replaying early logs to W&B ===")
+            for log_msg in self.captured_logs:
+                print(f"[REPLAY] {log_msg}")
+        self.enabled = False
+        self.captured_logs.clear()
+
+
+# Global instance for early log capture
+_early_log_capture = EarlyLogCapture()
+
+
+def early_log(message: str) -> None:
+    """Log a message, capturing it for later W&B replay if before W&B init."""
+    _early_log_capture.log(message)
+
+
+def replay_early_logs_to_wandb() -> None:
+    """Replay captured early logs to W&B and disable further capture."""
+    _early_log_capture.replay_to_wandb()
+
+
+# --------------------------------------------------------------------------- #
 # Git utilities for debugging and tracking
 # --------------------------------------------------------------------------- #
 
 
 def log_git_commit_info() -> None:
     """Log current git commit information for debugging and tracking."""
+    print("Git repository analysis:")
+
+    # Check if we're in a git repository
+    cwd = os.getcwd()
+    print(f"  Current directory: {cwd}")
+    print(f"  .git exists: {os.path.exists('.git')}")
+
     try:
         # Get current commit hash
         result = subprocess.run(
@@ -43,6 +92,7 @@ def log_git_commit_info() -> None:
             timeout=5,
         )
         commit_hash = result.stdout.strip()
+        print(f"  Commit hash: {commit_hash[:8]}...")
 
         # Get current branch
         try:
@@ -54,8 +104,12 @@ def log_git_commit_info() -> None:
                 timeout=5,
             )
             branch = branch_result.stdout.strip()
+            if not branch:  # Detached HEAD state
+                branch = "detached"
         except subprocess.CalledProcessError:
             branch = "unknown"
+
+        print(f"  Branch: {branch}")
 
         # Get short commit message (first line only, limit to 60 chars)
         try:
@@ -72,16 +126,20 @@ def log_git_commit_info() -> None:
         except subprocess.CalledProcessError:
             commit_msg = "no message"
 
+        print(f"  Message: {commit_msg}")
         print(f"Repository info: {commit_hash[:8]} on {branch} - {commit_msg}")
 
-    except (
-        subprocess.CalledProcessError,
-        FileNotFoundError,
-        subprocess.TimeoutExpired,
-    ) as e:
-        print(f"Could not retrieve git information: {e}")
+    except subprocess.CalledProcessError as e:
+        print(f"  ERROR: Git command failed: {e}")
+        print(f"  Command: {e.cmd}")
+        if e.stderr:
+            print(f"  Error output: {e.stderr}")
+    except FileNotFoundError:
+        print("  ERROR: Git command not found - git is not installed or not in PATH")
+    except subprocess.TimeoutExpired:
+        print("  ERROR: Git command timed out")
     except Exception as e:
-        print(f"Unexpected error getting git info: {e}")
+        print(f"  ERROR: Unexpected error getting git info: {e}")
 
 
 # --------------------------------------------------------------------------- #

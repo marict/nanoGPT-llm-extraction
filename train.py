@@ -40,12 +40,14 @@ from training_utils import (
     check_disk_space_emergency,
     check_for_nonfinite,
     cleanup_disk_space_emergency,
+    early_log,
     generate_run_name,
     get_disk_usage_percent,
     get_lr,
     load_config_file,
     log_git_commit_info,
     parse_args,
+    replay_early_logs_to_wandb,
     update_config,
 )
 
@@ -136,9 +138,10 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     # DDP / environment setup
     # --------------------------------------------------------------------- #
     setup_start = time.time()
-    print(f"[{time.time() - setup_start:.2f}s] Starting training")
-    print(f"[{time.time() - setup_start:.2f}s] PyTorch version: {torch.__version__}")
-    log_git_commit_info()
+    early_log(f"[{time.time() - setup_start:.2f}s] Starting training")
+    early_log(
+        f"[{time.time() - setup_start:.2f}s] PyTorch version: {torch.__version__}"
+    )
 
     ddp_start = time.time()
     ddp = int(os.environ.get("RANK", -1)) != -1
@@ -155,7 +158,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     else:
         master_process = True
         ddp_world_size = 1
-    print(
+    early_log(
         f"[{time.time() - setup_start:.2f}s] DDP setup completed in {time.time() - ddp_start:.2f}s"
     )
 
@@ -208,6 +211,10 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
             (checkpoint_manager.checkpoint_dir / safe_run_name).mkdir(
                 parents=True, exist_ok=True
             )
+
+            # Replay early logs and add git commit info now that W&B is initialized
+            replay_early_logs_to_wandb()
+            log_git_commit_info()
 
         except Exception as e:
             print(

@@ -34,11 +34,13 @@ from python_version_check import check_python_version
 from training_utils import (
     CHECKPOINT_DIR,
     apply_overrides,
+    early_log,
     generate_run_name,
     get_lr,
     load_config_file,
     log_git_commit_info,
     parse_args,
+    replay_early_logs_to_wandb,
     update_config,
 )
 
@@ -128,10 +130,9 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         master_process = True
         ddp_world_size = 1
     ddp_start = time.time()
-    print(
+    early_log(
         f"[{time.time() - setup_start:.2f}s] DDP setup completed in {time.time() - ddp_start:.2f}s"
     )
-    log_git_commit_info()
 
     # Determine model name and create appropriate config
     # Model configuration will be created (or reconstructed) later by the
@@ -174,6 +175,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
             (checkpoint_manager.checkpoint_dir / safe_run_name).mkdir(
                 parents=True, exist_ok=True
             )
+
+            # Replay early logs and add git commit info now that W&B is initialized
+            replay_early_logs_to_wandb()
+            log_git_commit_info()
         except Exception as e:
             print(
                 f"[{time.time() - setup_start:.2f}s] Error: Failed to initialize wandb: {e}"
