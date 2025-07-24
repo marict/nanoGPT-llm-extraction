@@ -490,34 +490,22 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     target_depth = target_ops.size(1)
                     pred_depth = pred_ops_avg.size(1)
 
-                    # Handle mismatched node dimensions
+                    # Verify dimension consistency - fail fast on mismatches
                     if pred_nodes != target_nodes:
-                        if pred_nodes > target_nodes:
-                            pred_sgn_avg = pred_sgn_avg[:, :target_nodes]
-                            digit_logits_avg = digit_logits_avg[:, :target_nodes]
-                        else:
-                            pad_nodes = target_nodes - pred_nodes
-                            pred_sgn_avg = F.pad(pred_sgn_avg, (0, pad_nodes))
-                            pad_shape = (
-                                0,
-                                0,
-                                0,
-                                0,
-                                0,
-                                pad_nodes,
-                                0,
-                                0,
-                            )  # pad N dimension
-                            digit_logits_avg = F.pad(digit_logits_avg, pad_shape)
+                        raise ValueError(
+                            f"Model node dimension mismatch: predicted {pred_nodes} nodes, "
+                            f"but target has {target_nodes} nodes. This indicates a configuration "
+                            f"inconsistency between model dag_depth and data max_dag_depth. "
+                            f"Check that cfg.dag_depth == cfg.max_dag_depth."
+                        )
 
                     if pred_depth != target_depth:
-                        if pred_depth > target_depth:
-                            # Truncate predictions
-                            pred_ops_avg = pred_ops_avg[:, :target_depth]
-                        else:
-                            # Pad predictions with zeros
-                            pad_depth = target_depth - pred_depth
-                            pred_ops_avg = F.pad(pred_ops_avg, (0, 0, 0, pad_depth))
+                        raise ValueError(
+                            f"Model depth dimension mismatch: predicted depth {pred_depth}, "
+                            f"but target has depth {target_depth}. This indicates a configuration "
+                            f"inconsistency between model dag_depth and data max_dag_depth. "
+                            f"Check that cfg.dag_depth == cfg.max_dag_depth."
+                        )
 
                     # Add sequence dimension
                     pred_sgn_seq = pred_sgn_avg.unsqueeze(1)
