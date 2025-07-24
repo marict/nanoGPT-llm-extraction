@@ -30,7 +30,6 @@ def parse_args():
         "--max-decimal-places", type=int, default=pred_config.max_decimal_places
     )
     parser.add_argument("--allowed-operations", type=str, default=None)
-    parser.add_argument("--execute-sympy", type=bool, default=True)
     parser.add_argument("--printing-style", type=str, default="sstr")
     return parser.parse_args()
 
@@ -56,7 +55,6 @@ if __name__ == "__main__":
         max_digits=args.max_digits,
         max_decimal_places=args.max_decimal_places,
         allowed_operations=args.allowed_operations,
-        execute_sympy=args.execute_sympy,
         printing_style_probs=printing_style_probs,
     )
     print(example)

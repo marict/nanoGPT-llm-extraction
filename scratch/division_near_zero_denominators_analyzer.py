@@ -131,7 +131,6 @@ def test_specific_production_seed(seed: int):
         expression_simplification_probability=0.5,  # Typical value
         expression_expansion_probability=0.5,  # Typical value
         printing_style_probs={"latex": 1.0},  # From warning showing latex style
-        execute_sympy=True,
         _print_exec_intermediates=True,
     )
 

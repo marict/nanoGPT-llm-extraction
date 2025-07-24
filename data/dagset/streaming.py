@@ -198,7 +198,6 @@ def generate_expression(
     integer_no_decimal_probability: float = 0.0,
     override_initial_values: list[float] | None = None,
     override_operations: list[str] | None = None,
-    execute_sympy: bool = True,
     train: bool = False,
 ) -> tuple[
     sympy.Basic | None,
@@ -320,7 +319,7 @@ def generate_expression(
     )
 
     final_value = None
-    if execute_sympy:
+    if not train:
         # Execute the sympy expression and store the final value for validation purposes.
         value_map = {symbols[i]: initial_values[i] for i in range(len(initial_values))}
         final_value = sympy.N(sym_expr.subs(value_map))
@@ -623,9 +622,6 @@ def generate_single_dag_example(
 ) -> DAGExample:
     """Generate a single DAG computation example as a simple math expression."""
 
-    # Derive execute_sympy from train: execute sympy for validation (train=False), skip for training (train=True)
-    execute_sympy = not train
-
     (
         sym_expr,
         sym_expr_with_vals,
@@ -647,7 +643,6 @@ def generate_single_dag_example(
         integer_no_decimal_probability=integer_no_decimal_probability,
         override_initial_values=_initial_values_override,
         override_operations=_operations_override,
-        execute_sympy=execute_sympy,
         train=train,
     )
 
@@ -714,7 +709,6 @@ def generate_single_dag_example(
         if (
             not train
             and final_value_sympy != np.inf
-            and execute_sympy
             and not math.isclose(
                 example.final_value_exec,
                 example.final_value_sympy,

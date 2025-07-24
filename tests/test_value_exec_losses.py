@@ -209,7 +209,6 @@ def test_exec_loss_perfect_prediction(batch, seq, depth):
         seed=42,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
-        execute_sympy=True,
     )
 
     # Extract tensors from the example
@@ -273,7 +272,6 @@ def test_exec_loss_wrong_prediction(batch, seq, depth):
         seed=42,
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
-        execute_sympy=True,
     )
 
     example2 = generate_single_dag_example(
@@ -281,7 +279,6 @@ def test_exec_loss_wrong_prediction(batch, seq, depth):
         seed=123,  # Different seed for different result
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
-        execute_sympy=True,
     )
 
     tgt_sgn = example1.signs.unsqueeze(0).unsqueeze(0)
