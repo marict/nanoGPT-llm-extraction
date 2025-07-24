@@ -161,7 +161,6 @@ def _compute_value_loss(
     target_initial_values: torch.Tensor,
     cfg,
     device_type: str,
-    iter_num: int = 0,  # Add iteration number for curriculum
 ) -> torch.Tensor:
     """Compute robust loss between predicted and target initial values in log space."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
@@ -181,20 +180,16 @@ def _compute_value_loss(
             torch.float32
         )
 
-        # Curriculum code removed – use fixed constants
-        current_beta = 1.0  # Fixed Huber loss beta
-        current_sign_weight = 0.1  # Fixed sign penalty weight
+        current_beta = 1.0
+        current_sign_weight = 0.1
 
-        # Core magnitude loss in log space with curriculum beta
         magnitude_loss = F.smooth_l1_loss(
             pred_log_magnitude, target_log_magnitude, beta=current_beta
         )
 
-        # Progressive sign penalty - start lenient, get stricter
         target_sign_smooth = torch.sign(target_initial_values)  # ±1
         sign_mask = target_initial_values.abs() > 1e-8  # ignore target zeros
 
-        # Smooth sign loss: penalize when pred_sgn and target_sign have different signs
         sign_diff = (
             pred_sgn.to(torch.float32) - target_sign_smooth.to(torch.float32)
         ) * sign_mask.float()
@@ -210,7 +205,6 @@ def _compute_exec_loss(
     target_final_exec: torch.Tensor,
     cfg,
     device_type: str,
-    iter_num: int = 0,  # Add iteration number for curriculum
 ) -> torch.Tensor:
     """Execution loss using natural log magnitudes directly (avoids exp** blow-up)."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
@@ -236,17 +230,13 @@ def _compute_exec_loss(
         # Target natural log magnitude - ensure float32
         tgt_ln = torch.log(target_flat.abs() + 1e-8).to(torch.float32)
 
-        # Curriculum code removed – use fixed constants
         current_beta = 1.0
         current_rel_weight = 0.01
         current_overflow_threshold = 27.6
         current_overflow_weight = 0.05
 
-        # Magnitude loss components (enhanced with curriculum):
-        # A) Huber loss in log space with progressive beta
         log_loss = F.smooth_l1_loss(pred_final_ln, tgt_ln, beta=current_beta)
 
-        # B) Relative multiplicative error with adaptive scaling
         log_diff = (pred_final_ln - tgt_ln).abs()
 
         # More aggressive penalty for larger errors
@@ -284,7 +274,6 @@ def compute_dag_structure_loss(
     target_initial_values: torch.Tensor,  # (B,T,N) - target initial values as floats
     target_final_exec: torch.Tensor,  # (B,T) - target final execution values as floats
     cfg: DAGTrainConfig,
-    iter_num: int = 0,  # Add iteration number for curriculum learning
 ) -> Dict[str, torch.Tensor]:
     """Compute robust DAG-structure prediction loss.
 
@@ -301,7 +290,7 @@ def compute_dag_structure_loss(
     digit_loss = _compute_digit_loss(pred_digit_logits, target_digits, device_type)
     op_loss = _compute_op_loss(pred_ops, target_ops, device_type)
     value_loss = _compute_value_loss(
-        pred_sgn, pred_digit_logits, target_initial_values, cfg, device_type, iter_num
+        pred_sgn, pred_digit_logits, target_initial_values, cfg, device_type
     )
     exec_loss = _compute_exec_loss(
         pred_sgn,
@@ -310,7 +299,6 @@ def compute_dag_structure_loss(
         target_final_exec,
         cfg,
         device_type,
-        iter_num,
     )
 
     # Combine all losses with their respective weights
@@ -591,7 +579,6 @@ def evaluate_dag_model(
                     target_initial_values,
                     target_final_exec,
                     cfg,
-                    0,  # Use iter_num=0 for evaluation (no curriculum during eval)
                 )
 
                 # Metrics

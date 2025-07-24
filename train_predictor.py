@@ -544,7 +544,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         target_initial_values_seq,
                         target_final_exec_seq,
                         cfg,
-                        iter_num,  # Pass iteration number for curriculum learning
                     )
 
                     # Compute gradient cosines when we're doing regular logging
