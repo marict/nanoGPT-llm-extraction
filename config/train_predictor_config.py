@@ -5,8 +5,8 @@
 name = "predictor_pretrain"
 
 # Training intervals
-eval_interval = 200
-log_interval = 50
+eval_interval = 10
+log_interval = 2
 eval_iters = 10
 eval_once = False
 clear_previous_checkpoints = False
