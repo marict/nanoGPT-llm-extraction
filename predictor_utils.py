@@ -72,8 +72,6 @@ def _compute_digit_loss(
     pred_digit_logits: torch.Tensor,
     target_digits: torch.Tensor,
     device_type: str,
-    *args,
-    **kwargs,
 ) -> torch.Tensor:
     """Compute cross-entropy loss for digit prediction.
 
