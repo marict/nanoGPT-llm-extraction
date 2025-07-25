@@ -42,6 +42,7 @@ warmup_iters = 2000
 lr_decay_iters = 600000
 min_lr = 6e-5
 
+
 backend = "gloo"
 dtype = "bfloat16"  # keep this, fine on A100/H100
 # dtype = "float32"
