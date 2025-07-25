@@ -127,7 +127,7 @@ def _create_docker_script(training_command: str, commit_hash: str | None = None)
     nvidia_repo_cleanup = " && ".join(
         [
             # Drop any standalone source files that reference NVIDIA or CUDA
-            "find /etc/apt/sources.list.d -name '*nvidia*' -o -name '*cuda*' | xargs rm -f || true",
+            "find /etc/apt/sources.list.d -maxdepth 1 -name '*nvidia*' -o -name '*cuda*' -exec rm -f {} + 2>/dev/null || true",
             # Strip offending lines from the main sources.list if present
             "if grep -qiE '(nvidia|cuda)' /etc/apt/sources.list; then "
             "grep -viE '(nvidia|cuda)' /etc/apt/sources.list > /tmp/s.list && "
