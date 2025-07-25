@@ -103,13 +103,19 @@ def _create_docker_script(training_command: str) -> str:
 
     # 1) Standard system preparatory commands
     base_commands = [
+        "echo '[RUNPOD] Starting container setup...'",
+        "echo '[RUNPOD] Cleaning up NVIDIA/CUDA APT sources...'",
         nvidia_repo_cleanup,
+        "echo '[RUNPOD] Updating package lists and installing git...'",
         # After cleanup, refresh package lists and install git
         "apt-get update -y && apt-get install -y git",
+        "echo '[RUNPOD] Changing to workspace directory...'",
         "cd /workspace",
+        "echo '[RUNPOD] Cloning or updating repository...'",
         "( [ -d repo/.git ] && git -C repo pull || git clone {REPO_URL} repo )".format(
             REPO_URL=REPO_URL
         ),
+        "echo '[RUNPOD] Running container setup script...'",
         f"bash /workspace/repo/scripts/container_setup.sh {training_command}",
     ]
 
