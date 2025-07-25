@@ -95,7 +95,7 @@ def _compute_digit_loss(
     """
 
     # Unpack shape information -------------------------------------------------
-    B, T, N, D, base = pred_digit_logits.shape
+    _, _, _, D, base = pred_digit_logits.shape
 
     # Sanity checks ------------------------------------------------------------
     if target_digits.shape[-2] != D:
@@ -173,7 +173,7 @@ def _compute_op_loss(
 
 def _compute_value_loss(
     pred_sgn: torch.Tensor,
-    pred_digit_logits: torch.Tensor,  # Now expects raw logits for consistency
+    pred_digit_logits: torch.Tensor,
     target_initial_values: torch.Tensor,
     cfg,
     device_type: str,
@@ -189,6 +189,7 @@ def _compute_value_loss(
         )  # (B,T,N)
 
         # Reconstruct full signed predicted values
+        # Use continuous signs directly (maintains differentiability)
         pred_values = pred_sgn.to(torch.float32) * pred_magnitude
 
         # Direct regression loss on signed values
@@ -213,7 +214,7 @@ def _compute_value_loss(
 
 def _compute_exec_loss(
     pred_sgn: torch.Tensor,
-    pred_digit_logits: torch.Tensor,  # Now expects raw logits for consistency
+    pred_digit_logits: torch.Tensor,
     pred_ops: torch.Tensor,
     target_final_exec: torch.Tensor,
     cfg,
@@ -239,6 +240,8 @@ def _compute_exec_loss(
         pred_final_magnitude = torch.exp(
             pred_final_ln.clamp(max=50.0)
         )  # Clamp to prevent overflow
+
+        # Use continuous signs directly (maintains differentiability)
         pred_final_values = pred_final_sgn.to(torch.float32) * pred_final_magnitude
 
         # Flatten for loss computation
