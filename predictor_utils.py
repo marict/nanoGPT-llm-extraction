@@ -54,17 +54,28 @@ def tokenize_texts(texts: List[str], sequence_length: int, device: str) -> torch
 
 
 def _compute_sign_loss(
-    pred_sgn: torch.Tensor,
+    pred_sign_logits: torch.Tensor,
     target_sgn: torch.Tensor,
     device_type: str,
 ) -> torch.Tensor:
-    """Compute binary cross-entropy loss for sign prediction."""
+    """Compute cross-entropy loss for sign prediction using logits.
+
+    Args:
+        pred_sign_logits: Raw sign logits (B,T,N)
+        target_sgn: Target signs (B,T,N) in {-1,1}
+        device_type: Device type for autocast
+    """
     with torch.amp.autocast(device_type=device_type, enabled=False):
-        sign_target = (target_sgn > 0).float().to(torch.float32)
-        sign_pred = ((pred_sgn + 1.0) * 0.5).to(torch.float32)
-        sign_loss = F.binary_cross_entropy(
-            sign_pred, sign_target, reduction="none"
-        ).mean()
+        # Convert target signs {-1,1} to class indices {0,1}
+        sign_target_idx = ((target_sgn > 0).long()).view(-1)
+        pred_sign_logits_flat = pred_sign_logits.view(-1, 1).to(torch.float32)
+
+        # Create 2-class logits: [negative_logit, positive_logit]
+        # For binary classification: logit for class 1 vs class 0
+        binary_logits = torch.cat(
+            [-pred_sign_logits_flat, pred_sign_logits_flat], dim=1
+        )
+        sign_loss = F.cross_entropy(binary_logits, sign_target_idx, reduction="mean")
     return sign_loss
 
 
@@ -141,17 +152,22 @@ def _compute_digit_loss(
 
 
 def _compute_op_loss(
-    pred_ops: torch.Tensor,
+    pred_op_logits: torch.Tensor,
     target_ops: torch.Tensor,
     device_type: str,
 ) -> torch.Tensor:
-    """Compute negative log-likelihood loss for operation prediction."""
-    b, t, d, n_ops = pred_ops.shape
+    """Compute cross-entropy loss for operation prediction using logits.
+
+    Args:
+        pred_op_logits: Operation logits (B,T,D,n_ops)
+        target_ops: Target operation one-hot vectors (B,T,D,n_ops)
+        device_type: Device type for autocast
+    """
+    b, t, d, n_ops = pred_op_logits.shape
     with torch.amp.autocast(device_type=device_type, enabled=False):
-        pred_ops_flat = pred_ops.view(-1, n_ops).to(torch.float32)
         target_idx = target_ops.view(-1, n_ops).argmax(dim=-1)
-        # Use manual log for probabilities (operations come as probabilities, not logits)
-        op_loss = F.nll_loss(torch.log(pred_ops_flat + 1e-8), target_idx).mean()
+        pred_op_logits_flat = pred_op_logits.view(-1, n_ops).to(torch.float32)
+        op_loss = F.cross_entropy(pred_op_logits_flat, target_idx, reduction="mean")
     return op_loss
 
 
@@ -265,9 +281,9 @@ def _compute_exec_loss(
 # Main loss function
 # --------------------------------------------------------------------------- #
 def compute_dag_structure_loss(
-    pred_sgn: torch.Tensor,  # (B,T,N)
+    pred_sign_logits: torch.Tensor,  # (B,T,N) raw logits (not tanh-activated)
     pred_digit_logits: torch.Tensor,  # (B,T,N,D,base) raw logits (not probabilities)
-    pred_ops: torch.Tensor,  # (B,T,depth,n_ops)
+    pred_op_logits: torch.Tensor,  # (B,T,depth,n_ops) raw logits (not probabilities)
     target_sgn: torch.Tensor,  # (B,T,N)
     target_digits: torch.Tensor,  # (B,T,N,D,base) one-hot
     target_ops: torch.Tensor,
@@ -277,21 +293,31 @@ def compute_dag_structure_loss(
 ) -> Dict[str, torch.Tensor]:
     """Compute robust DAG-structure prediction loss.
 
-    The formulation includes BCE for sign, cross-entropy for digits, NLL for operations,
+    The formulation includes cross-entropy for sign, cross-entropy for digits, cross-entropy for operations,
     and MSE for initial values and final execution values.
 
     All target tensors are required parameters.
     """
     # Determine device type once for proper autocast context switching
-    device_type = pred_sgn.device.type if isinstance(pred_sgn, torch.Tensor) else "cuda"
+    device_type = (
+        pred_sign_logits.device.type
+        if isinstance(pred_sign_logits, torch.Tensor)
+        else "cuda"
+    )
 
     # Compute individual loss components (now pass logits directly for better numerical stability)
-    sign_loss = _compute_sign_loss(pred_sgn, target_sgn, device_type)
+    sign_loss = _compute_sign_loss(pred_sign_logits, target_sgn, device_type)
     digit_loss = _compute_digit_loss(pred_digit_logits, target_digits, device_type)
-    op_loss = _compute_op_loss(pred_ops, target_ops, device_type)
+    op_loss = _compute_op_loss(pred_op_logits, target_ops, device_type)
+
+    # For value and execution losses, we need tanh-activated signs and probabilities
+    pred_sgn = torch.tanh(pred_sign_logits)
     value_loss = _compute_value_loss(
         pred_sgn, pred_digit_logits, target_initial_values, cfg, device_type
     )
+
+    # For execution loss, we need probabilities, so convert logits
+    pred_ops = F.softmax(pred_op_logits, dim=-1)
     exec_loss = _compute_exec_loss(
         pred_sgn,
         pred_digit_logits,
@@ -535,6 +561,16 @@ def evaluate_dag_model(
                         if hasattr(model.dag.plan_predictor, "last_digit_logits")
                         else None
                     )
+                    last_operation_logits = (
+                        model.dag.plan_predictor.last_operation_logits
+                        if hasattr(model.dag.plan_predictor, "last_operation_logits")
+                        else None
+                    )
+                    last_sign_logits = (
+                        model.dag.plan_predictor.last_sign_logits
+                        if hasattr(model.dag.plan_predictor, "last_sign_logits")
+                        else None
+                    )
                 else:
                     # Stand-alone predictor model
                     last_digit_logits = (
@@ -542,12 +578,40 @@ def evaluate_dag_model(
                         if hasattr(model.dag_predictor, "last_digit_logits")
                         else None
                     )
+                    last_operation_logits = (
+                        model.dag_predictor.last_operation_logits
+                        if hasattr(model.dag_predictor, "last_operation_logits")
+                        else None
+                    )
+                    last_sign_logits = (
+                        model.dag_predictor.last_sign_logits
+                        if hasattr(model.dag_predictor, "last_sign_logits")
+                        else None
+                    )
 
                 if last_digit_logits is None:
                     raise RuntimeError("last_digit_logits not found for evaluation")
+                if last_sign_logits is None:
+                    raise RuntimeError("last_sign_logits not found for evaluation")
+                if last_operation_logits is None:
+                    raise RuntimeError("last_operation_logits not found for evaluation")
 
                 last_digit_logits = last_digit_logits.mean(dim=1)  # (B,N,D,10)
+                last_operation_logits = last_operation_logits.mean(
+                    dim=1
+                )  # (B,depth,n_ops)
+                last_sign_logits = last_sign_logits.mean(dim=1)  # (B,N)
                 pred_ops = pred_ops.mean(dim=1)
+
+                # Convert operation logits to probabilities for metrics and execution
+                if last_operation_logits is not None:
+                    pred_ops = F.softmax(last_operation_logits, dim=-1)
+                else:
+                    # Fallback to using probabilities directly (should not happen with updated model)
+                    pred_ops = pred_ops
+
+                # Convert sign logits to tanh-activated signs for metrics and execution
+                pred_sgn = torch.tanh(last_sign_logits)
 
                 nodes, depth = tgt_sgn.size(1), tgt_ops.size(1)
                 if pred_sgn.size(1) != nodes or pred_ops.size(1) != depth:
@@ -557,9 +621,10 @@ def evaluate_dag_model(
                     )
 
                 # Sequence dimension for loss function compatibility
+                last_sign_logits = last_sign_logits.unsqueeze(1)
                 pred_sgn = pred_sgn.unsqueeze(1)
                 last_digit_logits = last_digit_logits.unsqueeze(1)
-                pred_ops = pred_ops.unsqueeze(1)
+                last_operation_logits = last_operation_logits.unsqueeze(1)
 
                 # Extract target initial values and final execution values from structures
                 target_initial_values = (
@@ -569,10 +634,11 @@ def evaluate_dag_model(
                     structures["target_final_exec"].to(device).unsqueeze(1)
                 )  # Add sequence dim
 
+                # Compute loss using all logits for numerical stability
                 losses = compute_dag_structure_loss(
-                    pred_sgn,
+                    last_sign_logits,
                     last_digit_logits,
-                    pred_ops,
+                    last_operation_logits,
                     tgt_sgn.unsqueeze(1),
                     tgt_digits.unsqueeze(1),
                     tgt_ops.unsqueeze(1),
@@ -603,7 +669,9 @@ def evaluate_dag_model(
                 # Prediction tensors ---------------------------------------------
                 pred_sign = pred_sgn.squeeze(1).unsqueeze(1)  # (B,1,N)
                 pred_digit_probs = last_digit_logits.softmax(dim=-1)  # (B,1,N,D,10)
-                # pred_ops already (B,1,depth,n_ops)
+                pred_ops_seq = pred_ops.unsqueeze(
+                    1
+                )  # (B,1,depth,n_ops) - converted from logits above
 
                 # Execute stacks - use clipping for consistency with training
                 tgt_final_sgn, tgt_final_log = execute_stack(
@@ -619,7 +687,7 @@ def evaluate_dag_model(
                 pred_final_sgn, pred_final_log = execute_stack(
                     pred_sign,
                     pred_digit_probs,
-                    pred_ops,
+                    pred_ops_seq,
                     max_digits=cfg.max_digits,
                     max_decimal_places=cfg.max_decimal_places,
                     base=cfg.base,

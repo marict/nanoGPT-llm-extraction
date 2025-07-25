@@ -228,7 +228,6 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
             # Test if BFloat16 actually works with a simple operation
             try:
                 test_tensor = torch.tensor([1.0], device=device, dtype=torch.bfloat16)
-                test_result = test_tensor * 2.0  # Simple operation
                 actual_dtype = "bfloat16"
             except Exception as e:
                 # BFloat16 claimed to be supported but doesn't work

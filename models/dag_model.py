@@ -386,12 +386,20 @@ class DAGPlanPredictor(nn.Module):
 
         # Store last predictions for logging
         self.last_operation_probs: torch.Tensor | None = None
+        self.last_operation_logits: torch.Tensor | None = (
+            None  # Store for numerically stable loss
+        )
         self.last_digit_logits: torch.Tensor | None = None
+        self.last_sign_logits: torch.Tensor | None = (
+            None  # Store for numerically stable loss
+        )
 
     def clear_cache(self) -> None:
         """Clear cached tensors to prevent memory leaks."""
         self.last_operation_probs = None
+        self.last_operation_logits = None
         self.last_digit_logits = None
+        self.last_sign_logits = None
 
     def forward(self, original_hidden: torch.Tensor):
         """
@@ -440,6 +448,9 @@ class DAGPlanPredictor(nn.Module):
             digit_logits * digit_scale / digit_tau, dim=-1
         ).contiguous()
         sign_logits = initial_values_raw[..., :slice_sign]
+
+        # Store the raw sign logits for numerically stable loss computation
+        self.last_sign_logits = sign_logits.clone()
 
         # Convert sign tensor in [-1,1]
         initial_sgn = torch.tanh(sign_logits)
@@ -499,6 +510,9 @@ class DAGPlanPredictor(nn.Module):
 
         # Cache operation probs for logging
         self.last_operation_probs = operation_probs
+        self.last_operation_logits = (
+            operation_logits  # Store for numerically stable loss
+        )
         return initial_sgn, digit_probs, operation_probs
 
 

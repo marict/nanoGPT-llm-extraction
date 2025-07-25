@@ -23,15 +23,19 @@ def _build_dummy_tensors(batch: int, seq: int, nodes: int, digits: int, depth: i
 
     # Sign predictions / targets (all +1 to keep sign loss trivially zero)
     tgt_sgn = torch.ones(batch, seq, nodes, device=device)
-    pred_sgn = tgt_sgn.clone()
+    # Create sign logits that will produce the target signs when passed through tanh
+    # For perfect prediction, use large positive logits for +1 signs
+    pred_sign_logits = torch.full_like(tgt_sgn, 10.0)
 
     # Operations (choose the first op for all positions)
     n_ops = len(OP_NAMES)
     tgt_op_idx = torch.zeros(batch, seq, depth, dtype=torch.long, device=device)
     tgt_ops = _make_one_hot(tgt_op_idx, n_ops)
-    pred_ops = tgt_ops.clone()
+    # Create operation logits instead of one-hot probabilities
+    pred_op_logits = torch.full_like(tgt_ops, -10.0)
+    pred_op_logits[:, :, :, 0] = 10.0  # Large positive logit for first operation
 
-    return pred_sgn, pred_ops, tgt_sgn, tgt_ops
+    return pred_sign_logits, pred_op_logits, tgt_sgn, tgt_ops
 
 
 def _build_test_config(
@@ -59,7 +63,7 @@ def test_value_loss_perfect_prediction(batch, seq, nodes, digits, depth):
     max_digits = 3
     max_decimal_places = 2
 
-    pred_sgn, pred_ops, tgt_sgn, tgt_ops = _build_dummy_tensors(
+    pred_sign_logits, pred_op_logits, tgt_sgn, tgt_ops = _build_dummy_tensors(
         batch, seq, nodes, digits, depth
     )
 
@@ -112,7 +116,10 @@ def test_value_loss_perfect_prediction(batch, seq, nodes, digits, depth):
 
     # Update signs to match target values
     tgt_sgn = torch.sign(target_values)
-    pred_sgn = tgt_sgn.clone()
+
+    # Create sign logits that will produce the target signs when passed through tanh
+    # For perfect prediction, use large logits: positive for +1, negative for -1
+    pred_sign_logits = torch.where(tgt_sgn > 0, torch.tensor(10.0), torch.tensor(-10.0))
 
     cfg = _build_test_config(max_digits, max_decimal_places)
 
@@ -120,9 +127,9 @@ def test_value_loss_perfect_prediction(batch, seq, nodes, digits, depth):
     target_final_exec = torch.zeros(batch, seq)
 
     losses = compute_dag_structure_loss(
-        pred_sgn,
+        pred_sign_logits,
         pred_digits,
-        pred_ops,
+        pred_op_logits,
         tgt_sgn,
         tgt_digits,
         tgt_ops,
@@ -142,7 +149,7 @@ def test_value_loss_wrong_prediction(batch, seq, nodes, digits, depth):
     max_digits = 3
     max_decimal_places = 2
 
-    pred_sgn, pred_ops, tgt_sgn, tgt_ops = _build_dummy_tensors(
+    pred_sign_logits, pred_op_logits, tgt_sgn, tgt_ops = _build_dummy_tensors(
         batch, seq, nodes, digits, depth
     )
 
@@ -183,9 +190,9 @@ def test_value_loss_wrong_prediction(batch, seq, nodes, digits, depth):
     target_final_exec = torch.zeros(batch, seq)
 
     losses = compute_dag_structure_loss(
-        pred_sgn,
+        pred_sign_logits,
         pred_digits,
-        pred_ops,
+        pred_op_logits,
         tgt_sgn,
         tgt_digits,
         tgt_ops,
@@ -221,8 +228,19 @@ def test_exec_loss_perfect_prediction(batch, seq, depth):
     tgt_ops = example.operations.unsqueeze(0).unsqueeze(0)  # (1, 1, depth, n_ops)
 
     # Create perfect prediction logits instead of copying one-hot targets
-    pred_sgn = tgt_sgn.clone()
-    pred_ops = tgt_ops.clone()
+    # Create sign logits that will produce the target signs when passed through tanh
+    # For perfect prediction, use large logits: positive for +1, negative for -1
+    pred_sign_logits = torch.where(tgt_sgn > 0, torch.tensor(10.0), torch.tensor(-10.0))
+
+    # Convert target operation one-hots to near-perfect logits
+    pred_op_logits = torch.full_like(tgt_ops, -10.0)  # Start with very negative logits
+    for b in range(batch):
+        for s in range(seq):
+            for d in range(depth):
+                # Find which operation is the target (where one-hot is 1)
+                target_op = tgt_ops[b, s, d].argmax()
+                # Set a large positive logit for the target operation
+                pred_op_logits[b, s, d, target_op] = 10.0
 
     # Convert target one-hots to near-perfect logits
     pred_digits = torch.full_like(tgt_digits, -10.0)  # Start with very negative logits
@@ -244,9 +262,9 @@ def test_exec_loss_perfect_prediction(batch, seq, depth):
     cfg = _build_test_config(max_digits, max_decimal_places)
 
     losses = compute_dag_structure_loss(
-        pred_sgn,
+        pred_sign_logits,
         pred_digits,
-        pred_ops,
+        pred_op_logits,
         tgt_sgn,
         tgt_digits,
         tgt_ops,
@@ -319,7 +337,7 @@ def test_value_exec_losses_computed():
     max_digits = 3
     max_decimal_places = 2
 
-    pred_sgn, pred_ops, tgt_sgn, tgt_ops = _build_dummy_tensors(
+    pred_sign_logits, pred_op_logits, tgt_sgn, tgt_ops = _build_dummy_tensors(
         batch, seq, nodes, digits, depth
     )
 
@@ -338,9 +356,9 @@ def test_value_exec_losses_computed():
 
     # Call with required parameters
     losses = compute_dag_structure_loss(
-        pred_sgn,
+        pred_sign_logits,
         pred_digits,
-        pred_ops,
+        pred_op_logits,
         tgt_sgn,
         tgt_digits,
         tgt_ops,
@@ -362,7 +380,7 @@ def test_loss_weights_applied():
     max_digits = 3
     max_decimal_places = 2
 
-    pred_sgn, pred_ops, tgt_sgn, tgt_ops = _build_dummy_tensors(
+    pred_sign_logits, pred_op_logits, tgt_sgn, tgt_ops = _build_dummy_tensors(
         batch, seq, nodes, digits, depth
     )
 
@@ -406,9 +424,9 @@ def test_loss_weights_applied():
     )
 
     losses1 = compute_dag_structure_loss(
-        pred_sgn,
+        pred_sign_logits,
         pred_digits,
-        pred_ops,
+        pred_op_logits,
         tgt_sgn,
         tgt_digits,
         tgt_ops,
@@ -418,9 +436,9 @@ def test_loss_weights_applied():
     )
 
     losses2 = compute_dag_structure_loss(
-        pred_sgn,
+        pred_sign_logits,
         pred_digits,
-        pred_ops,
+        pred_op_logits,
         tgt_sgn,
         tgt_digits,
         tgt_ops,
@@ -444,7 +462,7 @@ def test_exec_loss_uses_clipping():
     # Create a scenario where clipping would make a difference
     batch, seq, nodes, digits, depth = 1, 1, 2, 5, 1
 
-    pred_sgn, pred_ops, tgt_sgn, tgt_ops = _build_dummy_tensors(
+    pred_sign_logits, pred_op_logits, tgt_sgn, tgt_ops = _build_dummy_tensors(
         batch, seq, nodes, digits, depth
     )
 
@@ -470,8 +488,10 @@ def test_exec_loss_uses_clipping():
     # Set targets to be the same for now (we're testing clipping behavior)
     tgt_digits = pred_digits.clone()
 
-    # Set signs to positive
-    pred_sgn = torch.ones_like(pred_sgn)
+    # Set signs to positive (create new sign logits that represent positive signs)
+    pred_sign_logits = torch.full_like(
+        pred_sign_logits, 10.0
+    )  # Large positive logits for +1 signs
     tgt_sgn = torch.ones_like(tgt_sgn)
 
     # Target values
@@ -482,9 +502,9 @@ def test_exec_loss_uses_clipping():
 
     # This should not raise an error and should handle clipping gracefully
     losses = compute_dag_structure_loss(
-        pred_sgn,
+        pred_sign_logits,
         pred_digits,
-        pred_ops,
+        pred_op_logits,
         tgt_sgn,
         tgt_digits,
         tgt_ops,

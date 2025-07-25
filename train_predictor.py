@@ -471,17 +471,50 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                             )
                             else None
                         )
+                        last_operation_logits = (
+                            raw_model.dag.plan_predictor.last_operation_logits
+                            if hasattr(
+                                raw_model.dag.plan_predictor, "last_operation_logits"
+                            )
+                            else None
+                        )
+                        last_sign_logits = (
+                            raw_model.dag.plan_predictor.last_sign_logits
+                            if hasattr(raw_model.dag.plan_predictor, "last_sign_logits")
+                            else None
+                        )
                     else:  # PredictorOnlyModel
                         last_digit_logits = (
                             raw_model.dag_predictor.last_digit_logits
                             if hasattr(raw_model.dag_predictor, "last_digit_logits")
                             else None
                         )
+                        last_operation_logits = (
+                            raw_model.dag_predictor.last_operation_logits
+                            if hasattr(raw_model.dag_predictor, "last_operation_logits")
+                            else None
+                        )
+                        last_sign_logits = (
+                            raw_model.dag_predictor.last_sign_logits
+                            if hasattr(raw_model.dag_predictor, "last_sign_logits")
+                            else None
+                        )
                     if last_digit_logits is None:
                         raise RuntimeError(
                             "last_digit_logits not set in plan_predictor"
                         )
+                    if last_sign_logits is None:
+                        raise RuntimeError("last_sign_logits not set in plan_predictor")
+                    if last_operation_logits is None:
+                        raise RuntimeError(
+                            "last_operation_logits not set in plan_predictor"
+                        )
+
                     digit_logits_avg = last_digit_logits.mean(dim=1)  # (B,N,D,10)
+                    operation_logits_avg = last_operation_logits.mean(
+                        dim=1
+                    )  # (B,depth,n_ops)
+                    sign_logits_avg = last_sign_logits.mean(dim=1)  # (B,N)
                     pred_ops_avg = pred_ops.mean(dim=1)  # (B, depth_pred, n_ops)
 
                     # Ensure target and prediction tensors have compatible shapes
@@ -508,9 +541,9 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         )
 
                     # Add sequence dimension
-                    pred_sgn_seq = pred_sgn_avg.unsqueeze(1)
+                    sign_logits_seq = sign_logits_avg.unsqueeze(1)
                     digit_logits_seq = digit_logits_avg.unsqueeze(1)
-                    pred_ops_seq = pred_ops_avg.unsqueeze(1)
+                    operation_logits_seq = operation_logits_avg.unsqueeze(1)
 
                     # Add sequence dimension to targets
                     target_sgn_seq = target_sgn.unsqueeze(1)
@@ -521,11 +554,11 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     target_initial_values_seq = target_initial_values.unsqueeze(1)
                     target_final_exec_seq = target_final_exec.unsqueeze(1)
 
-                    # Compute loss
+                    # Compute loss - use all logits for numerically stable cross-entropy
                     losses = compute_dag_structure_loss(
-                        pred_sgn_seq,
+                        sign_logits_seq,
                         digit_logits_seq,
-                        pred_ops_seq,
+                        operation_logits_seq,
                         target_sgn_seq,
                         target_digits_seq,
                         target_ops_seq,
@@ -662,13 +695,21 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 exec_loss_display = loss_accum.get(
                     "exec_loss_smoothed", loss_accum["exec_loss"]
                 )
+
+                # Display weighted losses (what actually contributes to total loss)
+                weighted_sign_loss = cfg.sign_loss_weight * loss_accum["sign_loss"]
+                weighted_digit_loss = cfg.digit_loss_weight * loss_accum["digit_loss"]
+                weighted_op_loss = cfg.op_loss_weight * loss_accum["op_loss"]
+                weighted_value_loss = cfg.value_loss_weight * loss_accum["value_loss"]
+                weighted_exec_loss = cfg.exec_loss_weight * exec_loss_display
+
                 log_msg = (
                     f"iter {iter_num}: loss {loss_accum['total_loss']:.4f}, "
-                    f"sign {loss_accum['sign_loss']:.4f}, "
-                    f"digit {loss_accum['digit_loss']:.4f}, "
-                    f"op {loss_accum['op_loss']:.4f}, "
-                    f"value {loss_accum['value_loss']:.4f}, "
-                    f"exec {exec_loss_display:.4f}"
+                    f"sign {weighted_sign_loss:.4f}, "
+                    f"digit {weighted_digit_loss:.4f}, "
+                    f"op {weighted_op_loss:.4f}, "
+                    f"value {weighted_value_loss:.4f}, "
+                    f"exec {weighted_exec_loss:.4f}"
                     f", op_acc {loss_accum['op_accuracy']:.4f}, "
                     f"full_op_match {loss_accum['full_dag_op_match']:.4f}, "
                     f"sign_acc {loss_accum['sign_accuracy']:.4f}"

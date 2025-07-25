@@ -745,8 +745,20 @@ class TestLossFunctions(unittest.TestCase):
         target_ops[:, :, :, 0] = 1
 
         # Create perfect prediction logits instead of copying one-hot targets
-        pred_sgn = target_sgn.clone()
-        pred_ops = target_ops.clone()
+        # Create sign logits that will produce the target signs when passed through tanh
+        pred_sign_logits = torch.where(
+            target_sgn > 0, torch.tensor(10.0), torch.tensor(-10.0)
+        )
+
+        # Convert target operation one-hots to near-perfect logits
+        pred_ops = torch.full_like(target_ops, -10.0)  # Start with very negative logits
+        for b in range(B):
+            for t in range(T):
+                for d in range(depth):
+                    # Find which operation is the target (where one-hot is 1)
+                    target_op = target_ops[b, t, d].argmax()
+                    # Set a large positive logit for the target operation
+                    pred_ops[b, t, d, target_op] = 10.0
 
         # Convert target one-hots to near-perfect logits
         pred_digits = torch.full_like(
@@ -766,7 +778,7 @@ class TestLossFunctions(unittest.TestCase):
         target_final_exec = torch.ones(B, T, 1)
 
         losses = compute_dag_structure_loss(
-            pred_sgn,
+            pred_sign_logits,
             pred_digits,
             pred_ops,
             target_sgn,
