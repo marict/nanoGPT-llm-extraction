@@ -228,7 +228,10 @@ def _compute_exec_loss(
             ignore_clip=True,
         )
 
-        pred_mag = torch.exp(pred_ln.clamp(max=50.0)).reshape(-1)
+        # Soft capping using tanh to prevent overflow while maintaining gradients
+        # tanh(x/10) * 50 gives soft saturation around 50, but with smooth gradients
+        pred_ln_soft = torch.tanh(pred_ln / 10.0) * 50.0
+        pred_mag = torch.exp(pred_ln_soft).reshape(-1)
         tgt_mag = target_final_exec.abs().reshape(-1).to(torch.float32)
 
         # Log-space error ------------------------------------------------------
@@ -309,10 +312,11 @@ def compute_dag_structure_loss(
         + cfg.value_loss_weight * value_loss
     )
 
-    # Only allow exec loss if all values are finite
-    # since somtimes it will blow up.
-    if torch.isfinite(exec_loss).all():
-        total_loss += cfg.exec_loss_weight * exec_loss
+    # Soft capping for exec loss: use tanh to keep it bounded while preserving gradients
+    # Scale exec_loss to ~[0,10] range before tanh, then scale back to ~[0,5] range
+    # This keeps it meaningful while preventing blowups
+    exec_loss_capped = 5.0 * torch.tanh(exec_loss / 5.0)
+    total_loss += cfg.exec_loss_weight * exec_loss_capped
 
     return {
         "total_loss": total_loss,

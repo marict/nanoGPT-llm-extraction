@@ -90,7 +90,7 @@ sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
 value_loss_weight = 1.0
-exec_loss_weight = 1.0
+exec_loss_weight = 0.5
 
 # Random seeds
 seed = 42
