@@ -44,8 +44,8 @@ batch_size = 256
 block_size = 128
 
 # Model architecture (larger for RunPod training)
-n_head = 4
-n_layer = 4
+n_head = 16
+n_layer = 6
 n_embd = n_head * 64
 dropout = 0.1
 bias = True
@@ -76,8 +76,8 @@ check_nans = False  # Check for NaNs in cloud training
 sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
-value_loss_weight = 0
-exec_loss_weight = 0
+value_loss_weight = 1.0
+exec_loss_weight = 0.5
 
 # Random seeds
 seed = 42
