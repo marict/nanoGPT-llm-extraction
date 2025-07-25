@@ -523,7 +523,6 @@ def plan_to_tensors(
         )
 
         final_value_exec = (final_sgn * torch.exp(final_log)).item()
-        final_value_exec = final_value_exec.to(torch.float32)
 
     initial_log = torch.zeros(num_scratch_nodes)
 
