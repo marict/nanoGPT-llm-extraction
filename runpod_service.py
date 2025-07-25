@@ -130,7 +130,9 @@ def _bash_c_quote(script: str) -> str:
 
     We use GraphQL's official print_string utility to handle all escape sequences.
     """
-    command = "bash -c " + script
+    # For bash -c, the script needs to be a quoted argument
+    # Use shlex.quote to properly handle any quotes/escapes in the script
+    command = f"bash -c {shlex.quote(script)}"
     # print_string returns the string wrapped in quotes and properly escaped
     return print_string(command)[1:-1]  # Remove the outer quotes since RunPod adds them
 
@@ -189,6 +191,13 @@ def start_cloud_training(
     )
     docker_script = _create_docker_script(training_command)
     final_docker_args = _bash_c_quote(docker_script)
+
+    # Debug: print the docker command being sent
+    print("=== DEBUG: Docker script ===")
+    print(docker_script)
+    print("=== DEBUG: Final docker args ===")
+    print(final_docker_args)
+    print("=== END DEBUG ===")
 
     # ------------------------------------------------------------------ #
     # 2. Create RunPod instance
