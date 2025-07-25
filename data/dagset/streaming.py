@@ -77,7 +77,7 @@ class DAGValExample(DAGExample):
         signs_shape = self.structure_dict["target_initial_sgn"].shape
         digits_shape = self.structure_dict["target_initial_digits"].shape
         operations_shape = self.structure_dict["target_operation_probs"].shape
-        final_value_exec = self.structure_dict["target_final_exec"].item()
+        final_value_exec = self.structure_dict["target_final_exec"]
         return f"DAGValExample(seed={self.seed}, text={self.text}, depth={self.depth}, signs={signs_shape}, digits={digits_shape}, operations={operations_shape}, operations_named={self.operations_named}, did_expand={self.did_expand}, did_simplify={self.did_simplify}, final_value_sympy={self.final_value_sympy}, final_value_exec={final_value_exec}, allowed_operations={self.allowed_operations}, expr={self.expr}, english_conversion_probability={self.english_conversion_probability}, integer_no_decimal_probability={self.integer_no_decimal_probability}, printing_style={self.printing_style}, base={self.base})"
 
 
