@@ -742,7 +742,9 @@ def evaluate_dag_model(
                     token_count = len(enc.encode_ordinary(sample_text))
                     print(f"Token count: {token_count}")
                     # If we have the raw DAGExample, use its original floats for nicer printing
-                    true_vals = sample_obj.initial_values
+                    true_vals = (
+                        structures["target_initial_values"][batch_idx].cpu().tolist()
+                    )
                     print(
                         f"Target initial values (rounded to {cfg.max_decimal_places} dp):"
                     )

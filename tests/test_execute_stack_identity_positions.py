@@ -46,9 +46,11 @@ def test_identity_operations(test_case):
     )
 
     # Extract individual tensors from structure dict
-    signs = structure_dict["initial_sgn"][: len(initial_values)]  # trim padding
-    digits = structure_dict["initial_digits"][: len(initial_values)]  # trim padding
-    ops = structure_dict["operations"]  # original operations tensor
+    signs = structure_dict["target_initial_sgn"][: len(initial_values)]  # trim padding
+    digits = structure_dict["target_initial_digits"][
+        : len(initial_values)
+    ]  # trim padding
+    ops = structure_dict["target_operation_probs"]  # original operations tensor
 
     # Add batch and sequence dimensions
     sign_tensor = signs.view(1, 1, -1)

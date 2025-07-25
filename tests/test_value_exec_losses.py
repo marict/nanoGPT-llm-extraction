@@ -219,13 +219,19 @@ def test_exec_loss_perfect_prediction(batch, seq, depth):
     )
 
     # Extract tensors from the example
-    nodes = len(example.initial_values)
+    nodes = len(example.structure_dict["target_initial_digits"])
     digits = max_digits + max_decimal_places
 
     # Create tensors matching the example
-    tgt_sgn = example.signs.unsqueeze(0).unsqueeze(0)  # (1, 1, nodes)
-    tgt_digits = example.digits.unsqueeze(0).unsqueeze(0)  # (1, 1, nodes, digits, 10)
-    tgt_ops = example.operations.unsqueeze(0).unsqueeze(0)  # (1, 1, depth, n_ops)
+    tgt_sgn = (
+        example.structure_dict["target_initial_sgn"].unsqueeze(0).unsqueeze(0)
+    )  # (1, 1, nodes)
+    tgt_digits = (
+        example.structure_dict["target_initial_digits"].unsqueeze(0).unsqueeze(0)
+    )  # (1, 1, nodes, digits, 10)
+    tgt_ops = (
+        example.structure_dict["target_operation_probs"].unsqueeze(0).unsqueeze(0)
+    )  # (1, 1, depth, n_ops)
 
     # Create perfect prediction logits instead of copying one-hot targets
     # Create sign logits that will produce the target signs when passed through tanh
@@ -255,9 +261,11 @@ def test_exec_loss_perfect_prediction(batch, seq, depth):
 
     # Target values
     target_initial_values = torch.tensor(
-        [[example.initial_values]], dtype=torch.float32
+        [[example.structure_dict["target_initial_values"]]], dtype=torch.float32
     )
-    target_final_exec = torch.tensor([[example.final_value_exec]], dtype=torch.float32)
+    target_final_exec = torch.tensor(
+        [[example.structure_dict["target_final_value_exec"]]], dtype=torch.float32
+    )
 
     cfg = _build_test_config(max_digits, max_decimal_places)
 
@@ -299,19 +307,29 @@ def test_exec_loss_wrong_prediction(batch, seq, depth):
         max_decimal_places=max_decimal_places,
     )
 
-    tgt_sgn = example1.signs.unsqueeze(0).unsqueeze(0)
-    tgt_digits = example1.digits.unsqueeze(0).unsqueeze(0)
-    tgt_ops = example1.operations.unsqueeze(0).unsqueeze(0)
+    tgt_sgn = example1.structure_dict["target_initial_sgn"].unsqueeze(0).unsqueeze(0)
+    tgt_digits = (
+        example1.structure_dict["target_initial_digits"].unsqueeze(0).unsqueeze(0)
+    )
+    tgt_ops = (
+        example1.structure_dict["target_operation_probs"].unsqueeze(0).unsqueeze(0)
+    )
 
-    pred_sgn = example2.signs.unsqueeze(0).unsqueeze(0)
-    pred_digits = example2.digits.unsqueeze(0).unsqueeze(0)
-    pred_ops = example2.operations.unsqueeze(0).unsqueeze(0)
+    pred_sgn = example2.structure_dict["target_initial_sgn"].unsqueeze(0).unsqueeze(0)
+    pred_digits = (
+        example2.structure_dict["target_initial_digits"].unsqueeze(0).unsqueeze(0)
+    )
+    pred_ops = (
+        example2.structure_dict["target_operation_probs"].unsqueeze(0).unsqueeze(0)
+    )
 
     # Target values
     target_initial_values = torch.tensor(
-        [[example1.initial_values]], dtype=torch.float32
+        [[example1.structure_dict["target_initial_values"]]], dtype=torch.float32
     )
-    target_final_exec = torch.tensor([[example1.final_value_exec]], dtype=torch.float32)
+    target_final_exec = torch.tensor(
+        [[example1.structure_dict["target_final_value_exec"]]], dtype=torch.float32
+    )
 
     cfg = _build_test_config(max_digits, max_decimal_places)
 
