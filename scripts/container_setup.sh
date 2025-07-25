@@ -35,11 +35,14 @@ log "updating apt repositories"
 if ! apt-get update; then
     log "apt-get update failed – removing NVIDIA repo entries and retrying"
 
-    # Delete any NVIDIA-specific list files
-    find /etc/apt/sources.list.d -type f -iname "*nvidia*" -exec rm -f {} + || true
+    # Delete any NVIDIA/CUDA-specific list files
+    find /etc/apt/sources.list.d -type f \( -iname "*nvidia*" -o -iname "*cuda*" \) -exec rm -f {} + || true
 
-    # Remove NVIDIA lines from the main sources.list
-    sed -i '/nvidia/d' /etc/apt/sources.list || true
+    # Remove NVIDIA or CUDA lines from the main sources.list
+    sed -i '/nvidia/Id;/cuda/Id' /etc/apt/sources.list || true
+
+    # Clear broken lists
+    apt-get clean
 
     # Retry (ignore failure so script proceeds)
     apt-get update || true
