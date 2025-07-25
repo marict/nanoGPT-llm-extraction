@@ -62,8 +62,8 @@ grad_clip = 1.0
 # Learning rate schedule
 warmup_iters = max_iters * 0.02  # 1/50 of max_iters
 lr_decay_iters = max_iters  # Updated to match max_iters
-min_lr = 2e-5
-learning_rate = 3e-5
+min_lr = 2e-4
+learning_rate = 3e-4
 
 # System settings (optimized for RunPod)
 backend = "nccl"
