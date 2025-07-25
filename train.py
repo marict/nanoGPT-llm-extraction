@@ -49,9 +49,6 @@ from training_utils import (
     update_config,
 )
 
-# (TORCH_2_2_1, CUDA_AVAILABLE) already imported from runtime
-
-
 # -----------------------------------------------------------------------------
 # Configuration constants
 # -----------------------------------------------------------------------------
@@ -312,6 +309,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     print(f"[{time.time() - setup_start:.2f}s] Loading meta")
     meta_dtype = np.uint16
     vocab_size = None
+    encode = decode = None  # Initialize encoder/decoder functions
     if master_process:
         print(
             f"[{time.time() - setup_start:.2f}s] Found vocab_size {vocab_size} and dtype {meta_dtype}"
