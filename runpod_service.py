@@ -114,10 +114,31 @@ def _build_training_command(
 
 
 def _create_docker_script(training_command: str, commit_hash: str | None = None) -> str:
-    """Create the Docker startup script for the RunPod instance."""
-    # Base commands: update, install git, setup repo
+    """Create the Docker startup script for the RunPod instance.
+
+    We *must* remove any NVIDIA/CUDA APT sources **before** the first `apt-get update`
+    to avoid hash-mismatch errors when NVIDIA's mirror is out of sync.  Doing this
+    inline keeps the logic self-contained and ensures the container setup script will
+    run even if the base image ships with CUDA repos enabled.
+    """
+
+    # 0) Clean up NVIDIA/CUDA sources so the subsequent update succeeds
+    nvidia_repo_cleanup = " && ".join(
+        [
+            # Drop any standalone source files that reference NVIDIA or CUDA
+            "rm -f /etc/apt/sources.list.d/*nvidia* /etc/apt/sources.list.d/*cuda* || true",
+            # Strip offending lines from the main sources.list if present
+            'if grep -qiE "(nvidia|cuda)" /etc/apt/sources.list; then '
+            'grep -viE "(nvidia|cuda)" /etc/apt/sources.list > /tmp/s.list && '
+            "mv /tmp/s.list /etc/apt/sources.list; fi",
+        ]
+    )
+
+    # 1) Standard system preparatory commands
     base_commands = [
-        "apt-get update && apt-get install -y git",
+        nvidia_repo_cleanup,
+        # After cleanup, refresh package lists and install git
+        "apt-get update -y && apt-get install -y git",
         "cd /workspace",
         "( [ -d repo/.git ] && git -C repo pull || git clone {REPO_URL} repo )".format(
             REPO_URL=REPO_URL
