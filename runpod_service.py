@@ -126,10 +126,10 @@ def _create_docker_script(training_command: str, commit_hash: str | None = None)
     # 0) Clean up NVIDIA/CUDA sources so the subsequent update succeeds
     nvidia_repo_cleanup = " && ".join(
         [
-            # Drop any standalone source files that reference NVIDIA or CUDA
-            "find /etc/apt/sources.list.d -maxdepth 1 -name '*nvidia*' -o -name '*cuda*' -exec rm -f {} + 2>/dev/null || true",
+            # Remove known NVIDIA/CUDA repository files
+            "rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.list",
             # Strip offending lines from the main sources.list if present
-            "if grep -qiE '(nvidia|cuda)' /etc/apt/sources.list; then "
+            "[ -f /etc/apt/sources.list ] && if grep -qiE '(nvidia|cuda)' /etc/apt/sources.list; then "
             "grep -viE '(nvidia|cuda)' /etc/apt/sources.list > /tmp/s.list && "
             "mv /tmp/s.list /etc/apt/sources.list; fi",
         ]
