@@ -736,6 +736,8 @@ def evaluate_dag_model(
                     print(
                         f"Predicted stack execution value: {pred_final_val[batch_idx].item()}"
                     )
+                    print("Predicted sign logits:")
+                    print(pred_sign_vec.cpu().tolist())
                     # Print number of tokens in the sample text to check context length
                     enc = get_encoding("gpt2")
                     token_count = len(enc.encode_ordinary(sample_text))
