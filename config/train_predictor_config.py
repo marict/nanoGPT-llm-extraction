@@ -20,7 +20,7 @@ init_from = "scratch"
 dataset = "dagset"  # Use DAG dataset for predictor training
 
 # DAG dataset parameters
-max_dag_depth = 6  # Must match dag_depth in model config
+max_dag_depth = 4  # Must match dag_depth in model config
 # The original NALU paper had values in range 9999
 max_digits = 3
 max_decimal_places = 3
