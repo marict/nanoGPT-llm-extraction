@@ -35,11 +35,21 @@ log "removing NVIDIA/CUDA apt sources"
 # 1) Drop any source-list files that reference NVIDIA or CUDA
 find /etc/apt/sources.list.d -type f \( -iname "*nvidia*" -o -iname "*cuda*" \) -exec rm -f {} + || true
 
-# 2) Scrub ALL remaining apt source files (lists, sources, etc.) for stray NVIDIA/CUDA lines.
-#    This handles modern *.sources format in Ubuntu 22.04+ in addition to classic *.list files.
-for src_file in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
-    if [[ -f "${src_file}" ]]; then
-        sed -i '/nvidia/Id;/cuda/Id' "${src_file}" || true
+# 2) Remove any fragment files that *reference* NVIDIA/CUDA, regardless of their filename.
+#    For the main sources.list we strip offending lines in-place; for others we delete the file.
+
+#    Handle the main sources.list separately (cannot delete entirely).
+if grep -qiE "(nvidia|cuda)" /etc/apt/sources.list; then
+    log "stripping NVIDIA/CUDA lines from /etc/apt/sources.list"
+    grep -viE "(nvidia|cuda)" /etc/apt/sources.list > /etc/apt/sources.list.clean
+    mv /etc/apt/sources.list.clean /etc/apt/sources.list
+fi
+
+#    Now iterate over every source fragment file in sources.list.d and drop the file if it references NVIDIA/CUDA.
+for src_file in /etc/apt/sources.list.d/*; do
+    if [[ -f "${src_file}" ]] && grep -qiE "(nvidia|cuda)" "${src_file}"; then
+        log "removing source file ${src_file} that references NVIDIA/CUDA"
+        rm -f "${src_file}" || true
     fi
 done
 
