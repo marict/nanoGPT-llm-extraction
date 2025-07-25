@@ -6,6 +6,7 @@ import subprocess
 
 import requests
 import runpod
+from graphql.language.print_string import print_string
 
 import wandb
 from python_version_check import check_python_version
@@ -158,14 +159,16 @@ def _create_docker_script(training_command: str, commit_hash: str | None = None)
 
 
 def _bash_c_quote(script: str) -> str:
-    """Return a *bash -c* command where *script* is wrapped in double quotes and all
-    embedded double quotes are escaped. This avoids single-quote characters so the
-    resulting string can be embedded in a GraphQL argument that itself is delimited
-    with single quotes (which the RunPod API uses).
-    """
+    """Return a *bash -c* command where *script* is properly escaped for GraphQL.
 
-    escaped = script.replace("\\", "\\\\").replace('"', '\\"')
-    return f'bash -c "{escaped}"'
+    The RunPod library embeds docker_args directly into a GraphQL mutation using an f-string:
+    f'dockerArgs: "{docker_args}"'
+
+    We use GraphQL's official print_string utility to handle all escape sequences.
+    """
+    command = "bash -c " + script
+    # print_string returns the string wrapped in quotes and properly escaped
+    return print_string(command)[1:-1]  # Remove the outer quotes since RunPod adds them
 
 
 def start_cloud_training(
