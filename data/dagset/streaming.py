@@ -840,14 +840,14 @@ class DAGStructureDataset:
         """Batch structure tensors with proper padding.
 
         Args:
-            structures: List of structure dictionaries
-            examples: List of DAGExample objects for extracting target values
+            structures: List of structure dictionaries.
+            examples: List of DAGExample objects with other information.
 
         Returns:
             Batched structure tensors
         """
         batch_size = len(structures)
-        max_depth = max(s["depth"].item() for s in structures)
+        max_depth = max(e.depth for e in examples)
         max_nodes = max_depth + 1
 
         # Initialize batched tensors

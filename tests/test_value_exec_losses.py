@@ -5,8 +5,8 @@ import pytest
 import torch
 
 from data.dagset.streaming import generate_single_dag_example
-from models.dag_model import OP_NAMES, execute_stack
-from predictor_utils import compute_dag_structure_loss, digits_to_magnitude
+from models.dag_model import OP_NAMES
+from predictor_utils import compute_dag_structure_loss
 
 
 def _make_one_hot(indices: torch.Tensor, num_classes: int) -> torch.Tensor:
