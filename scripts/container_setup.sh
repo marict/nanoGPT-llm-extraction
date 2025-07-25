@@ -27,9 +27,24 @@ if [[ ! -d .git ]]; then
 fi
 
 #---------------------------------------------------------------------------#
-# system pkgs (guard against readonly images)
+# system pkgs (robust apt update – NVIDIA repo can have sync issues)
 #---------------------------------------------------------------------------#
-apt-get update || true
+
+# Try updating once; if it fails, strip NVIDIA repository entries and retry.
+log "updating apt repositories"
+if ! apt-get update; then
+    log "apt-get update failed – removing NVIDIA repo entries and retrying"
+
+    # Delete any NVIDIA-specific list files
+    find /etc/apt/sources.list.d -type f -iname "*nvidia*" -exec rm -f {} + || true
+
+    # Remove NVIDIA lines from the main sources.list
+    sed -i '/nvidia/d' /etc/apt/sources.list || true
+
+    # Retry (ignore failure so script proceeds)
+    apt-get update || true
+fi
+
 apt-get install -y --no-install-recommends tree
 
 #---------------------------------------------------------------------------#
