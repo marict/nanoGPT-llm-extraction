@@ -30,23 +30,16 @@ fi
 # system pkgs (robust apt update – NVIDIA repo can have sync issues)
 #---------------------------------------------------------------------------#
 
-# Try updating once; if it fails, strip NVIDIA repository entries and retry.
+# Remove any NVIDIA/CUDA apt sources unconditionally (we don't need them)
+log "removing NVIDIA/CUDA apt sources"
+find /etc/apt/sources.list.d -type f \( -iname "*nvidia*" -o -iname "*cuda*" \) -exec rm -f {} + || true
+# Also scrub main sources.list lines
+sed -i '/nvidia/Id;/cuda/Id' /etc/apt/sources.list || true
+apt-get clean
+
+# Refresh package lists once (should succeed now)
 log "updating apt repositories"
-if ! apt-get update; then
-    log "apt-get update failed – removing NVIDIA repo entries and retrying"
-
-    # Delete any NVIDIA/CUDA-specific list files
-    find /etc/apt/sources.list.d -type f \( -iname "*nvidia*" -o -iname "*cuda*" \) -exec rm -f {} + || true
-
-    # Remove NVIDIA or CUDA lines from the main sources.list
-    sed -i '/nvidia/Id;/cuda/Id' /etc/apt/sources.list || true
-
-    # Clear broken lists
-    apt-get clean
-
-    # Retry (ignore failure so script proceeds)
-    apt-get update || true
-fi
+apt-get update -y || true
 
 apt-get install -y --no-install-recommends tree
 
