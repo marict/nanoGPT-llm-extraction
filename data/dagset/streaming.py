@@ -57,7 +57,7 @@ class DAGExample:
 class DAGTrainExample(DAGExample):
     """Lightweight DAG example for training with minimal attributes to reduce memory overhead."""
 
-    pass  # Only inherits the essential base attributes
+    initial_values: list[float]  # Required for value loss computation during training
 
 
 @dataclass
@@ -478,7 +478,6 @@ def plan_to_tensors(
     base: int = 10,
     depth: int | None = None,
     allowed_operations: list[str] | None = None,
-    train: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Convert a DAG plan to structure tensors for training."""
     if depth is None:
@@ -506,27 +505,24 @@ def plan_to_tensors(
         op_idx = operation_to_index[op]
         operations_one_hot[i, op_idx] = 1.0
 
-    # Execute the DAG to get the final value (skip for training since it's expensive)
-    if train:
-        final_value_exec = 0.0  # Placeholder for training
-    else:
-        with torch.no_grad():
-            # Use double precision during reference execution to minimize numerical errors
-            sign_tensor = signs.view(1, 1, -1).to(torch.float64)
-            digit_probs = digits_tensor.unsqueeze(0).unsqueeze(0).to(torch.float64)
-            op_probs = operations_one_hot.unsqueeze(0).unsqueeze(0).to(torch.float64)
+    # Execute the DAG to get the final value
+    with torch.no_grad():
+        # Use double precision during reference execution to minimize numerical errors
+        sign_tensor = signs.view(1, 1, -1).to(torch.float64)
+        digit_probs = digits_tensor.unsqueeze(0).unsqueeze(0).to(torch.float64)
+        op_probs = operations_one_hot.unsqueeze(0).unsqueeze(0).to(torch.float64)
 
-            final_sgn, final_log = execute_stack(
-                sign_tensor,
-                digit_probs,
-                op_probs,
-                max_digits=max_digits,
-                max_decimal_places=max_decimal_places,
-                base=base,
-                ignore_clip=True,
-            )
+        final_sgn, final_log = execute_stack(
+            sign_tensor,
+            digit_probs,
+            op_probs,
+            max_digits=max_digits,
+            max_decimal_places=max_decimal_places,
+            base=base,
+            ignore_clip=True,
+        )
 
-            final_value_exec = (final_sgn * torch.exp(final_log)).item()
+        final_value_exec = (final_sgn * torch.exp(final_log)).item()
 
     # Return structure dict format for predictor training
     if depth is None:
@@ -694,7 +690,6 @@ def generate_single_dag_example(
         base=base,
         depth=depth,
         allowed_operations=allowed_operations,
-        train=train,
     )
 
     if train:
@@ -708,6 +703,7 @@ def generate_single_dag_example(
             max_decimal_places=max_decimal_places,
             base=base,
             seed=seed,
+            initial_values=initial_values,
         )
     else:
         # Full example creation for evaluation/debugging (original behavior)
@@ -919,16 +915,10 @@ class DAGStructureDataset:
             batched_depths[i] = depth
 
             # Extract target initial values - check example type
-            if isinstance(example, DAGTrainExample):
-                # Training examples don't store initial_values for memory efficiency
-                # Leave as zeros (already initialized)
-                pass
-            else:
-                # Evaluation mode: use example attributes
-                num_values = min(len(example.initial_values), max_nodes)
-                batched_target_initial_values[i, :num_values] = torch.tensor(
-                    example.initial_values[:num_values], dtype=torch.float32
-                )
+            num_values = min(len(example.initial_values), max_nodes)
+            batched_target_initial_values[i, :num_values] = torch.tensor(
+                example.initial_values[:num_values], dtype=torch.float32
+            )
 
             # Extract target final execution value - check example type
             if isinstance(example, DAGTrainExample):
