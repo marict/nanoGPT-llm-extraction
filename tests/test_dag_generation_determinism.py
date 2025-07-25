@@ -28,7 +28,10 @@ def test_generate_single_dag_example_determinism(depth: int, seed: int):
     assert example1.text == example2.text
 
     # Check that initial values are identical
-    assert example1.initial_values == example2.initial_values
+    assert torch.equal(
+        example1.structure_dict["target_initial_values"],
+        example2.structure_dict["target_initial_values"],
+    )
 
     # Check that operations are identical
     assert example1.operations_named == example2.operations_named

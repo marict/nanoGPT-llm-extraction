@@ -260,8 +260,8 @@ def test_exec_loss_perfect_prediction(batch, seq, depth):
                     pred_digits[b, s, n, d, target_digit] = 10.0
 
     # Target values
-    target_initial_values = torch.tensor(
-        [[example.structure_dict["target_initial_values"]]], dtype=torch.float32
+    target_initial_values = (
+        example.structure_dict["target_initial_values"].unsqueeze(0).unsqueeze(0)
     )
     target_final_exec = torch.tensor(
         [[example.structure_dict["target_final_exec"]]], dtype=torch.float32
@@ -324,8 +324,8 @@ def test_exec_loss_wrong_prediction(batch, seq, depth):
     )
 
     # Target values
-    target_initial_values = torch.tensor(
-        [[example1.structure_dict["target_initial_values"]]], dtype=torch.float32
+    target_initial_values = (
+        example1.structure_dict["target_initial_values"].unsqueeze(0).unsqueeze(0)
     )
     target_final_exec = torch.tensor(
         [[example1.structure_dict["target_final_exec"]]], dtype=torch.float32

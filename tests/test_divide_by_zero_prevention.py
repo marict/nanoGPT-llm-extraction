@@ -18,16 +18,17 @@ def test_divide_by_zero_prevention():
         if op == "divide":
             divisor_idx = i + 1
             assert (
-                example.initial_values[divisor_idx] != 0.0
+                example.structure_dict["target_initial_values"][divisor_idx] != 0.0
             ), f"Found zero divisor at index {divisor_idx}"
 
     # Verify the final value exists and is finite
-    assert example.final_value_exec is not None
+    final_value_exec = example.structure_dict["target_final_exec"]
+    assert final_value_exec is not None
     assert example.final_value_sympy is not None
     assert not any(
         map(
             lambda x: x == float("inf") or x == float("-inf"),
-            [example.final_value_exec, example.final_value_sympy],
+            [final_value_exec, example.final_value_sympy],
         )
     )
 
@@ -50,15 +51,16 @@ def test_divide_by_zero_prevention_random():
             if op == "divide":
                 divisor_idx = i + 1
                 assert (
-                    example.initial_values[divisor_idx] != 0.0
+                    example.structure_dict["target_initial_values"][divisor_idx] != 0.0
                 ), f"Found zero divisor at index {divisor_idx} with seed {seed}"
 
         # Verify all final values are finite
-        assert example.final_value_exec is not None
+        final_value_exec = example.structure_dict["target_final_exec"]
+        assert final_value_exec is not None
         assert example.final_value_sympy is not None
         assert not any(
             map(
                 lambda x: x == float("inf") or x == float("-inf"),
-                [example.final_value_exec, example.final_value_sympy],
+                [final_value_exec, example.final_value_sympy],
             )
         )

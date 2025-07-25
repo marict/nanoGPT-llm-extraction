@@ -731,7 +731,7 @@ def evaluate_dag_model(
                     print(f"Did simplify: {did_simplify}")
                     print(f"Sympy execution value: {sample_obj.final_value_sympy}")
                     print(
-                        f"Target stack execution value: {sample_obj.final_value_exec}"
+                        f"Target stack execution value: {sample_obj.structure_dict['target_final_exec']}"
                     )
                     print(
                         f"Predicted stack execution value: {pred_final_val[batch_idx].item()}"

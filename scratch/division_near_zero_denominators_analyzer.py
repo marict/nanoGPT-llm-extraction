@@ -103,8 +103,9 @@ def debug_execute_stack_directly(example):
         direct_result = float(sgn * math.exp(log_val))
 
         print(f"\nDIRECT EXECUTE_STACK RESULT: {direct_result:.8g}")
-        print(f"EXAMPLE'S FINAL_VALUE_EXEC:  {example.final_value_exec:.8g}")
-        print(f"Match: {abs(direct_result - example.final_value_exec) < 1e-6}")
+        final_value_exec = example.structure_dict["target_final_exec"]
+        print(f"EXAMPLE'S FINAL_VALUE_EXEC:  {final_value_exec:.8g}")
+        print(f"Match: {abs(direct_result - final_value_exec) < 1e-6}")
 
     except Exception as e:
         print(f"❌ ERROR in execute_stack: {str(e)}")
@@ -142,16 +143,16 @@ def test_specific_production_seed(seed: int):
 
     print("RESULTS:")
     print(f"Sympy result:     {example.final_value_sympy:.8g}")
-    print(f"DAG exec result:  {example.final_value_exec:.8g}")
+    final_value_exec = example.structure_dict["target_final_exec"]
+    print(f"DAG exec result:  {final_value_exec:.8g}")
     print()
 
     # Calculate error metrics
-    if example.final_value_sympy and example.final_value_exec:
+    if example.final_value_sympy and final_value_exec:
         rel_error = abs(
-            (example.final_value_exec - example.final_value_sympy)
-            / example.final_value_sympy
+            (final_value_exec - example.final_value_sympy) / example.final_value_sympy
         )
-        abs_error = abs(example.final_value_exec - example.final_value_sympy)
+        abs_error = abs(final_value_exec - example.final_value_sympy)
 
         print("ERROR ANALYSIS:")
         print(f"Relative error:   {rel_error:.8g}")
@@ -177,7 +178,8 @@ def test_specific_production_seed(seed: int):
         # Final comparison of the key results
         print("\nFINAL COMPARISON:")
         print(f"Sympy result (correct):  {example.final_value_sympy:.8g}")
-        print(f"DAG result (generation): {example.final_value_exec:.8g}")
+        final_value_exec = example.structure_dict["target_final_exec"]
+        print(f"DAG result (generation): {final_value_exec:.8g}")
         print(f"Relative error:          {rel_error:.8g}")
 
     return example

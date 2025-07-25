@@ -74,7 +74,11 @@ class DAGValExample(DAGExample):
     expr: sympy.Basic | None = None
 
     def __str__(self):
-        return f"DAGValExample(seed={self.seed}, text={self.text}, depth={self.depth}, signs={self.signs.shape}, digits={self.digits.shape}, operations={self.operations.shape}, operations_named={self.operations_named}, did_expand={self.did_expand}, did_simplify={self.did_simplify}, final_value_sympy={self.final_value_sympy}, final_value_exec={self.final_value_exec}, allowed_operations={self.allowed_operations}, expr={self.expr}, english_conversion_probability={self.english_conversion_probability}, integer_no_decimal_probability={self.integer_no_decimal_probability}, printing_style={self.printing_style}, base={self.base})"
+        signs_shape = self.structure_dict["target_initial_sgn"].shape
+        digits_shape = self.structure_dict["target_initial_digits"].shape
+        operations_shape = self.structure_dict["target_operation_probs"].shape
+        final_value_exec = self.structure_dict["target_final_exec"].item()
+        return f"DAGValExample(seed={self.seed}, text={self.text}, depth={self.depth}, signs={signs_shape}, digits={digits_shape}, operations={operations_shape}, operations_named={self.operations_named}, did_expand={self.did_expand}, did_simplify={self.did_simplify}, final_value_sympy={self.final_value_sympy}, final_value_exec={final_value_exec}, allowed_operations={self.allowed_operations}, expr={self.expr}, english_conversion_probability={self.english_conversion_probability}, integer_no_decimal_probability={self.integer_no_decimal_probability}, printing_style={self.printing_style}, base={self.base})"
 
 
 def generate_uniform_digit_number(
@@ -697,14 +701,14 @@ def generate_single_dag_example(
             not train
             and final_value_sympy != np.inf
             and not math.isclose(
-                example.final_value_exec,
+                example.structure_dict["target_final_exec"],
                 example.final_value_sympy,
                 abs_tol=1e-2,
                 rel_tol=1e-2,
             )
         ):
             logging.warning(
-                f"\n\n-------------------WARNING: Final value mismatch between sympy and tensor execute: {example.final_value_exec} != {example.final_value_sympy}, \nexample: {example}\n\n-------------------"
+                f"\n\n-------------------WARNING: Final value mismatch between sympy and tensor execute: {example.structure_dict['target_final_exec']} != {example.final_value_sympy}, \nexample: {example}\n\n-------------------"
             )
 
     return example
