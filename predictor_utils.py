@@ -178,7 +178,7 @@ def _compute_value_loss(
     cfg,
     device_type: str,
 ) -> torch.Tensor:
-    """Compute robust loss between predicted and target initial values in log space."""
+    """Compute robust loss between predicted and target initial values using direct regression."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
         # Convert logits to probabilities for magnitude computation
         pred_digit_probs = F.softmax(pred_digit_logits.to(torch.float32), dim=-1)
@@ -188,30 +188,27 @@ def _compute_value_loss(
             pred_digit_probs, cfg.max_digits, cfg.max_decimal_places, cfg.base
         )  # (B,T,N)
 
-        # Convert to log space (clamp for numerical stability)
-        pred_log_magnitude = torch.log(pred_magnitude.clamp(min=1e-8)).to(torch.float32)
+        # Reconstruct full signed predicted values
+        pred_values = pred_sgn.to(torch.float32) * pred_magnitude
 
-        # Target log magnitudes
-        target_log_magnitude = torch.log(target_initial_values.abs() + 1e-8).to(
-            torch.float32
+        # Direct regression loss on signed values
+        # Use smooth L1 for robustness to outliers
+        direct_loss = F.smooth_l1_loss(
+            pred_values, target_initial_values.to(torch.float32)
         )
 
-        current_beta = 1.0
-        current_sign_weight = 0.1
-
-        magnitude_loss = F.smooth_l1_loss(
-            pred_log_magnitude, target_log_magnitude, beta=current_beta
+        # Optional: Add relative error component for values with different scales
+        # This helps when we have both small (0.01) and large (1000) values
+        epsilon = 1e-8
+        relative_error = (pred_values - target_initial_values.to(torch.float32)) / (
+            target_initial_values.abs() + epsilon
+        )
+        relative_loss = F.smooth_l1_loss(
+            relative_error, torch.zeros_like(relative_error)
         )
 
-        target_sign_smooth = torch.sign(target_initial_values)  # ±1
-        sign_mask = target_initial_values.abs() > 1e-8  # ignore target zeros
-
-        sign_diff = (
-            pred_sgn.to(torch.float32) - target_sign_smooth.to(torch.float32)
-        ) * sign_mask.float()
-        sign_penalty = current_sign_weight * (sign_diff**2).mean()
-
-        return magnitude_loss + sign_penalty
+        # Combine direct and relative losses
+        return direct_loss + 0.1 * relative_loss
 
 
 def _compute_exec_loss(
@@ -222,7 +219,7 @@ def _compute_exec_loss(
     cfg,
     device_type: str,
 ) -> torch.Tensor:
-    """Execution loss using natural log magnitudes directly (avoids exp** blow-up)."""
+    """Execution loss using direct regression on signed execution results."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
         # Convert logits to probabilities for execution
         pred_digit_probs = F.softmax(pred_digit_logits.to(torch.float32), dim=-1)
@@ -238,43 +235,33 @@ def _compute_exec_loss(
             ignore_clip=True,  # raw for loss
         )
 
-        # Flatten and ensure float32 for smooth_l1_loss compatibility
-        pred_final_ln = pred_final_ln.reshape(-1).to(torch.float32)
-        pred_final_sgn = pred_final_sgn.reshape(-1).to(torch.float32)
+        # Convert from log space back to actual values
+        pred_final_magnitude = torch.exp(
+            pred_final_ln.clamp(max=50.0)
+        )  # Clamp to prevent overflow
+        pred_final_values = pred_final_sgn.to(torch.float32) * pred_final_magnitude
+
+        # Flatten for loss computation
+        pred_final_values = pred_final_values.reshape(-1).to(torch.float32)
         target_flat = target_final_exec.reshape(-1).to(torch.float32)
 
-        # Target natural log magnitude - ensure float32
-        tgt_ln = torch.log(target_flat.abs() + 1e-8).to(torch.float32)
+        # Direct regression loss on signed execution results
+        direct_loss = F.smooth_l1_loss(pred_final_values, target_flat)
 
-        current_beta = 1.0
-        current_rel_weight = 0.01
-        current_overflow_threshold = 27.6
-        current_overflow_weight = 0.05
-
-        log_loss = F.smooth_l1_loss(pred_final_ln, tgt_ln, beta=current_beta)
-
-        log_diff = (pred_final_ln - tgt_ln).abs()
-
-        # More aggressive penalty for larger errors
-        rel_term = torch.exp(log_diff.clamp(max=8.0)) - 1.0
-        rel_loss = current_rel_weight * rel_term.clamp(max=200.0).mean()
-
-        # C) Overflow penalty
-        overflow_pen = (
-            current_overflow_weight
-            * (pred_final_ln.abs() > current_overflow_threshold).float().mean()
+        # Add relative error component for scale robustness
+        epsilon = 1e-8
+        relative_error = (pred_final_values - target_flat) / (
+            target_flat.abs() + epsilon
+        )
+        relative_loss = F.smooth_l1_loss(
+            relative_error, torch.zeros_like(relative_error)
         )
 
-        mag_loss = log_loss + rel_loss + overflow_pen
+        # Add overflow penalty to prevent extreme predictions
+        overflow_threshold = 1e10  # Much simpler threshold in actual value space
+        overflow_penalty = (pred_final_values.abs() > overflow_threshold).float().mean()
 
-        # Sign penalty for final execution results (fixed weight 0.1)
-        # This is essential: predicting -10 instead of +10 should be worse than predicting 8 instead of +10
-        tgt_sign = torch.sign(target_flat)
-        sign_mask = target_flat.abs() > 1e-8  # ignore target zeros
-        sign_mismatch = (pred_final_sgn != tgt_sign) & sign_mask
-        sign_pen = 0.1 * sign_mismatch.float().mean()
-
-        return mag_loss + sign_pen
+        return direct_loss + 0.1 * relative_loss + 0.05 * overflow_penalty
 
 
 # --------------------------------------------------------------------------- #
