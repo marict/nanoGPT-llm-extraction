@@ -43,31 +43,6 @@ def _validate_note(note: str) -> None:
         )
 
 
-def _validate_commit_hash(commit_hash: str) -> str:
-    """Validate that the commit hash exists in the repository."""
-    if not commit_hash:
-        return commit_hash
-
-    # Basic format validation - Git commit hashes are 40 hex characters (full) or 7+ hex characters (short)
-    if not re.match(r"^[a-fA-F0-9]{7,40}$", commit_hash):
-        raise ValueError(f"Invalid commit hash format: {commit_hash}")
-
-    # Check if commit exists in the local repository
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--verify", f"{commit_hash}^{{commit}}"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        # Return the full commit hash
-        return result.stdout.strip()
-    except subprocess.CalledProcessError:
-        raise ValueError(f"Commit hash not found in repository: {commit_hash}")
-    except FileNotFoundError:
-        raise RunPodError("Git command not found. Please ensure git is installed.")
-
-
 def _resolve_gpu_id(gpu_type: str) -> str:
     """Return the GPU id for ``gpu_type`` which may be a name or id."""
     try:
@@ -114,7 +89,7 @@ def _build_training_command(
     return cmd
 
 
-def _create_docker_script(training_command: str, commit_hash: str | None = None) -> str:
+def _create_docker_script(training_command: str) -> str:
     """Create the Docker startup script for the RunPod instance.
 
     We *must* remove any NVIDIA/CUDA APT sources **before** the first `apt-get update`
@@ -124,15 +99,8 @@ def _create_docker_script(training_command: str, commit_hash: str | None = None)
     """
 
     # 0) Clean up NVIDIA/CUDA sources so the subsequent update succeeds
-    nvidia_repo_cleanup = " && ".join(
-        [
-            # Remove known NVIDIA/CUDA repository files
-            "rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.list",
-            # Strip offending lines from the main sources.list if present
-            "[ -f /etc/apt/sources.list ] && if grep -qiE '(nvidia|cuda)' /etc/apt/sources.list; then "
-            "grep -viE '(nvidia|cuda)' /etc/apt/sources.list > /tmp/s.list && "
-            "mv /tmp/s.list /etc/apt/sources.list; fi",
-        ]
+    nvidia_repo_cleanup = (
+        "rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.list"
     )
 
     # 1) Standard system preparatory commands
@@ -144,16 +112,8 @@ def _create_docker_script(training_command: str, commit_hash: str | None = None)
         "( [ -d repo/.git ] && git -C repo pull || git clone {REPO_URL} repo )".format(
             REPO_URL=REPO_URL
         ),
+        f"bash /workspace/repo/scripts/container_setup.sh {training_command}",
     ]
-
-    # Add commit checkout if specified
-    if commit_hash:
-        base_commands.append(f"cd /workspace/repo && git checkout {commit_hash}")
-
-    # Add the container setup command
-    base_commands.append(
-        f"bash /workspace/repo/scripts/container_setup.sh {training_command}"
-    )
 
     return " && ".join(base_commands)
 
@@ -179,17 +139,11 @@ def start_cloud_training(
     keep_alive: bool = False,
     note: str | None = None,
     script_name: str = "train.py",
-    commit_hash: str | None = None,
 ) -> str:
     """Launch a RunPod GPU instance and run training automatically."""
 
     # Validate inputs
     _validate_note(note)
-
-    # Validate commit hash if provided
-    if commit_hash:
-        commit_hash = _validate_commit_hash(commit_hash)
-        print(f"Will checkout commit: {commit_hash}")
 
     # Require WANDB_API_KEY so that a W&B run (and run_id) is always available
     if not os.getenv("WANDB_API_KEY"):
@@ -229,7 +183,7 @@ def start_cloud_training(
     training_command = _build_training_command(
         train_args, keep_alive, note, wandb_run_id, script_name
     )
-    docker_script = _create_docker_script(training_command, commit_hash)
+    docker_script = _create_docker_script(training_command)
     final_docker_args = _bash_c_quote(docker_script)
 
     # ------------------------------------------------------------------ #
@@ -395,11 +349,6 @@ if __name__ == "__main__":
         default="train.py",
         help="Training script to run (train.py or train_predictor.py)",
     )
-    t.add_argument(
-        "--commit",
-        default=None,
-        help="Git commit hash to checkout before running (defaults to master/main)",
-    )
 
     args = parser.parse_args()
     if args.cmd == "train":
@@ -410,5 +359,4 @@ if __name__ == "__main__":
             keep_alive=args.keep_alive,
             note=args.note,
             script_name=args.script,
-            commit_hash=args.commit,
         )
