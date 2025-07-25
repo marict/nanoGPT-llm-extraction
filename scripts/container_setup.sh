@@ -32,9 +32,20 @@ fi
 
 # Remove any NVIDIA/CUDA apt sources unconditionally (we don't need them)
 log "removing NVIDIA/CUDA apt sources"
+# 1) Drop any source-list files that reference NVIDIA or CUDA
 find /etc/apt/sources.list.d -type f \( -iname "*nvidia*" -o -iname "*cuda*" \) -exec rm -f {} + || true
-# Also scrub main sources.list lines
-sed -i '/nvidia/Id;/cuda/Id' /etc/apt/sources.list || true
+
+# 2) Scrub all *.list files (including the primary one) for stray NVIDIA/CUDA lines.
+#    We iterate explicitly so any new files created by other tooling are also handled.
+for list_file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+    if [[ -f "${list_file}" ]]; then
+        sed -i '/nvidia/Id;/cuda/Id' "${list_file}" || true
+    fi
+done
+
+# 3) Purge any cached package lists that still reference NVIDIA/CUDA to avoid stale fetches.
+rm -f /var/lib/apt/lists/*nvidia* /var/lib/apt/lists/*cuda* || true
+
 apt-get clean
 
 # Refresh package lists once (should succeed now)
