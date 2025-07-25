@@ -128,8 +128,8 @@ def _create_docker_script(training_command: str, commit_hash: str | None = None)
             # Drop any standalone source files that reference NVIDIA or CUDA
             "rm -f /etc/apt/sources.list.d/*nvidia* /etc/apt/sources.list.d/*cuda* || true",
             # Strip offending lines from the main sources.list if present
-            'if grep -qiE "(nvidia|cuda)" /etc/apt/sources.list; then '
-            'grep -viE "(nvidia|cuda)" /etc/apt/sources.list > /tmp/s.list && '
+            "if grep -qiE '(nvidia|cuda)' /etc/apt/sources.list; then "
+            "grep -viE '(nvidia|cuda)' /etc/apt/sources.list > /tmp/s.list && "
             "mv /tmp/s.list /etc/apt/sources.list; fi",
         ]
     )

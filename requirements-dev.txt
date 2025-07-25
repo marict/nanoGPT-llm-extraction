@@ -8,5 +8,6 @@ datasets
 random-fourier-features-pytorch
 num2words
 sympy
+graphql-core
 
 # Torch comes with the runpod image
