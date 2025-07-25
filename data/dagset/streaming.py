@@ -391,39 +391,69 @@ def float_to_digit_onehot(
     limit = base**max_digits - base ** (-max_decimal_places)
     abs_val = min(abs(value), limit)
 
-    # Convert to the target base
-    # First convert integer part
-    int_part = int(abs_val)
-    frac_part = abs_val - int_part
+    if base == 10:
+        # For base 10, use string formatting to avoid floating point precision issues
+        # Format with enough decimal places and then extract digits
+        format_str = f"{{:.{max_decimal_places}f}}"
+        value_str = format_str.format(abs_val)
 
-    # Convert integer part to target base
-    if int_part == 0:
-        int_digits = [0]
+        # Split into integer and decimal parts
+        if "." in value_str:
+            int_part_str, frac_part_str = value_str.split(".")
+        else:
+            int_part_str = value_str
+            frac_part_str = ""
+
+        # Pad integer part to max_digits (left pad with zeros)
+        int_part_str = int_part_str.zfill(max_digits)[-max_digits:]
+
+        # Pad fractional part to max_decimal_places (right pad with zeros)
+        frac_part_str = (frac_part_str + "0" * max_decimal_places)[:max_decimal_places]
+
+        # Combine and convert to digit list
+        all_digits_str = int_part_str + frac_part_str
+        all_digits = [int(d) for d in all_digits_str]
     else:
-        int_digits = []
-        temp = int_part
-        while temp > 0:
-            int_digits.append(temp % base)
-            temp = temp // base
-        int_digits.reverse()  # Most significant digit first
+        # For non-base-10, use the original method but with rounding to mitigate precision issues
+        # Convert to the target base
+        # First convert integer part
+        int_part = int(abs_val)
+        frac_part = abs_val - int_part
 
-    # Pad or truncate integer part to exactly max_digits
-    if len(int_digits) > max_digits:
-        int_digits = int_digits[-max_digits:]  # Keep least significant digits
-    else:
-        int_digits = [0] * (max_digits - len(int_digits)) + int_digits  # Pad with zeros
+        # Convert integer part to target base
+        if int_part == 0:
+            int_digits = [0]
+        else:
+            int_digits = []
+            temp = int_part
+            while temp > 0:
+                int_digits.append(temp % base)
+                temp = temp // base
+            int_digits.reverse()  # Most significant digit first
 
-    # Convert fractional part to target base
-    frac_digits = []
-    temp_frac = frac_part
-    for _ in range(max_decimal_places):
-        temp_frac *= base
-        digit = int(temp_frac)
-        frac_digits.append(digit)
-        temp_frac -= digit
+        # Pad or truncate integer part to exactly max_digits
+        if len(int_digits) > max_digits:
+            int_digits = int_digits[-max_digits:]  # Keep least significant digits
+        else:
+            int_digits = [0] * (
+                max_digits - len(int_digits)
+            ) + int_digits  # Pad with zeros
 
-    # Combine integer and fractional digits
-    all_digits = int_digits + frac_digits
+        # Convert fractional part to target base with rounding
+        frac_digits = []
+        temp_frac = frac_part
+        for _ in range(max_decimal_places):
+            temp_frac *= base
+            # Add small epsilon and round to mitigate floating point precision issues
+            digit = (
+                round(temp_frac + 1e-10) if temp_frac < base - 0.5 else int(temp_frac)
+            )
+            digit = min(max(digit, 0), base - 1)  # Clamp to valid range
+            frac_digits.append(digit)
+            temp_frac -= digit
+
+        # Combine integer and fractional digits
+        all_digits = int_digits + frac_digits
 
     D = max_digits + max_decimal_places
     assert len(all_digits) == D, f"Expected {D} digits, got {len(all_digits)}"
