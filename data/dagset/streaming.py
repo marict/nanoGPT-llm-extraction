@@ -865,7 +865,7 @@ class DAGStructureDataset:
 
         # Fill batched tensors
         for i, (structure, example) in enumerate(zip(structures, examples)):
-            depth = structure["depth"].item()
+            depth = example.depth
             nodes = depth + 1
 
             # Copy initial values
