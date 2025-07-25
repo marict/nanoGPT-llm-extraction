@@ -253,28 +253,6 @@ def generate_expression(
             )
             initial_values.append(value)
 
-    # If training mode, skip expensive sympy operations and return minimal values
-    if train:
-        # We swap some operations with identity to play better with the DAG model, but this is not compatible with sympy.
-        operations = [op for op in sym_ops]
-        for i, op in enumerate(operations):
-            if op == "multiply":
-                # If second value is 0, then we can discard the top and replace with 0
-                if initial_values[i] == 0.0:
-                    operations[i] = "identity"
-
-            if op == "divide":
-                num_index = i
-                if initial_values[num_index] == 0.0:
-                    operations[num_index] = "identity"
-
-        # Pad the rest of the operations with identity
-        operations.extend(["identity"] * (depth - len(operations)))
-        # Pad the rest of initial values with 1.0
-        initial_values.extend([1.0] * (depth + 1 - len(initial_values)))
-
-        return (None, None, initial_values, operations, None, False, False)
-
     # ------------------------------------------------------------------
     # 2. Build SymPy expression from leaves + operations (full mode)
     # ------------------------------------------------------------------
@@ -652,7 +630,6 @@ def generate_single_dag_example(
         seed=seed,
         english_conversion_probability=english_conversion_probability,
         printing_style_probs=printing_style_probs,
-        train=train,
     )
     # Use plan_to_tensors to get the structure dict directly
     structure_dict = plan_to_tensors(
