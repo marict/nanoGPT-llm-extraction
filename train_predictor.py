@@ -707,29 +707,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
                 log_msg += f", time {dt*1000:.2f}ms"
 
-                # Add gradient cosine information if available
-                if any(
-                    key.startswith("grad_cosine_")
-                    for key in loss_accum.keys()
-                    if loss_accum[key] != 0.0
-                ):
-                    grad_cosine_msg = " [Grad Cosines: "
-                    cosine_parts = []
-                    for key in [
-                        "grad_cosine_sign_loss",
-                        "grad_cosine_digit_loss",
-                        "grad_cosine_op_loss",
-                        "grad_cosine_value_loss",
-                        "grad_cosine_exec_loss",
-                    ]:
-                        if key in loss_accum and loss_accum[key] != 0.0:
-                            short_name = key.replace("grad_cosine_", "").replace(
-                                "_loss", ""
-                            )
-                            cosine_parts.append(f"{short_name}={loss_accum[key]:.3f}")
-                    grad_cosine_msg += ", ".join(cosine_parts) + "]"
-                    log_msg += grad_cosine_msg
-
                 # realtime training log emitted via wandb
                 if master_process:
                     print(log_msg)

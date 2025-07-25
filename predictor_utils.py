@@ -153,12 +153,22 @@ def _compute_op_loss(
         target_ops: Target operation one-hot vectors (B,T,D,n_ops)
         device_type: Device type for autocast
     """
-    b, t, d, n_ops = pred_op_logits.shape
+    _, _, _, n_ops = pred_op_logits.shape
     with torch.amp.autocast(device_type=device_type, enabled=False):
         target_idx = target_ops.view(-1, n_ops).argmax(dim=-1)
         pred_op_logits_flat = pred_op_logits.view(-1, n_ops).to(torch.float32)
         op_loss = F.cross_entropy(pred_op_logits_flat, target_idx, reduction="mean")
     return op_loss
+
+
+# --------------------------------------------------------------------------- #
+# Robust Huber helper
+# --------------------------------------------------------------------------- #
+def _robust_huber(err: torch.Tensor, beta: torch.Tensor | float) -> torch.Tensor:
+    """Huber loss with adaptive beta scaling."""
+    abs_e = err.abs()
+    loss = torch.where(abs_e < beta, 0.5 * (abs_e**2) / beta, abs_e - 0.5 * beta)
+    return loss.mean()
 
 
 def _compute_value_loss(
@@ -168,38 +178,27 @@ def _compute_value_loss(
     cfg,
     device_type: str,
 ) -> torch.Tensor:
-    """Compute robust loss between predicted and target initial values using direct regression."""
+    """Robust value loss using adaptive Huber and relative error component."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
-        # Convert logits to probabilities for magnitude computation
         pred_digit_probs = F.softmax(pred_digit_logits.to(torch.float32), dim=-1)
-
-        # Compute predicted magnitudes using centralized function
-        pred_magnitude = digits_to_magnitude(
+        pred_mag = digits_to_magnitude(
             pred_digit_probs, cfg.max_digits, cfg.max_decimal_places, cfg.base
-        )  # (B,T,N)
-
-        # Reconstruct full signed predicted values
-        # Use continuous signs directly (maintains differentiability)
-        pred_values = pred_sgn.to(torch.float32) * pred_magnitude
-
-        # Direct regression loss on signed values
-        # Use smooth L1 for robustness to outliers
-        direct_loss = F.smooth_l1_loss(
-            pred_values, target_initial_values.to(torch.float32)
         )
+        pred_values = pred_sgn.to(torch.float32) * pred_mag
 
-        # Optional: Add relative error component for values with different scales
-        # This helps when we have both small (0.01) and large (1000) values
-        epsilon = 1e-8
-        relative_error = (pred_values - target_initial_values.to(torch.float32)) / (
-            target_initial_values.abs() + epsilon
-        )
-        relative_loss = F.smooth_l1_loss(
-            relative_error, torch.zeros_like(relative_error)
-        )
+        err = pred_values - target_initial_values.to(torch.float32)
 
-        # Combine direct and relative losses
-        return direct_loss + 0.1 * relative_loss
+        # Adaptive beta based on high quantile of error
+        beta_abs = torch.quantile(err.detach().abs().flatten(), 0.9).clamp_min(1e-6)
+        direct = _robust_huber(err, beta_abs)
+
+        # Relative error term
+        eps = 1e-6
+        rel = err / (target_initial_values.abs() + eps)
+        beta_rel = torch.quantile(rel.detach().abs().flatten(), 0.9).clamp_min(1e-6)
+        rel_loss = _robust_huber(rel, beta_rel)
+
+        return direct + 0.05 * rel_loss
 
 
 def _compute_exec_loss(
@@ -210,12 +209,9 @@ def _compute_exec_loss(
     cfg,
     device_type: str,
 ) -> torch.Tensor:
-    """Execution loss using direct regression on signed execution results."""
+    """Execution loss in log space with adaptive Huber and soft overflow penalty."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
-        # Convert logits to probabilities for execution
         pred_digit_probs = F.softmax(pred_digit_logits.to(torch.float32), dim=-1)
-
-        # Execute: returns sign tensor and ln(|value|) tensor
         pred_final_sgn, pred_final_ln = execute_stack(
             pred_sgn,
             pred_digit_probs,
@@ -223,38 +219,32 @@ def _compute_exec_loss(
             max_digits=cfg.max_digits,
             max_decimal_places=cfg.max_decimal_places,
             base=cfg.base,
-            ignore_clip=True,  # raw for loss
+            ignore_clip=True,
         )
 
-        # Convert from log space back to actual values
-        pred_final_magnitude = torch.exp(
-            pred_final_ln.clamp(max=50.0)
-        )  # Clamp to prevent overflow
+        pred_vals = (
+            pred_final_sgn.to(torch.float32) * torch.exp(pred_final_ln.clamp(max=50.0))
+        ).reshape(-1)
+        tgt_vals = target_final_exec.reshape(-1).to(torch.float32)
 
-        # Use continuous signs directly (maintains differentiability)
-        pred_final_values = pred_final_sgn.to(torch.float32) * pred_final_magnitude
+        # Log-space error
+        eps = 1e-6
+        pred_ln = torch.log(pred_vals.abs() + eps)
+        tgt_ln = torch.log(tgt_vals.abs() + eps)
 
-        # Flatten for loss computation
-        pred_final_values = pred_final_values.reshape(-1).to(torch.float32)
-        target_flat = target_final_exec.reshape(-1).to(torch.float32)
+        ln_err = pred_ln - tgt_ln
+        beta_ln = torch.quantile(ln_err.detach().abs(), 0.9).clamp_min(1e-6)
+        ln_loss = _robust_huber(ln_err, beta_ln)
 
-        # Direct regression loss on signed execution results
-        direct_loss = F.smooth_l1_loss(pred_final_values, target_flat)
+        # Small absolute term for zeros
+        abs_err = pred_vals - tgt_vals
+        beta_abs = torch.quantile(abs_err.detach().abs(), 0.9).clamp_min(1e-6)
+        abs_loss = 0.02 * _robust_huber(abs_err, beta_abs)
 
-        # Add relative error component for scale robustness
-        epsilon = 1e-8
-        relative_error = (pred_final_values - target_flat) / (
-            target_flat.abs() + epsilon
-        )
-        relative_loss = F.smooth_l1_loss(
-            relative_error, torch.zeros_like(relative_error)
-        )
+        # Soft overflow penalty
+        overflow_pen = F.softplus((pred_final_ln - 30.0)).mean() * 0.01
 
-        # Add overflow penalty to prevent extreme predictions
-        overflow_threshold = 1e10  # Much simpler threshold in actual value space
-        overflow_penalty = (pred_final_values.abs() > overflow_threshold).float().mean()
-
-        return direct_loss + 0.1 * relative_loss + 0.05 * overflow_penalty
+        return ln_loss + abs_loss + overflow_pen
 
 
 # --------------------------------------------------------------------------- #
