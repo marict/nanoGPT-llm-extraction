@@ -425,9 +425,9 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
             texts, structures, _ = next(train_loader)
 
             # Move targets to device
-            target_sgn = structures["initial_sgn"].to(device)
-            target_digits = structures["initial_digits"].to(device)
-            target_ops = structures["operation_probs"].to(device)
+            target_sgn = structures["target_initial_sgn"].to(device)
+            target_digits = structures["target_initial_digits"].to(device)
+            target_ops = structures["target_operation_probs"].to(device)
             target_initial_values = structures["target_initial_values"].to(device)
             target_final_exec = structures["target_final_exec"].to(device)
 

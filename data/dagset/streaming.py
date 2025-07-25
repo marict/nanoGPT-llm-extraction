@@ -545,7 +545,7 @@ def plan_to_tensors(
         "target_initial_log": initial_log,
         "target_initial_digits": digits_tensor,
         "target_operation_probs": operations_one_hot,
-        "target_final_value_exec": final_value_exec,
+        "target_final_exec": final_value_exec,
         "target_initial_values": target_initial_values,
     }
 
@@ -884,7 +884,7 @@ class DAGStructureDataset:
             batched_target_initial_values[i, :nodes] = structure[
                 "target_initial_values"
             ][:nodes]
-            batched_target_final_exec[i] = structure["target_final_value_exec"]
+            batched_target_final_exec[i] = structure["target_final_exec"]
 
         return {
             "target_initial_sgn": batched_initial_sgn,
