@@ -61,6 +61,7 @@ dropout = 0.0
 bias = True  # Enable bias for ALU weight patching compatibility
 dag_depth = 4  # Target DAG depth
 
+
 # Optimization
 learning_rate = 6e-4
 weight_decay = 1e-1

@@ -312,18 +312,18 @@ class DAGPlanPredictor(nn.Module):
         self.num_scratch_nodes = config.dag_depth + 1
         self.n_embd = config.n_embd
 
+        # Shared configuration for digit/value prediction
+        self.max_digits = config.max_digits
+        self.max_decimal_places = config.max_decimal_places
+        self.base = config.base
+        self.digits_per_number = self.max_digits + self.max_decimal_places
+
         # Blocks for splitting hidden state
         self.initial_value_hidden = Block(config)
         self.dag_structure_hidden = Block(config)
 
         # Separate predictors for initial values and operations
         # Initial values predictor: hidden_state -> initial_values
-        # Digits per number (fixed width)
-        self.max_digits = config.max_digits
-        self.max_decimal_places = config.max_decimal_places
-        self.base = config.base
-        self.digits_per_number = self.max_digits + self.max_decimal_places
-
         # One sign + base-way per digit slot per node
         initial_values_output_dim = self.num_scratch_nodes * (
             1 + self.digits_per_number * self.base
@@ -403,14 +403,14 @@ class DAGPlanPredictor(nn.Module):
 
     def forward(self, original_hidden: torch.Tensor):
         """
-        ƒ both initial values and operation choices for stack-based execution.
+        Predict both initial values and operation choices for stack-based execution.
 
         Args:
             original_hidden: (B, T, H) - original hidden states
         Returns:
-                initial_sgn: (B, T, num_scratch_nodes) - initial signs
-                initial_log: (B, T, num_scratch_nodes) - initial log magnitudes
-                operation_probs: (B, T, dag_depth, n_ops) - probabilities for operations
+            initial_sgn: (B, T, num_scratch_nodes) - initial signs
+            digit_probs: (B, T, num_scratch_nodes, digits_per_number, base) - digit probabilities
+            operation_probs: (B, T, dag_depth, n_ops) - probabilities for operations
         """
         # Clear previously cached tensors
         self.last_operation_probs = None
@@ -455,8 +455,7 @@ class DAGPlanPredictor(nn.Module):
         # Convert sign tensor in [-1,1]
         initial_sgn = torch.tanh(sign_logits)
 
-        # Process operations:
-        # Cross attention: dag_structure_hidden attends to initial_value_hidden
+        # Process operations with cross-attention
         causal_mask = torch.triu(
             torch.full((T, T), float("-inf"), device=original_hidden.device), diagonal=1
         )
