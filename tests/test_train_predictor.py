@@ -790,7 +790,7 @@ class TestLossFunctions(unittest.TestCase):
         )
 
         # Losses should be very small for near-perfect predictions (relaxed tolerance)
-        self.assertLess(losses["sign_loss"].item(), 1e-6)
+        self.assertLess(losses["sign_loss"].item(), 1e-4)
         self.assertLess(
             losses["digit_loss"].item(), 1e-3
         )  # Relaxed for near-perfect logits

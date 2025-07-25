@@ -58,7 +58,7 @@ def _compute_sign_loss(
     target_sgn: torch.Tensor,
     device_type: str,
 ) -> torch.Tensor:
-    """Compute cross-entropy loss for sign prediction using logits.
+    """Compute binary cross-entropy loss for sign prediction using logits.
 
     Args:
         pred_sign_logits: Raw sign logits (B,T,N)
@@ -66,16 +66,14 @@ def _compute_sign_loss(
         device_type: Device type for autocast
     """
     with torch.amp.autocast(device_type=device_type, enabled=False):
-        # Convert target signs {-1,1} to class indices {0,1}
-        sign_target_idx = ((target_sgn > 0).long()).view(-1)
-        pred_sign_logits_flat = pred_sign_logits.view(-1, 1).to(torch.float32)
+        # Convert target signs {-1,1} to binary targets {0,1}
+        binary_targets = ((target_sgn > 0).float()).view(-1)
+        pred_sign_logits_flat = pred_sign_logits.view(-1).to(torch.float32)
 
-        # Create 2-class logits: [negative_logit, positive_logit]
-        # For binary classification: logit for class 1 vs class 0
-        binary_logits = torch.cat(
-            [-pred_sign_logits_flat, pred_sign_logits_flat], dim=1
+        # Use binary cross entropy directly (clean, no backwards compatibility)
+        sign_loss = F.binary_cross_entropy_with_logits(
+            pred_sign_logits_flat, binary_targets, reduction="mean"
         )
-        sign_loss = F.cross_entropy(binary_logits, sign_target_idx, reduction="mean")
     return sign_loss
 
 
@@ -84,15 +82,7 @@ def _compute_digit_loss(
     target_digits: torch.Tensor,
     device_type: str,
 ) -> torch.Tensor:
-    """Compute cross-entropy loss for digit prediction.
-
-    Key changes compared to the previous implementation:
-    1. Positions whose target vector is all zeros are *not* ignored. They are
-       interpreted as the digit `0` class, providing the model with an explicit
-       training signal to predict zeros when no digit information is present.
-    2. Accepts arbitrary *args / **kwargs so that callers that (mistakenly) pass
-       additional arguments such as `iter_num` or `cfg` will not crash.
-    """
+    """Compute cross-entropy loss for digit prediction."""
 
     # Unpack shape information -------------------------------------------------
     _, _, _, D, base = pred_digit_logits.shape
