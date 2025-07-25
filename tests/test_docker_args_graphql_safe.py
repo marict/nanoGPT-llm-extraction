@@ -3,7 +3,7 @@ import shlex
 
 from graphql import parse
 
-from runpod_service import _build_training_command, _create_docker_script
+from runpod_service import _bash_c_quote, _build_training_command, _create_docker_script
 
 
 def test_docker_args_graphql_safe():
@@ -18,7 +18,7 @@ def test_docker_args_graphql_safe():
     )
 
     script = _create_docker_script(training_command)
-    docker_args = f"bash -c {shlex.quote(script)}"
+    docker_args = _bash_c_quote(script)
 
     # Embed via JSON dump to get proper escaping of quotes/backslashes
     docker_args_json = json.dumps(docker_args)

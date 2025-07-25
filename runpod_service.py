@@ -157,6 +157,17 @@ def _create_docker_script(training_command: str, commit_hash: str | None = None)
     return " && ".join(base_commands)
 
 
+def _bash_c_quote(script: str) -> str:
+    """Return a *bash -c* command where *script* is wrapped in double quotes and all
+    embedded double quotes are escaped. This avoids single-quote characters so the
+    resulting string can be embedded in a GraphQL argument that itself is delimited
+    with single quotes (which the RunPod API uses).
+    """
+
+    escaped = script.replace("\\", "\\\\").replace('"', '\\"')
+    return f'bash -c "{escaped}"'
+
+
 def start_cloud_training(
     train_args: str,
     gpu_type: str = DEFAULT_GPU_TYPE,
@@ -216,7 +227,7 @@ def start_cloud_training(
         train_args, keep_alive, note, wandb_run_id, script_name
     )
     docker_script = _create_docker_script(training_command, commit_hash)
-    final_docker_args = f"bash -c {shlex.quote(docker_script)}"
+    final_docker_args = _bash_c_quote(docker_script)
 
     # ------------------------------------------------------------------ #
     # 2. Create RunPod instance
