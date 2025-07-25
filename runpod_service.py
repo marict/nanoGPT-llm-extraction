@@ -99,9 +99,7 @@ def _create_docker_script(training_command: str) -> str:
     """
 
     # 0) Clean up NVIDIA/CUDA sources so the subsequent update succeeds
-    nvidia_repo_cleanup = (
-        "rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.list"
-    )
+    nvidia_repo_cleanup = "rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.list || true"
 
     # 1) Standard system preparatory commands
     base_commands = [
