@@ -7,7 +7,7 @@ name = "predictor_pretrain"
 # Training intervals
 eval_interval = 20
 log_interval = 1
-eval_iters = 10
+eval_iters = 1
 eval_once = False
 clear_previous_checkpoints = False
 reload_reset_iters = False
@@ -20,11 +20,11 @@ init_from = "scratch"
 dataset = "dagset"  # Use DAG dataset for predictor training
 
 # DAG dataset parameters
-max_dag_depth = 2  # Must match dag_depth in model config
+max_dag_depth = 6  # Must match dag_depth in model config
 # The original NALU paper had values in range 9999
-max_digits = 2
-max_decimal_places = 2
-base = 10
+max_digits = 3
+max_decimal_places = 3
+base = 22
 
 # Expression generation settings
 english_conversion_probability = 0.5
@@ -77,7 +77,7 @@ sign_loss_weight = 1.0
 digit_loss_weight = 1.0
 op_loss_weight = 1.0
 value_loss_weight = 1.0
-exec_loss_weight = 0.5
+exec_loss_weight = 1.0
 
 # Random seeds
 seed = 42
