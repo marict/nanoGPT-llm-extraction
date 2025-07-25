@@ -40,6 +40,7 @@ class DAGExample:
 
     text: str
     structure_dict: dict[str, torch.Tensor]
+    depth: int
     max_digits: int
     max_decimal_places: int
     base: int
@@ -473,7 +474,6 @@ def plan_to_tensors(
     """Convert a DAG plan to structure tensors for training."""
 
     depth = len(operations)
-    depth_tensor = torch.tensor(depth, dtype=torch.long)
     num_scratch_nodes = depth + 1
 
     if len(initial_values) != num_scratch_nodes:
@@ -545,7 +545,6 @@ def plan_to_tensors(
         "target_initial_log": initial_log,
         "target_initial_digits": digits_tensor,
         "target_operation_probs": operations_one_hot,
-        "target_depth": depth_tensor,
         "target_final_value_exec": final_value_exec,
         "target_initial_values": target_initial_values,
     }
@@ -666,6 +665,7 @@ def generate_single_dag_example(
         example = DAGTrainExample(
             text=text,
             structure_dict=structure_dict,
+            depth=depth,
             max_digits=max_digits,
             max_decimal_places=max_decimal_places,
             base=base,
@@ -676,6 +676,7 @@ def generate_single_dag_example(
         example = DAGValExample(
             text=text,
             operations=operations,
+            depth=depth,
             max_digits=max_digits,
             max_decimal_places=max_decimal_places,
             base=base,
@@ -865,12 +866,16 @@ class DAGStructureDataset:
             nodes = depth + 1
 
             # Copy initial values
-            batched_initial_sgn[i, :nodes] = structure["initial_sgn"][:nodes]
-            batched_initial_log[i, :nodes] = structure["initial_log"][:nodes]
-            batched_initial_digits[i, :nodes] = structure["initial_digits"][:nodes]
+            batched_initial_sgn[i, :nodes] = structure["target_initial_sgn"][:nodes]
+            batched_initial_log[i, :nodes] = structure["target_initial_log"][:nodes]
+            batched_initial_digits[i, :nodes] = structure["target_initial_digits"][
+                :nodes
+            ]
 
             # Copy operation probabilities
-            batched_operation_probs[i, :depth] = structure["operation_probs"][:depth]
+            batched_operation_probs[i, :depth] = structure["target_operation_probs"][
+                :depth
+            ]
 
             # Store depth
             batched_depths[i] = depth
@@ -879,14 +884,13 @@ class DAGStructureDataset:
             batched_target_initial_values[i, :nodes] = structure[
                 "target_initial_values"
             ][:nodes]
-            batched_target_final_exec[i] = structure["final_value_exec"]
+            batched_target_final_exec[i] = structure["target_final_value_exec"]
 
         return {
-            "initial_sgn": batched_initial_sgn,
-            "initial_log": batched_initial_log,
-            "initial_digits": batched_initial_digits,
-            "operation_probs": batched_operation_probs,
-            "depths": batched_depths,
+            "target_initial_sgn": batched_initial_sgn,
+            "target_initial_log": batched_initial_log,
+            "target_initial_digits": batched_initial_digits,
+            "target_operation_probs": batched_operation_probs,
             "target_initial_values": batched_target_initial_values,
             "target_final_exec": batched_target_final_exec,
         }

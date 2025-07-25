@@ -497,8 +497,7 @@ def evaluate_dag_model(
         "op_accuracy": 0.0,
         "full_dag_op_match": 0.0,
         "sign_accuracy": 0.0,
-        # Mean-squared-error between executed DAG outputs (target vs prediction)
-        "final_mse": 0.0,
+        "executed_mse": 0.0,
     }
 
     num_batches = 0
@@ -508,9 +507,9 @@ def evaluate_dag_model(
                 break
 
             # Targets → device
-            tgt_sgn = structures["initial_sgn"].to(device)
-            tgt_digits = structures["initial_digits"].to(device)
-            tgt_ops = structures["operation_probs"].to(device)
+            tgt_sgn = structures["target_initial_sgn"].to(device)
+            tgt_digits = structures["target_initial_digits"].to(device)
+            tgt_ops = structures["target_operation_probs"].to(device)
 
             # Inputs
             input_tokens = tokenize_texts(texts, cfg.block_size, device)
@@ -570,7 +569,7 @@ def evaluate_dag_model(
                 if last_operation_logits is None:
                     raise RuntimeError("last_operation_logits not found for evaluation")
 
-                last_digit_logits = last_digit_logits.mean(dim=1)  # (B,N,D,10)
+                last_digit_logits = last_digit_logits.mean(dim=1)  # (B,N,D,base)
                 last_operation_logits = last_operation_logits.mean(
                     dim=1
                 )  # (B,depth,n_ops)
@@ -672,7 +671,7 @@ def evaluate_dag_model(
                 tgt_final_val = tgt_final_sgn * torch.exp(tgt_final_log)
                 pred_final_val = pred_final_sgn * torch.exp(pred_final_log)
 
-                final_mse = F.mse_loss(pred_final_val, tgt_final_val)
+                executed_mse = F.mse_loss(pred_final_val, tgt_final_val)
 
                 # -------------------------------------------------------------- #
                 # Console debug: print the last sample from the batch
@@ -766,7 +765,7 @@ def evaluate_dag_model(
             total_metrics["op_accuracy"] += op_acc.item()
             total_metrics["full_dag_op_match"] += full_match.item()
             total_metrics["sign_accuracy"] += sign_acc.item()
-            total_metrics["final_mse"] += final_mse.item()
+            total_metrics["executed_mse"] += executed_mse.item()
             num_batches += 1
 
     if num_batches:

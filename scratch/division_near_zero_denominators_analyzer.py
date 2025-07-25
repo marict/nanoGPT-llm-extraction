@@ -59,21 +59,21 @@ def debug_execute_stack_directly(example):
 
     # Convert to appropriate device and dtype with batch/sequence dimensions
     initial_sgn = (
-        structure["initial_sgn"]
+        structure["target_initial_sgn"]
         .clone()
         .to(device=device, dtype=dtype)
         .unsqueeze(0)
         .unsqueeze(0)
     )
     initial_digits = (
-        structure["initial_digits"]
+        structure["target_initial_digits"]
         .clone()
         .to(device=device, dtype=dtype)
         .unsqueeze(0)
         .unsqueeze(0)
     )
     operation_probs = (
-        structure["operation_probs"]
+        structure["target_operation_probs"]
         .clone()
         .to(device=device, dtype=dtype)
         .unsqueeze(0)

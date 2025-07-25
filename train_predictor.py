@@ -347,7 +347,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         f"exec_loss {eval_losses['exec_loss']:.4f}, op_acc {eval_losses['op_accuracy']:.4f}, "
                         f"full_op_match {eval_losses['full_dag_op_match']:.4f}, "
                         f"sign_acc {eval_losses['sign_accuracy']:.4f}, "
-                        f"executed_mse {eval_losses['final_mse']:.4f}"
+                        f"executed_mse {eval_losses['executed_mse']:.4f}"
                     )
                     print(eval_msg)
 
@@ -364,7 +364,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "val/op_accuracy": eval_losses["op_accuracy"],
                         "val/full_dag_op_match": eval_losses["full_dag_op_match"],
                         "val/sign_accuracy": eval_losses["sign_accuracy"],
-                        "val/executed_mse": eval_losses["final_mse"],
+                        "val/executed_mse": eval_losses["executed_mse"],
                         "val/time_per_iter_ms": eval_time_ms,
                     }
                     # Store validation metrics for combined logging with training metrics

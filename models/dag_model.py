@@ -811,7 +811,7 @@ class DifferentiableDAG(nn.Module):
         initial_sgn, digit_probs, operation_probs = self.plan_predictor(original_hidden)
 
         if ENABLE_DEBUG_NAN_CHECKS:
-            _debug_check("initial_values_sgn", initial_sgn)
+            _debug_check("target_initial_values_sgn", initial_sgn)
 
         final_sgn, final_log = execute_stack(
             initial_sgn,
