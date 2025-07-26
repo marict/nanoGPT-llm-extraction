@@ -10,7 +10,6 @@ https://github.com/openai/gpt-2/blob/master/src/model.py
 https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 """
 
-import inspect
 import math
 import os
 from dataclasses import dataclass, field
@@ -283,7 +282,9 @@ assert len(OP_FUNCS) == len(OP_NAMES), "OP_FUNCS and OP_NAMES must have the same
 
 # Statistics computation for auxiliary prediction
 def compute_multi_value_statistics(values):
-    """Compute comprehensive statistics for multiple values (initial/intermediate)."""
+    """Compute comprehensive statistics for multiple values (initial/intermediate).
+    All statistics normalized to [0,1] range for balanced MSE loss.
+    """
     arr = np.array(values, dtype=np.float64)
     if len(arr) <= 1:
         return np.zeros(15)  # Fallback for edge cases
@@ -311,44 +312,76 @@ def compute_multi_value_statistics(values):
         except (RuntimeWarning, ValueError):
             return 0.0
 
+    # Compute raw statistics
+    mean_val = np.mean(arr)
+    std_val = np.std(arr)
+    min_val = np.min(arr)
+    max_val = np.max(arr)
+    median_val = np.median(arr)
+    range_val = np.ptp(arr)
+    skew_val = safe_skew(arr)
+    kurt_val = safe_kurtosis(arr)
+    q25_val = np.percentile(arr, 25)
+    q75_val = np.percentile(arr, 75)
+    count_pos = np.sum(arr > 0)
+    count_neg = np.sum(arr < 0)
+    count_small = np.sum(np.abs(arr) < 1)
+    unique_count = len(np.unique(arr))
+    coeff_var = std_val / (np.abs(mean_val) + 1e-6)
+
+    # Normalize all statistics to [0,1] range
+    n = len(arr)
+
     return np.array(
         [
-            np.mean(arr),  # 0: mean
-            np.std(arr),  # 1: standard deviation
-            np.min(arr),  # 2: minimum
-            np.max(arr),  # 3: maximum
-            np.median(arr),  # 4: median
-            np.ptp(arr),  # 5: range (max - min)
-            safe_skew(arr),  # 6: skewness (safe computation)
-            safe_kurtosis(arr),  # 7: kurtosis (safe computation)
-            np.percentile(arr, 25),  # 8: 25th percentile
-            np.percentile(arr, 75),  # 9: 75th percentile
-            np.sum(arr > 0),  # 10: count positive
-            np.sum(arr < 0),  # 11: count negative
-            np.sum(np.abs(arr) < 1),  # 12: count small values
-            len(np.unique(arr)),  # 13: unique count
-            np.std(arr) / (np.abs(np.mean(arr)) + 1e-6),  # 14: coeff of variation
+            math.tanh(mean_val / 10.0) * 0.5
+            + 0.5,  # 0: mean (sigmoid-like, centered at 0)
+            math.exp(
+                -std_val
+            ),  # 1: std deviation (1 = no variation, 0 = high variation)
+            math.tanh(min_val / 10.0) * 0.5 + 0.5,  # 2: minimum (sigmoid-like)
+            math.tanh(max_val / 10.0) * 0.5 + 0.5,  # 3: maximum (sigmoid-like)
+            math.tanh(median_val / 10.0) * 0.5 + 0.5,  # 4: median (sigmoid-like)
+            math.exp(-range_val),  # 5: range (1 = no range, 0 = high range)
+            math.exp(-abs(skew_val)),  # 6: skewness (1 = symmetric, 0 = highly skewed)
+            math.exp(-abs(kurt_val)),  # 7: kurtosis (1 = normal, 0 = extreme kurtosis)
+            math.tanh(q25_val / 10.0) * 0.5 + 0.5,  # 8: 25th percentile (sigmoid-like)
+            math.tanh(q75_val / 10.0) * 0.5 + 0.5,  # 9: 75th percentile (sigmoid-like)
+            count_pos / n,  # 10: fraction positive [0,1]
+            count_neg / n,  # 11: fraction negative [0,1]
+            count_small / n,  # 12: fraction small values [0,1]
+            unique_count / n,  # 13: uniqueness ratio [0,1] (1 = all unique)
+            math.exp(
+                -coeff_var
+            ),  # 14: coefficient of variation (1 = low variation, 0 = high variation)
         ]
     )
 
 
 def compute_single_value_statistics(value):
-    """Compute statistics meaningful for a single number (final result) - ALL CONTINUOUS for MSE loss."""
+    """Compute statistics meaningful for a single number (final result).
+    All statistics normalized to [0,1] range for balanced MSE loss.
+    """
     val = float(value)
+
     return np.array(
         [
-            val,  # 0: raw value
-            abs(val),  # 1: absolute value
-            math.log10(abs(val) + 1e-6),  # 2: log magnitude
-            math.tanh(val),  # 3: bounded raw value [-1,1]
-            math.tanh(abs(val)),  # 4: bounded absolute value [0,1]
-            math.exp(-abs(val)),  # 5: proximity to zero [0,1]
-            1.0 / (1.0 + abs(val)),  # 6: inverse size (small values -> 1, large -> 0)
-            math.sin(val),  # 7: oscillatory component
-            math.cos(val),  # 8: another oscillatory component
-            math.copysign(
-                1, val
-            ),  # 9: sign (-1, 0, or 1) - still categorical but bounded
+            math.tanh(val / 10.0) * 0.5
+            + 0.5,  # 0: raw value (sigmoid-like, centered at 0)
+            math.tanh(abs(val) / 10.0),  # 1: absolute value (sigmoid-like, starts at 0)
+            (math.tanh(math.log10(abs(val) + 1e-6) / 5.0) + 1.0)
+            * 0.5,  # 2: log magnitude (normalized)
+            math.tanh(val) * 0.5
+            + 0.5,  # 3: bounded raw value mapped from [-1,1] to [0,1]
+            math.tanh(abs(val)),  # 4: bounded absolute value [0,1] (already perfect)
+            math.exp(-abs(val)),  # 5: proximity to zero [0,1] (already perfect)
+            1.0 / (1.0 + abs(val)),  # 6: inverse size [0,1] (already perfect)
+            math.sin(val) * 0.5
+            + 0.5,  # 7: oscillatory component mapped from [-1,1] to [0,1]
+            math.cos(val) * 0.5
+            + 0.5,  # 8: another oscillatory component mapped from [-1,1] to [0,1]
+            (math.copysign(1, val) + 1.0)
+            * 0.5,  # 9: sign mapped from {-1,0,1} to {0,0.5,1}
         ]
     )
 

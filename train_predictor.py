@@ -215,12 +215,32 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     # Optimizer setup
     # Optimiser initialisation logged elsewhere
 
-    # All parameters are trainable in this standalone model
-    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    # Separate log_vars parameters for higher learning rate
+    log_vars_params = []
+    other_params = []
+
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            if "log_vars" in name:
+                log_vars_params.append(param)
+            else:
+                other_params.append(param)
+
+    # Create optimizer groups with different learning rates
+    # log_vars get 2 orders of magnitude higher learning rate for faster adaptation
+    log_vars_lr = cfg.learning_rate * 100  # 2 orders of magnitude jump
+
+    optim_groups = [
+        {"params": other_params, "lr": cfg.learning_rate},
+        {"params": log_vars_params, "lr": log_vars_lr},
+    ]
+
+    print(f"Optimizer groups created:")
+    print(f"  Main parameters: {len(other_params)} params with lr={cfg.learning_rate}")
+    print(f"  log_vars parameters: {len(log_vars_params)} params with lr={log_vars_lr}")
 
     optimizer = torch.optim.AdamW(
-        trainable_params,
-        lr=cfg.learning_rate,
+        optim_groups,
         betas=(cfg.beta1, cfg.beta2),
         weight_decay=cfg.weight_decay,
     )
@@ -720,6 +740,22 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     # issues where the local `lr` variable drifts from the value that is ultimately
                     # used for the step (e.g. if the optimizer or scheduler modifies it).
                     current_lr = optimizer.param_groups[0]["lr"]
+                    current_log_vars_lr = (
+                        optimizer.param_groups[1]["lr"]
+                        if len(optimizer.param_groups) > 1
+                        else current_lr
+                    )
+
+                    # Get current log_vars values for monitoring
+                    if hasattr(raw_model, "dag"):
+                        current_log_vars = (
+                            raw_model.dag.plan_predictor.log_vars.detach().cpu()
+                        )
+                    else:
+                        current_log_vars = (
+                            raw_model.dag_predictor.log_vars.detach().cpu()
+                        )
+
                     log_dict = {
                         "iter": iter_num,
                         "train/total_loss": loss_accum["total_loss"],
@@ -730,6 +766,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "train/exec_loss": loss_accum["exec_loss"],
                         "train/stats_loss": loss_accum["stats_loss"],
                         "lr": current_lr,
+                        "lr_log_vars": current_log_vars_lr,
                         "train/op_accuracy": loss_accum["op_accuracy"],
                         "train/full_dag_op_match": loss_accum["full_dag_op_match"],
                         "train/sign_accuracy": loss_accum["sign_accuracy"],
@@ -741,6 +778,13 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "weights/value": uncertainty_weights[3].item(),
                         "weights/exec": uncertainty_weights[4].item(),
                         "weights/stats": uncertainty_weights[5].item(),
+                        # Raw log_vars values for monitoring adaptation
+                        "log_vars/sign": current_log_vars[0].item(),
+                        "log_vars/digit": current_log_vars[1].item(),
+                        "log_vars/op": current_log_vars[2].item(),
+                        "log_vars/value": current_log_vars[3].item(),
+                        "log_vars/exec": current_log_vars[4].item(),
+                        "log_vars/stats": current_log_vars[5].item(),
                     }
 
                     # Add internal losses and gradient cosines to wandb logging

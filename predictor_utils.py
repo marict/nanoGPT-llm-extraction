@@ -190,7 +190,7 @@ def _compute_value_loss(
     abs_loss = _robust_huber(abs_err, beta_abs)
 
     # Scale to keep early-training value_loss in ~1 range
-    return ln_loss + abs_loss
+    return 0.001 * (ln_loss + abs_loss)
 
 
 def _compute_exec_loss(
@@ -216,31 +216,34 @@ def _compute_exec_loss(
         ignore_clip=True,
     )
 
-    # Soft capping using tanh to prevent overflow while maintaining gradients
-    # tanh(x/10) * 50 gives soft saturation around 50, but with smooth gradients
-    pred_ln_soft = torch.tanh(pred_ln / 10.0) * 50.0
+    # Extremely tight bounds to prevent any extreme values
+    # Much more aggressive clamping: tanh(x/2) * 5
+    pred_ln_soft = torch.tanh(pred_ln / 2.0) * 5.0
     pred_mag = torch.exp(pred_ln_soft).reshape(-1)
     tgt_mag = target_final_exec.abs().reshape(-1).to(torch.float32)
 
-    # Log-space error ------------------------------------------------------
+    # Simple MSE loss in log space with tight error bounds ---------------
     eps = 1e-6
     pred_ln_flat = torch.log(pred_mag + eps)
     tgt_ln_flat = torch.log(tgt_mag + eps)
-    ln_err = pred_ln_flat - tgt_ln_flat
-    beta_ln = torch.quantile(ln_err.detach().abs(), 0.9).clamp_min(1e-6)
-    ln_loss = _robust_huber(ln_err, beta_ln)
 
-    # Small absolute-space term -------------------------------------------
-    abs_err = pred_mag - tgt_mag
-    beta_abs = torch.quantile(abs_err.detach().abs(), 0.9).clamp_min(1e-6)
-    abs_loss = 0.02 * _robust_huber(abs_err, beta_abs)
+    # Clamp the log errors to prevent extreme values
+    ln_err = torch.clamp(pred_ln_flat - tgt_ln_flat, -5.0, 5.0)
 
-    # Soft overflow penalty (based on ln magnitude) – much smaller coeff
-    overflow_pen = F.softplus((pred_ln - 30.0)).mean() * 0.0005
+    # Simple MSE loss instead of Huber (more predictable)
+    ln_loss = (ln_err**2).mean()
 
-    # Scale down core loss to align with baseline (~2–3 early on)
-    raw_loss = (ln_loss + abs_loss) + overflow_pen
-    return raw_loss / 1e12
+    # Simple absolute error with tight bounds ---------------------------
+    abs_err = torch.clamp(pred_mag - tgt_mag, -100.0, 100.0)
+    abs_loss = 0.001 * (abs_err**2).mean()  # Very small coefficient
+
+    # No overflow penalty - let the tight bounds handle it
+
+    # Simple combination with aggressive scaling
+    raw_loss = ln_loss + abs_loss
+
+    # Very conservative final scaling to ensure we stay well below 2.0
+    return raw_loss / 20.0
 
 
 def _compute_statistics_loss(
@@ -284,9 +287,10 @@ def _compute_statistics_loss(
 
             total_loss += component_loss
 
-    # Scale down to reasonable range for uncertainty weighting (stats can be very large numbers)
-    # This prevents numerical precision issues with log_vars in uncertainty weighting
-    scaled_loss = total_loss / 1e24
+    # Scale to target range: worst case (all predictions wrong) should give total stats loss = 2.0
+    # We have 3 loss components (initial, intermediate, final), each contributing max 1.0 in worst case
+    # So worst case total = 3.0, and we want 2.0, hence divide by 3.0/2.0 = 1.5
+    scaled_loss = total_loss / 1.5
 
     # Final safety check - return 0 if loss is NaN/inf
     if torch.isnan(scaled_loss) or torch.isinf(scaled_loss):
