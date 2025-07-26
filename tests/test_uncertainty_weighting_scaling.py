@@ -226,11 +226,11 @@ def test_uncertainty_weighting_numerical_precision():
 
 
 def test_scaling_fix_effectiveness():
-    """Test that our 1e6 scaling fix makes the problem tractable."""
+    """Test that our 1e12 scaling fix makes the problem tractable."""
 
-    # Simulate the before/after scaling
-    original_stats_loss = 21.6e9
-    scaled_stats_loss = original_stats_loss / 1e6
+    # Simulate the before/after scaling with realistic values from training logs
+    original_stats_loss = 3.6e14  # Real stats loss observed in training
+    scaled_stats_loss = original_stats_loss / 1e12
     sign_loss = 0.68
 
     # Calculate required log_vars

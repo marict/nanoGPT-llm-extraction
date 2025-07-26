@@ -28,6 +28,40 @@ class RunPodError(Exception):
     """Custom exception for RunPod operations."""
 
 
+def _check_git_status() -> None:
+    """Check for uncommitted git changes and fail if any are found."""
+    try:
+        # Check if we're in a git repository
+        subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return  # Skip check if not in git repo
+
+    try:
+        # Get git status
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+
+        if result.stdout.strip():
+            print("❌ Uncommitted changes detected!")
+            raise RunPodError("Uncommitted changes detected!")
+
+    except subprocess.CalledProcessError:
+        raise RunPodError("Failed to check git status")
+    except subprocess.TimeoutExpired:
+        raise RunPodError("Git status check timed out")
+
+
 def _validate_note(note: str) -> None:
     """Validate note contains only safe characters."""
     if not note:
@@ -150,6 +184,9 @@ def start_cloud_training(
 
     # Validate inputs
     _validate_note(note)
+
+    # Check for uncommitted git changes
+    _check_git_status()
 
     # Require WANDB_API_KEY so that a W&B run (and run_id) is always available
     if not os.getenv("WANDB_API_KEY"):

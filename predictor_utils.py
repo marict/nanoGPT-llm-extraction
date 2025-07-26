@@ -263,8 +263,19 @@ def _compute_statistics_loss(
                 print(f"Warning: Inf detected in statistics {key} - skipping")
                 continue
 
+            # Debug: Print statistics ranges when loss is very high
+            pred_min, pred_max = pred.min().item(), pred.max().item()
+            target_min, target_max = target.min().item(), target.max().item()
+
             # MSE loss for this component (averaged over batch, sequence, and features)
             component_loss = F.mse_loss(pred, target)
+
+            # Log details when component loss is extremely high
+            if component_loss > 1e10:
+                print(f"DEBUG: High {key} stats loss: {component_loss:.2e}")
+                print(f"  Pred range: [{pred_min:.3e}, {pred_max:.3e}]")
+                print(f"  Target range: [{target_min:.3e}, {target_max:.3e}]")
+                print(f"  Mean abs diff: {(pred - target).abs().mean().item():.3e}")
 
             # Additional safety check
             if torch.isnan(component_loss) or torch.isinf(component_loss):
@@ -275,8 +286,8 @@ def _compute_statistics_loss(
 
     # Scale down to reasonable range for uncertainty weighting (stats can be very large numbers)
     # This prevents numerical precision issues with log_vars in uncertainty weighting
-    # Using 1e6 scaling factor for better numerical stability than previous 1e12
-    scaled_loss = total_loss / 1e6
+    # Using 1e12 scaling factor - stats loss can be extremely large (1e14+) compared to other losses (~1-500)
+    scaled_loss = total_loss / 1e12
 
     # Final safety check - return 0 if loss is NaN/inf
     if torch.isnan(scaled_loss) or torch.isinf(scaled_loss):

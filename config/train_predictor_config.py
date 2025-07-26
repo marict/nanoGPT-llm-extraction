@@ -53,7 +53,7 @@ dag_depth = max_dag_depth  # MUST match max_dag_depth above
 
 # Optimization (tuned for longer training)
 # max_iters = 50000
-max_iters = 5000
+max_iters = 3000
 # weight_decay = 1e-1
 weight_decay = 1e-2
 beta1 = 0.9
