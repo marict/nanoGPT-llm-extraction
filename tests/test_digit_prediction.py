@@ -42,7 +42,6 @@ class TestDigitPrediction(unittest.TestCase):
     # ------------------------------------------------------------------
     # Shape / size checks
     # ------------------------------------------------------------------
-
     def test_digit_logits_shape(self):
         """digit_logits should have expected shape (B,T,N,D,10)."""
         max_digits, max_decimals = 3, 2
@@ -67,7 +66,6 @@ class TestDigitPrediction(unittest.TestCase):
     # ------------------------------------------------------------------
     # Reconstruction consistency
     # ------------------------------------------------------------------
-
     def test_digit_to_magnitude_consistency(self):
         """Magnitude reconstructed from digits should match log-based value."""
         max_digits, max_decimals = 4, 3
@@ -108,7 +106,6 @@ class TestDigitPrediction(unittest.TestCase):
     # ------------------------------------------------------------------
     # Gradient propagation
     # ------------------------------------------------------------------
-
     def test_digit_logits_gradients(self):
         """Loss should propagate gradients back to digit_logits tensor."""
         max_digits, max_decimals = 3, 2
