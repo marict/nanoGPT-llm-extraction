@@ -250,7 +250,7 @@ def _compute_exec_loss(
         # Soft overflow penalty (based on ln magnitude) – much smaller coeff
         overflow_pen = F.softplus((pred_ln - 30.0)).mean() * 0.0005
 
-        # Scale down core loss to align with baseline (~2–3 early on), then normalize by fixed scale
+        # Scale down core loss to align with baseline (~2–3 early on)
         raw_loss = 0.3 * (ln_loss + abs_loss) + overflow_pen
         return raw_loss
 
@@ -263,8 +263,6 @@ def _compute_statistics_loss(
     """Compute MSE loss for auxiliary statistical predictions (per-token)."""
     with torch.amp.autocast(device_type=device_type, enabled=False):
         total_loss = 0.0
-        num_components = 0
-
         # Compute loss for each statistics component
         for key in ["initial", "intermediate", "final"]:
             if key in pred_statistics and key in target_statistics:
@@ -274,17 +272,8 @@ def _compute_statistics_loss(
                 # MSE loss for this component (averaged over batch, sequence, and features)
                 component_loss = F.mse_loss(pred, target)
                 total_loss += component_loss
-                num_components += 1
 
-        # Average across components if any exist, then apply fixed scaling
-        if num_components > 0:
-            stats_loss_scale = 8.0  # Fixed scale based on typical early training values
-            return total_loss / num_components / stats_loss_scale
-        else:
-            # Return zero loss if no statistics to compute
-            return torch.tensor(
-                0.0, device=pred_statistics["initial"].device, dtype=torch.float32
-            )
+        return total_loss
 
 
 # --------------------------------------------------------------------------- #
@@ -339,7 +328,7 @@ def compute_dag_structure_loss(
         device_type,
     )
 
-    # Compute statistics loss with fixed scaling
+    # Compute statistics loss
     stats_loss = _compute_statistics_loss(
         pred_statistics, target_statistics, device_type
     )

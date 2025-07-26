@@ -69,6 +69,7 @@ class TestLossRegressions(unittest.TestCase):
             target_final_exec,
             dummy_stats,
             cfg,
+            log_vars=torch.zeros(6),
         )
 
         self.assertLess(losses["digit_loss"].item(), 1e-6)
@@ -111,6 +112,7 @@ class TestLossRegressions(unittest.TestCase):
             target_final_exec,
             dummy_stats,
             cfg,
+            log_vars=torch.zeros(6),
         )
 
         # All returned losses must be finite numbers

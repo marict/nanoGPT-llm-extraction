@@ -98,6 +98,7 @@ class TestGradientCosines(unittest.TestCase):
             target_final_exec,
             dummy_stats,
             self.cfg,
+            log_vars=torch.zeros(6),
         )
 
         # Test with gradient cosines - compute them separately
@@ -114,6 +115,7 @@ class TestGradientCosines(unittest.TestCase):
             target_final_exec,
             dummy_stats,
             self.cfg,
+            log_vars=torch.zeros(6),
         )
 
         # Compute gradient cosines separately (all losses use automatic balancing)
@@ -222,6 +224,7 @@ class TestGradientCosines(unittest.TestCase):
             target_final_exec,
             dummy_stats,
             self.cfg,
+            log_vars=torch.zeros(6),
         )
 
         # Compute gradient cosines separately (all losses use automatic balancing)
@@ -292,6 +295,7 @@ class TestGradientCosines(unittest.TestCase):
             target_final_exec,
             dummy_stats,
             self.cfg,
+            log_vars=torch.zeros(6),
         )
 
         # Check that gradient cosines are not present

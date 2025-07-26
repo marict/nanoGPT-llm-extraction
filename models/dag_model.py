@@ -390,6 +390,11 @@ class DAGPlanPredictor(nn.Module):
             torch.log(torch.tensor(float(init_digit_tau)))
         )
 
+        # Learnable uncertainty weighting parameters for multi-loss training
+        # log_vars[i] = log(σ²) for each loss component: [sign, digit, op, value, exec, stats]
+        # Initialize to 0 (σ² = 1) so all losses start equally weighted
+        self.log_vars = nn.Parameter(torch.zeros(6))
+
         # Resolve operations from config
         self.op_names = config.op_names
         self.n_ops = len(self.op_names)

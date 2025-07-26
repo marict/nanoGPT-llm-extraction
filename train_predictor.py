@@ -345,6 +345,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         f"sign_loss {eval_losses['sign_loss']:.4f}, digit_loss {eval_losses['digit_loss']:.4f}, "
                         f"op_loss {eval_losses['op_loss']:.4f}, value_loss {eval_losses['value_loss']:.4f}, "
                         f"exec_loss {eval_losses['exec_loss']:.4f}, op_acc {eval_losses['op_accuracy']:.4f}, "
+                        f"stats_loss {eval_losses['stats_loss']:.4f}, "
                         f"full_op_match {eval_losses['full_dag_op_match']:.4f}, "
                         f"sign_acc {eval_losses['sign_accuracy']:.4f}, "
                         f"executed_mse {eval_losses['executed_mse']:.4f}"
@@ -361,6 +362,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "val/op_loss": eval_losses["op_loss"],
                         "val/value_loss": eval_losses["value_loss"],
                         "val/exec_loss": eval_losses["exec_loss"],
+                        "val/stats_loss": eval_losses["stats_loss"],
                         "val/op_accuracy": eval_losses["op_accuracy"],
                         "val/full_dag_op_match": eval_losses["full_dag_op_match"],
                         "val/sign_accuracy": eval_losses["sign_accuracy"],
@@ -568,7 +570,13 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         .expand(-1, T, -1),
                     }
 
-                    # Compute loss with fixed scaling built into the loss functions
+                    # Extract learnable uncertainty weighting parameters
+                    if hasattr(raw_model, "dag"):  # GPT backbone with DAG
+                        log_vars = raw_model.dag.plan_predictor.log_vars
+                    else:  # Standalone predictor
+                        log_vars = raw_model.dag_predictor.log_vars
+
+                    # Compute losses with learned uncertainty weighting
                     losses = compute_dag_structure_loss(
                         sign_logits_seq,
                         digit_logits_seq,
@@ -581,6 +589,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         target_final_exec_seq,
                         target_statistics_seq,
                         cfg,
+                        log_vars=log_vars,
                     )
 
                     # Compute gradient cosines when we're doing regular logging
@@ -644,10 +653,15 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     loss = losses["total_loss"] / cfg.gradient_accumulation_steps
 
                     # Accumulate losses for logging
-                    for key, value in losses.items():
-                        if isinstance(value, torch.Tensor):
+                for key, value in losses.items():
+                    if isinstance(value, torch.Tensor):
+                        if key == "uncertainty_weights":
+                            # Store the full tensor for detailed logging
+                            loss_accum[key] = value.detach().cpu()
+                        else:
                             value = value.item() / cfg.gradient_accumulation_steps
-
+                            loss_accum[key] = value
+                    else:
                         loss_accum[key] = value
 
                     # ------------------------------------------------------------------ #
@@ -706,6 +720,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 exec_loss_val = loss_accum["exec_loss"]  # Automatically scaled
                 stats_loss_val = loss_accum["stats_loss"]  # Automatically scaled
 
+                # Format uncertainty weights for logging (exponential of log-variance)
+                uncertainty_weights = loss_accum["uncertainty_weights"]
+                weights_str = f"[{uncertainty_weights[0]:.3f},{uncertainty_weights[1]:.3f},{uncertainty_weights[2]:.3f},{uncertainty_weights[3]:.3f},{uncertainty_weights[4]:.3f},{uncertainty_weights[5]:.3f}]"
+
                 log_msg = (
                     f"iter {iter_num}: loss {loss_accum['total_loss']:.4f}, "
                     f"sign {sign_loss_val:.4f}, "
@@ -713,7 +731,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     f"op {op_loss_val:.4f}, "
                     f"value {value_loss_val:.4f}, "
                     f"exec {exec_loss_val:.4f}, "
-                    f"stats {stats_loss_val:.4f}"
+                    f"stats {stats_loss_val:.4f}, "
+                    f"weights {weights_str}"
                     f", op_acc {loss_accum['op_accuracy']:.4f}, "
                     f"full_op_match {loss_accum['full_dag_op_match']:.4f}, "
                     f"sign_acc {loss_accum['sign_accuracy']:.4f}"
@@ -744,6 +763,13 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "train/full_dag_op_match": loss_accum["full_dag_op_match"],
                         "train/sign_accuracy": loss_accum["sign_accuracy"],
                         "train/time_per_iter_ms": dt * 1000,
+                        # Uncertainty weights (exp(-log_vars))
+                        "weights/sign": uncertainty_weights[0].item(),
+                        "weights/digit": uncertainty_weights[1].item(),
+                        "weights/op": uncertainty_weights[2].item(),
+                        "weights/value": uncertainty_weights[3].item(),
+                        "weights/exec": uncertainty_weights[4].item(),
+                        "weights/stats": uncertainty_weights[5].item(),
                     }
 
                     # Add internal losses and gradient cosines to wandb logging

@@ -65,8 +65,8 @@ class TestTrainIntegration:
             ), f"Training script failed with return code {result.returncode}"
 
             # Basic sanity checks on output
-            assert "Starting main function" in result.stdout
-            assert "Starting training" in result.stdout
+            assert "Training Configuration" in result.stdout
+            assert "dag_depth:" in result.stdout
 
             # Should not have any critical errors
             assert "ERROR" not in result.stderr.upper()
@@ -79,6 +79,60 @@ class TestTrainIntegration:
             )
         except subprocess.CalledProcessError as e:
             pytest.fail(f"Training script failed to run: {e}")
+
+    def test_train_predictor_script_runs_without_errors(self):
+        """Test that train_predictor.py can run with minimal config without crashing."""
+        # Set up environment
+        env = os.environ.copy()
+        env["WANDB_API_KEY"] = "test_key_12345"  # Fake API key for testing
+        env["WANDB_MODE"] = "disabled"  # Disable wandb for testing
+
+        # Use the minimal config designed for testing
+        config_file = "config/train_predictor_default.py"
+
+        # Run the training script
+        try:
+            result = subprocess.run(
+                ["python", "train_predictor.py", config_file],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minutes timeout
+                cwd=self.original_cwd,
+            )
+
+            # Check that the script completed successfully
+            if result.returncode != 0:
+                print("STDOUT:", result.stdout)
+                print("STDERR:", result.stderr)
+
+            assert (
+                result.returncode == 0
+            ), f"Predictor training script failed with return code {result.returncode}"
+
+            # Basic sanity checks on output
+            assert "Training Configuration" in result.stdout
+            assert "dag_depth:" in result.stdout
+
+            # Should not have any critical errors (excluding deprecation warnings)
+            stderr_lines = result.stderr.upper().split("\n")
+            critical_errors = [
+                line
+                for line in stderr_lines
+                if "ERROR" in line
+                and "WARNING" not in line
+                and "DEPRECATED" not in line
+            ]
+            assert not critical_errors, f"Found critical errors: {critical_errors}"
+            assert "EXCEPTION" not in result.stderr.upper()
+            assert "TRACEBACK" not in result.stderr.upper()
+
+        except subprocess.TimeoutExpired:
+            pytest.fail(
+                "Predictor training script timed out - this suggests an infinite loop or hang"
+            )
+        except subprocess.CalledProcessError as e:
+            pytest.fail(f"Predictor training script failed to run: {e}")
 
     def test_train_script_with_overrides(self):
         """Test that train.py works with command line overrides."""
