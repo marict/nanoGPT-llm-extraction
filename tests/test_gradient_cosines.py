@@ -13,6 +13,16 @@ from models.dag_model import OP_NAMES
 from predictor_config import DAGTrainConfig
 from predictor_utils import compute_dag_structure_loss, compute_gradient_cosines
 
+
+def _dummy_statistics(batch_size, seq_len=1):
+    """Create dummy statistics for testing."""
+    return {
+        "initial": torch.zeros(batch_size, seq_len, 15),
+        "intermediate": torch.zeros(batch_size, seq_len, 15),
+        "final": torch.zeros(batch_size, seq_len, 10),
+    }
+
+
 N_OPS = len(OP_NAMES)
 
 
@@ -35,11 +45,6 @@ class TestGradientCosines(unittest.TestCase):
         torch.manual_seed(42)
         self.cfg = DAGTrainConfig()
         self.cfg.dag_depth = 2
-        self.cfg.sign_loss_weight = 1.0
-        self.cfg.digit_loss_weight = 1.0
-        self.cfg.op_loss_weight = 1.0
-        self.cfg.value_loss_weight = 1.0
-        self.cfg.exec_loss_weight = 1.0
         self.cfg.max_digits = 4
         self.cfg.max_decimal_places = 2
 
@@ -80,38 +85,44 @@ class TestGradientCosines(unittest.TestCase):
         model_params = list(model.parameters())
 
         # Test without gradient cosines
+        dummy_stats = _dummy_statistics(B, T)
         losses_without = compute_dag_structure_loss(
             pred_sgn,
             pred_digit_logits,
             pred_ops,
+            dummy_stats,
             target_sgn,
             target_digits,
             target_ops,
             target_initial_values,
             target_final_exec,
+            dummy_stats,
             self.cfg,
         )
 
         # Test with gradient cosines - compute them separately
+        dummy_stats = _dummy_statistics(B, T)
         losses_with = compute_dag_structure_loss(
             pred_sgn,
             pred_digit_logits,
             pred_ops,
+            dummy_stats,
             target_sgn,
             target_digits,
             target_ops,
             target_initial_values,
             target_final_exec,
+            dummy_stats,
             self.cfg,
         )
 
-        # Compute gradient cosines separately
+        # Compute gradient cosines separately (all losses use automatic balancing)
         weighted_losses = {
-            "sign_loss": self.cfg.sign_loss_weight * losses_with["sign_loss"],
-            "digit_loss": self.cfg.digit_loss_weight * losses_with["digit_loss"],
-            "op_loss": self.cfg.op_loss_weight * losses_with["op_loss"],
-            "value_loss": self.cfg.value_loss_weight * losses_with["value_loss"],
-            "exec_loss": self.cfg.exec_loss_weight * losses_with["exec_loss"],
+            "sign_loss": losses_with["sign_loss"],
+            "digit_loss": losses_with["digit_loss"],
+            "op_loss": losses_with["op_loss"],
+            "value_loss": losses_with["value_loss"],
+            "exec_loss": losses_with["exec_loss"],
         }
         gradient_cosines = compute_gradient_cosines(
             weighted_losses,
@@ -198,25 +209,28 @@ class TestGradientCosines(unittest.TestCase):
 
         model_params = list(model.parameters())
 
+        dummy_stats = _dummy_statistics(B, T)
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_digit_logits,
             pred_ops,
+            dummy_stats,
             target_sgn,
             target_digits,
             target_ops,
             target_initial_values,
             target_final_exec,
+            dummy_stats,
             self.cfg,
         )
 
-        # Compute gradient cosines separately
+        # Compute gradient cosines separately (all losses use automatic balancing)
         weighted_losses = {
-            "sign_loss": self.cfg.sign_loss_weight * losses["sign_loss"],
-            "digit_loss": self.cfg.digit_loss_weight * losses["digit_loss"],
-            "op_loss": self.cfg.op_loss_weight * losses["op_loss"],
-            "value_loss": self.cfg.value_loss_weight * losses["value_loss"],
-            "exec_loss": self.cfg.exec_loss_weight * losses["exec_loss"],
+            "sign_loss": losses["sign_loss"],
+            "digit_loss": losses["digit_loss"],
+            "op_loss": losses["op_loss"],
+            "value_loss": losses["value_loss"],
+            "exec_loss": losses["exec_loss"],
         }
         gradient_cosines = compute_gradient_cosines(
             weighted_losses,
@@ -265,15 +279,18 @@ class TestGradientCosines(unittest.TestCase):
         target_initial_values = torch.ones(B, T, num_nodes)
         target_final_exec = torch.ones(B, T, 1)
 
+        dummy_stats = _dummy_statistics(B, T)
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_digit_logits,
             pred_ops,
+            dummy_stats,
             target_sgn,
             target_digits,
             target_ops,
             target_initial_values,
             target_final_exec,
+            dummy_stats,
             self.cfg,
         )
 

@@ -25,7 +25,12 @@ from models.dag_model import execute_stack
 sys.path.append(str(Path(__file__).parent.parent))
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from models.dag_model import LOG_LIM, OP_NAMES
+from models.dag_model import (
+    LOG_LIM,
+    OP_NAMES,
+    compute_multi_value_statistics,
+    compute_single_value_statistics,
+)
 
 from .expression_to_string import format_expression_string
 
@@ -494,7 +499,7 @@ def plan_to_tensors(
         digit_probs = digits_tensor.unsqueeze(0).unsqueeze(0).to(torch.float64)
         op_probs = operations_one_hot.unsqueeze(0).unsqueeze(0).to(torch.float64)
 
-        final_sgn, final_log = execute_stack(
+        final_sgn, final_log, intermediate_values = execute_stack(
             sign_tensor,
             digit_probs,
             op_probs,
@@ -502,6 +507,7 @@ def plan_to_tensors(
             max_decimal_places=max_decimal_places,
             base=base,
             ignore_clip=True,
+            return_intermediates=True,
         )
 
         final_value_exec = (final_sgn * torch.exp(final_log)).item()
@@ -521,6 +527,26 @@ def plan_to_tensors(
         initial_values[:num_scratch_nodes], dtype=torch.float32
     )
 
+    # Compute statistics for auxiliary prediction
+    # Intermediate values already collected during execute_stack call above
+
+    # Compute statistics (let errors surface to identify unstable stats)
+    target_initial_stats = torch.tensor(
+        compute_multi_value_statistics(initial_values), dtype=torch.float32
+    )
+
+    target_intermediate_stats = (
+        torch.tensor(
+            compute_multi_value_statistics(intermediate_values), dtype=torch.float32
+        )
+        if intermediate_values
+        else torch.zeros(15, dtype=torch.float32)
+    )
+
+    target_final_stats = torch.tensor(
+        compute_single_value_statistics(final_value_exec), dtype=torch.float32
+    )
+
     return {
         "target_initial_sgn": signs,
         "target_initial_log": initial_log,
@@ -528,6 +554,10 @@ def plan_to_tensors(
         "target_operation_probs": operations_one_hot,
         "target_final_exec": final_value_exec,
         "target_initial_values": target_initial_values,
+        # Statistics targets - same for all tokens since they relate to the same expression
+        "target_initial_stats": target_initial_stats,
+        "target_intermediate_stats": target_intermediate_stats,
+        "target_final_stats": target_final_stats,
     }
 
 
@@ -840,6 +870,13 @@ class DAGStructureDataset:
         batched_target_initial_values = torch.zeros(batch_size, max_nodes)
         batched_target_final_exec = torch.zeros(batch_size)
 
+        # Initialize statistics tensors
+        batched_target_initial_stats = torch.zeros(batch_size, 15)  # multi-value stats
+        batched_target_intermediate_stats = torch.zeros(
+            batch_size, 15
+        )  # multi-value stats
+        batched_target_final_stats = torch.zeros(batch_size, 10)  # single-value stats
+
         # Fill batched tensors
         for i, (structure, example) in enumerate(zip(structures, examples)):
             depth = example.depth
@@ -866,6 +903,13 @@ class DAGStructureDataset:
             ][:nodes]
             batched_target_final_exec[i] = structure["target_final_exec"]
 
+            # Extract statistics targets
+            batched_target_initial_stats[i] = structure["target_initial_stats"]
+            batched_target_intermediate_stats[i] = structure[
+                "target_intermediate_stats"
+            ]
+            batched_target_final_stats[i] = structure["target_final_stats"]
+
         return {
             "target_initial_sgn": batched_initial_sgn,
             "target_initial_log": batched_initial_log,
@@ -873,6 +917,9 @@ class DAGStructureDataset:
             "target_operation_probs": batched_operation_probs,
             "target_initial_values": batched_target_initial_values,
             "target_final_exec": batched_target_final_exec,
+            "target_initial_stats": batched_target_initial_stats,
+            "target_intermediate_stats": batched_target_intermediate_stats,
+            "target_final_stats": batched_target_final_stats,
         }
 
     def create_dataloader(

@@ -10,17 +10,21 @@ from predictor_utils import compute_dag_structure_loss
 N_OPS = len(OP_NAMES)
 
 
+def _dummy_statistics(batch_size, seq_len=1):
+    """Create dummy statistics for testing."""
+    return {
+        "initial": torch.zeros(batch_size, seq_len, 15),
+        "intermediate": torch.zeros(batch_size, seq_len, 15),
+        "final": torch.zeros(batch_size, seq_len, 10),
+    }
+
+
 class TestLossRegressions(unittest.TestCase):
     """Regression tests for historical loss-function bugs."""
 
     def _make_cfg(self):
         cfg = DAGTrainConfig()
         cfg.dag_depth = 2
-        cfg.sign_loss_weight = 1.0
-        cfg.digit_loss_weight = 1.0
-        cfg.op_loss_weight = 1.0
-        cfg.value_loss_weight = 1.0
-        cfg.exec_loss_weight = 1.0
         cfg.max_digits = 4
         cfg.max_decimal_places = 2
         cfg.base = 10
@@ -52,15 +56,18 @@ class TestLossRegressions(unittest.TestCase):
         target_initial_values = torch.ones(B, T, nodes)
         target_final_exec = torch.ones(B, T, 1)
 
+        dummy_stats = _dummy_statistics(1, 1)
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_digits,
             pred_ops,
+            dummy_stats,
             target_sgn,
             target_digits,
             target_ops,
             target_initial_values,
             target_final_exec,
+            dummy_stats,
             cfg,
         )
 
@@ -91,15 +98,18 @@ class TestLossRegressions(unittest.TestCase):
         target_initial_values = torch.ones(B, T, nodes)
         target_final_exec = torch.ones(B, T, 1)
 
+        dummy_stats = _dummy_statistics(1, 1)
         losses = compute_dag_structure_loss(
             pred_sgn,
             pred_digits,
             pred_ops,
+            dummy_stats,
             target_sgn,
             target_digits,
             target_ops,
             target_initial_values,
             target_final_exec,
+            dummy_stats,
             cfg,
         )
 

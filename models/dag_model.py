@@ -15,9 +15,11 @@ import math
 import os
 from dataclasses import dataclass, field
 
+import numpy as np
 import torch
 import torch.nn as nn
 from rff.layers import PositionalEncoding
+from scipy import stats
 from torch.nn import functional as F
 
 from tensor_utils import index_copy_like
@@ -279,6 +281,88 @@ OP_NAMES = ["add", "subtract", "multiply", "divide", "identity"]
 assert len(OP_FUNCS) == len(OP_NAMES), "OP_FUNCS and OP_NAMES must have the same length"
 
 
+# Statistics computation for auxiliary prediction
+def compute_multi_value_statistics(values):
+    """Compute comprehensive statistics for multiple values (initial/intermediate)."""
+    arr = np.array(values, dtype=np.float64)
+    if len(arr) <= 1:
+        return np.zeros(15)  # Fallback for edge cases
+
+    return np.array(
+        [
+            np.mean(arr),  # 0: mean
+            np.std(arr),  # 1: standard deviation
+            np.min(arr),  # 2: minimum
+            np.max(arr),  # 3: maximum
+            np.median(arr),  # 4: median
+            np.ptp(arr),  # 5: range (max - min)
+            stats.skew(arr),  # 6: skewness
+            stats.kurtosis(arr),  # 7: kurtosis
+            np.percentile(arr, 25),  # 8: 25th percentile
+            np.percentile(arr, 75),  # 9: 75th percentile
+            np.sum(arr > 0),  # 10: count positive
+            np.sum(arr < 0),  # 11: count negative
+            np.sum(np.abs(arr) < 1),  # 12: count small values
+            len(np.unique(arr)),  # 13: unique count
+            np.std(arr) / (np.abs(np.mean(arr)) + 1e-6),  # 14: coeff of variation
+        ]
+    )
+
+
+def compute_single_value_statistics(value):
+    """Compute statistics meaningful for a single number (final result) - ALL CONTINUOUS for MSE loss."""
+    val = float(value)
+    return np.array(
+        [
+            val,  # 0: raw value
+            abs(val),  # 1: absolute value
+            math.log10(abs(val) + 1e-6),  # 2: log magnitude
+            math.tanh(val),  # 3: bounded raw value [-1,1]
+            math.tanh(abs(val)),  # 4: bounded absolute value [0,1]
+            math.exp(-abs(val)),  # 5: proximity to zero [0,1]
+            1.0 / (1.0 + abs(val)),  # 6: inverse size (small values -> 1, large -> 0)
+            math.sin(val),  # 7: oscillatory component
+            math.cos(val),  # 8: another oscillatory component
+            math.copysign(
+                1, val
+            ),  # 9: sign (-1, 0, or 1) - still categorical but bounded
+        ]
+    )
+
+
+# Statistics definitions for easy management
+MULTI_VALUE_STAT_NAMES = [
+    "mean",
+    "std",
+    "min",
+    "max",
+    "median",
+    "range",
+    "skew",
+    "kurtosis",
+    "q25",
+    "q75",
+    "count_pos",
+    "count_neg",
+    "count_small",
+    "unique_count",
+    "coeff_var",
+]
+
+SINGLE_VALUE_STAT_NAMES = [
+    "raw_value",
+    "abs_value",
+    "log_magnitude",
+    "tanh_value",
+    "tanh_abs",
+    "proximity_zero",
+    "inverse_size",
+    "sin_component",
+    "cos_component",
+    "sign",
+]
+
+
 def safe_clamp(logits: torch.Tensor) -> torch.Tensor:
     if logits.dtype == torch.float16:
         max_val = 8.0
@@ -321,6 +405,7 @@ class DAGPlanPredictor(nn.Module):
         # Blocks for splitting hidden state
         self.initial_value_hidden = Block(config)
         self.dag_structure_hidden = Block(config)
+        self.stats_structure_hidden = Block(config)  # Specialized mixing for statistics
 
         # Separate predictors for initial values and operations
         # Initial values predictor: hidden_state -> initial_values
@@ -384,6 +469,21 @@ class DAGPlanPredictor(nn.Module):
                     torch.nn.init.xavier_uniform_(layer.weight)
                     # Bias was already set above for the last layer
 
+        # Statistics prediction heads
+        self.initial_stat_names = MULTI_VALUE_STAT_NAMES
+        self.intermediate_stat_names = MULTI_VALUE_STAT_NAMES
+        self.final_stat_names = SINGLE_VALUE_STAT_NAMES
+
+        self.num_initial_stats = len(self.initial_stat_names)
+        self.num_intermediate_stats = len(self.intermediate_stat_names)
+        self.num_final_stats = len(self.final_stat_names)
+
+        self.initial_stats_head = nn.Linear(config.n_embd, self.num_initial_stats)
+        self.intermediate_stats_head = nn.Linear(
+            config.n_embd, self.num_intermediate_stats
+        )
+        self.final_stats_head = nn.Linear(config.n_embd, self.num_final_stats)
+
         # Store last predictions for logging
         self.last_operation_probs: torch.Tensor | None = None
         self.last_operation_logits: torch.Tensor | None = (
@@ -393,6 +493,7 @@ class DAGPlanPredictor(nn.Module):
         self.last_sign_logits: torch.Tensor | None = (
             None  # Store for numerically stable loss
         )
+        self.last_statistics: dict | None = None
 
     def clear_cache(self) -> None:
         """Clear cached tensors to prevent memory leaks."""
@@ -400,6 +501,7 @@ class DAGPlanPredictor(nn.Module):
         self.last_operation_logits = None
         self.last_digit_logits = None
         self.last_sign_logits = None
+        self.last_statistics = None
 
     def forward(self, original_hidden: torch.Tensor):
         """
@@ -411,15 +513,18 @@ class DAGPlanPredictor(nn.Module):
             initial_sgn: (B, T, num_scratch_nodes) - initial signs
             digit_probs: (B, T, num_scratch_nodes, digits_per_number, base) - digit probabilities
             operation_probs: (B, T, dag_depth, n_ops) - probabilities for operations
+            statistics: dict with keys 'initial', 'intermediate', 'final' containing (B, num_stats) tensors
         """
         # Clear previously cached tensors
         self.last_operation_probs = None
+        self.last_statistics = None
 
         B, T, H = original_hidden.shape
 
-        # Split hidden state into initial value and dag structure components
+        # Split hidden state into task-specific components
         initial_value_hidden = self.initial_value_hidden(original_hidden)
         dag_structure_hidden = self.dag_structure_hidden(original_hidden)
+        stats_structure_hidden = self.stats_structure_hidden(original_hidden)
 
         # Process initial values
         initial_value_flat = initial_value_hidden.reshape(B * T, H)
@@ -512,7 +617,27 @@ class DAGPlanPredictor(nn.Module):
         self.last_operation_logits = (
             operation_logits  # Store for numerically stable loss
         )
-        return initial_sgn, digit_probs, operation_probs
+
+        # Predict statistics per-token using specialized hidden state (maintaining causality)
+        # Each token predicts statistics using task-specific mixed representations
+        stats_hidden_flat = stats_structure_hidden.reshape(B * T, H)  # (B*T, H)
+
+        statistics = {
+            "initial": self.initial_stats_head(stats_hidden_flat).view(
+                B, T, self.num_initial_stats
+            ),
+            "intermediate": self.intermediate_stats_head(stats_hidden_flat).view(
+                B, T, self.num_intermediate_stats
+            ),
+            "final": self.final_stats_head(stats_hidden_flat).view(
+                B, T, self.num_final_stats
+            ),
+        }
+
+        # Cache statistics for logging
+        self.last_statistics = statistics
+
+        return initial_sgn, digit_probs, operation_probs, statistics
 
 
 def apply_op(
@@ -577,7 +702,8 @@ def execute_stack(
     base: int,
     ignore_clip: bool = False,
     _print_exec_intermediates: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    return_intermediates: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, list[float]]:
     """Execute a differentiable stack-based DAG computation.
 
     This function expects the **raw** predictor outputs: continuous sign values
@@ -590,10 +716,13 @@ def execute_stack(
         max_digits:  number of integer digit slots (D_int)
         max_decimal_places: number of fractional digit slots (D_frac)
         base: number base for digit representation
+        return_intermediates: if True, return intermediate computation values
+                            (only supported for B=1, T=1)
 
     Returns:
         final_sgn, final_log: (B,T) tensors representing the output scalar in
         signed–log₁₀ space.
+        intermediates: list of intermediate values (only if return_intermediates=True)
     """
 
     if max_digits + max_decimal_places != digit_probs.shape[3]:
@@ -630,6 +759,14 @@ def execute_stack(
     B, T, num_initial = initial_sgn.shape
     depth = ops.shape[2]
 
+    # Validate batch/sequence constraints for intermediate tracking
+    if return_intermediates and (B != 1 or T != 1):
+        raise ValueError(
+            f"return_intermediates=True only supports batch_size=1 and sequence_length=1, "
+            f"got B={B}, T={T}. This is because intermediate value tracking is designed for "
+            f"single expression evaluation, not batched sequence processing."
+        )
+
     # Pre-allocate buffers
     buffer_sgn = torch.zeros(
         B,
@@ -650,6 +787,9 @@ def execute_stack(
     buffer_log = buffer_log + initial_log
 
     current_size = num_initial
+
+    # Track intermediate values if requested (only for single batch item)
+    intermediate_values = []
 
     # Helper function for debug output
     def _log_to_value(sgn: torch.Tensor, log: torch.Tensor) -> float:
@@ -712,6 +852,13 @@ def execute_stack(
             result_val = _log_to_value(result_sgn[0, 0], result_log[0, 0])
             print(f"  Result: {result_val}")
 
+        # Track intermediate value if requested (only works for B=1, T=1)
+        if return_intermediates and B == 1 and T == 1:
+            intermediate_val = float(
+                result_sgn[0, 0].item() * torch.exp(result_log[0, 0]).item()
+            )
+            intermediate_values.append(intermediate_val)
+
         second_idx = current_size - 2
         idx = torch.tensor([second_idx], device=buffer_sgn.device)
         buffer_sgn = index_copy_like(buffer_sgn, -1, idx, result_sgn)
@@ -733,7 +880,10 @@ def execute_stack(
         print(f"  Final log:  {buffer_log[0, 0, 0].item()}")
         print("=== END EXECUTE_STACK DEBUG ===\n")
 
-    return buffer_sgn[..., 0], buffer_log[..., 0]
+    if return_intermediates:
+        return buffer_sgn[..., 0], buffer_log[..., 0], intermediate_values
+    else:
+        return buffer_sgn[..., 0], buffer_log[..., 0]
 
 
 class ScalarToEmbed(nn.Module):

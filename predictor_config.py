@@ -66,13 +66,6 @@ class DAGTrainConfig(BaseConfig):
     lr_decay_iters: int = 10000
     min_lr: float = 3e-5
 
-    # Loss weights
-    sign_loss_weight: float = 1.0
-    digit_loss_weight: float = 1.0
-    op_loss_weight: float = 1.0
-    value_loss_weight: float = 1.0
-    exec_loss_weight: float = 1.0
-
     # Random seeds
     seed: int = 42
 

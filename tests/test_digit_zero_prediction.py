@@ -29,7 +29,7 @@ def test_initial_predictions_favor_zero():
 
     # Forward pass to get predictions
     with torch.no_grad():
-        initial_sgn, digit_probs, _ = predictor(hidden)
+        _, digit_probs, _, _ = predictor(hidden)
 
     # Check that digit probabilities strongly favor zero
     # For each digit position, the probability of digit 0 should be much higher

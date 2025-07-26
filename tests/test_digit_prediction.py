@@ -9,6 +9,15 @@ from predictor_utils import compute_dag_structure_loss, digits_to_magnitude
 from train_predictor import DAGTrainConfig
 
 
+def _dummy_statistics(batch_size, seq_len=1):
+    """Create dummy statistics for testing."""
+    return {
+        "initial": torch.zeros(batch_size, seq_len, 15),
+        "intermediate": torch.zeros(batch_size, seq_len, 15),
+        "final": torch.zeros(batch_size, seq_len, 10),
+    }
+
+
 class TestDigitPrediction(unittest.TestCase):
     """Unit-tests for digit distribution pathway inside DAGPlanPredictor."""
 
@@ -69,7 +78,7 @@ class TestDigitPrediction(unittest.TestCase):
         input_ids = torch.randint(0, 1000, (B, T))
 
         with torch.no_grad():
-            pred_sgn, digit_probs, pred_ops = model(input_ids)
+            pred_sgn, digit_probs, pred_ops, _ = model(input_ids)
 
             # Compute log magnitudes for comparison
             magnitude_from_log = torch.log(
@@ -110,7 +119,7 @@ class TestDigitPrediction(unittest.TestCase):
         input_ids = torch.randint(0, 1000, (B, T))
 
         # Forward pass
-        pred_sgn, _, pred_ops = model(input_ids)
+        pred_sgn, _, pred_ops, _ = model(input_ids)
         digit_logits = model.dag_predictor.last_digit_logits
         self.assertIsNotNone(digit_logits)
 
@@ -139,22 +148,23 @@ class TestDigitPrediction(unittest.TestCase):
         cfg.dag_depth = model.config.dag_depth
         cfg.max_digits = max_digits
         cfg.max_decimal_places = max_decimals
-        cfg.value_loss_weight = 1.0
-        cfg.exec_loss_weight = 1.0
 
         # Add dummy targets for the new losses
         target_initial_values = torch.ones(B, T, N)
         target_final_exec = torch.ones(B, T, 1)
 
+        dummy_stats = _dummy_statistics(B, T)
         losses = compute_dag_structure_loss(
             pred_sgn,
             digit_logits,
             pred_ops,
+            dummy_stats,
             sign_target,
             target_digits,
             target_ops,
             target_initial_values,
             target_final_exec,
+            dummy_stats,
             cfg,
         )
         total_loss = losses["total_loss"]

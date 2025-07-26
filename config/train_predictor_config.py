@@ -72,12 +72,5 @@ compile = False
 keep_alive = False  # Auto-stop by default
 check_nans = False  # Check for NaNs in cloud training
 
-# Loss weights
-sign_loss_weight = 1.0
-digit_loss_weight = 1.0
-op_loss_weight = 1.0
-value_loss_weight = 1.0
-exec_loss_weight = 1.0
-
 # Random seeds
 seed = 42

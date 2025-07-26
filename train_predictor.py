@@ -293,7 +293,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     # Initialize loss accumulator for logging
     loss_accum = _empty_metrics()
 
-    exec_loss_max_clip = getattr(cfg, "exec_loss_max_clip", 5.0)
+    exec_loss_max_clip = getattr(cfg, "exec_loss_max_clip", 2.0)
 
     # Store validation metrics for combined logging
     pending_val_metrics = None
@@ -430,6 +430,11 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
             target_ops = structures["target_operation_probs"].to(device)
             target_initial_values = structures["target_initial_values"].to(device)
             target_final_exec = structures["target_final_exec"].to(device)
+            target_statistics = {
+                "initial": structures["target_initial_stats"].to(device),
+                "intermediate": structures["target_intermediate_stats"].to(device),
+                "final": structures["target_final_stats"].to(device),
+            }
 
             loss_accum = _empty_metrics()
 
@@ -447,9 +452,11 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
                     if cfg.full_backbone and hasattr(raw_model, "dag"):
                         hidden = raw_model.forward_hidden(input_tokens)
-                        pred_sgn, _, pred_ops = raw_model.dag.plan_predictor(hidden)
+                        pred_sgn, _, pred_ops, pred_statistics = (
+                            raw_model.dag.plan_predictor(hidden)
+                        )
                     else:
-                        pred_sgn, _, pred_ops = raw_model(input_tokens)
+                        pred_sgn, _, pred_ops, pred_statistics = raw_model(input_tokens)
 
                     # Average over sequence dimension
                     pred_sgn_avg = pred_sgn.mean(dim=1)  # (B, num_nodes_pred)
@@ -544,16 +551,35 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     target_initial_values_seq = target_initial_values.unsqueeze(1)
                     target_final_exec_seq = target_final_exec.unsqueeze(1)
 
-                    # Compute loss - use all logits for numerically stable cross-entropy
+                    # Get sequence length from predictions
+                    T = pred_statistics["initial"].shape[1]
+
+                    # Broadcast statistics targets to match per-token predictions (B, T, num_stats)
+                    # Same statistics apply to all tokens since they relate to the same expression
+                    target_statistics_seq = {
+                        "initial": target_statistics["initial"]
+                        .unsqueeze(1)
+                        .expand(-1, T, -1),
+                        "intermediate": target_statistics["intermediate"]
+                        .unsqueeze(1)
+                        .expand(-1, T, -1),
+                        "final": target_statistics["final"]
+                        .unsqueeze(1)
+                        .expand(-1, T, -1),
+                    }
+
+                    # Compute loss with fixed scaling built into the loss functions
                     losses = compute_dag_structure_loss(
                         sign_logits_seq,
                         digit_logits_seq,
                         operation_logits_seq,
+                        pred_statistics,
                         target_sgn_seq,
                         target_digits_seq,
                         target_ops_seq,
                         target_initial_values_seq,
                         target_final_exec_seq,
+                        target_statistics_seq,
                         cfg,
                     )
 
@@ -569,19 +595,23 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     if should_compute_gradient_cosines:
                         # Compute gradient cosines for analysis
                         model_params = list(raw_model.parameters())
+                        # All losses use automatic balancing (no manual weights)
                         weighted_losses = {
-                            "sign_loss": cfg.sign_loss_weight * losses["sign_loss"],
-                            "digit_loss": cfg.digit_loss_weight * losses["digit_loss"],
-                            "op_loss": cfg.op_loss_weight * losses["op_loss"],
-                            "value_loss": cfg.value_loss_weight * losses["value_loss"],
+                            "sign_loss": losses["sign_loss"],
+                            "digit_loss": losses["digit_loss"],
+                            "op_loss": losses["op_loss"],
+                            "value_loss": losses["value_loss"],
                             "exec_loss": (
-                                cfg.exec_loss_weight * losses["exec_loss"]
+                                losses["exec_loss"]  # Already scaled automatically
                                 if not cfg.check_nans
                                 or torch.isfinite(losses["exec_loss"]).all()
                                 else torch.tensor(
                                     0.0, device=losses["exec_loss"].device
                                 )
                             ),
+                            "stats_loss": losses[
+                                "stats_loss"
+                            ],  # Already scaled automatically
                         }
                         gradient_cosines = compute_gradient_cosines(
                             weighted_losses,
@@ -594,13 +624,14 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     raw_exec_loss = losses["exec_loss"].item()
                     clipped_exec_loss = min(raw_exec_loss, exec_loss_max_clip)
 
-                    # Recompute total_loss with smoothed exec_loss for training
+                    # Recompute total_loss with smoothed exec_loss for training (automatic balancing)
                     smoothed_total_loss = (
-                        cfg.sign_loss_weight * losses["sign_loss"]
-                        + cfg.digit_loss_weight * losses["digit_loss"]
-                        + cfg.op_loss_weight * losses["op_loss"]
-                        + cfg.value_loss_weight * losses["value_loss"]
-                        + cfg.exec_loss_weight * clipped_exec_loss
+                        losses["sign_loss"]
+                        + losses["digit_loss"]
+                        + losses["op_loss"]
+                        + losses["value_loss"]
+                        + clipped_exec_loss  # Automatic scaling
+                        + losses["stats_loss"]  # Automatic scaling
                     )
 
                     # Replace exec_loss with clipped version for training stability
@@ -667,45 +698,27 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
             t0 = time.time()
 
             if iter_num % cfg.log_interval == 0 and master_process:
-                # Build dynamic log message for main losses
-                exec_loss_display = loss_accum["exec_loss"]
-
-                # Display weighted losses (what actually contributes to total loss)
-                weighted_sign_loss = cfg.sign_loss_weight * loss_accum["sign_loss"]
-                weighted_digit_loss = cfg.digit_loss_weight * loss_accum["digit_loss"]
-                weighted_op_loss = cfg.op_loss_weight * loss_accum["op_loss"]
-                weighted_value_loss = cfg.value_loss_weight * loss_accum["value_loss"]
-                weighted_exec_loss = cfg.exec_loss_weight * exec_loss_display
+                # Display losses (all use automatic balancing)
+                sign_loss_val = loss_accum["sign_loss"]
+                digit_loss_val = loss_accum["digit_loss"]
+                op_loss_val = loss_accum["op_loss"]
+                value_loss_val = loss_accum["value_loss"]
+                exec_loss_val = loss_accum["exec_loss"]  # Automatically scaled
+                stats_loss_val = loss_accum["stats_loss"]  # Automatically scaled
 
                 log_msg = (
                     f"iter {iter_num}: loss {loss_accum['total_loss']:.4f}, "
-                    f"sign {weighted_sign_loss:.4f}, "
-                    f"digit {weighted_digit_loss:.4f}, "
-                    f"op {weighted_op_loss:.4f}, "
-                    f"value {weighted_value_loss:.4f}, "
-                    f"exec {weighted_exec_loss:.4f}"
+                    f"sign {sign_loss_val:.4f}, "
+                    f"digit {digit_loss_val:.4f}, "
+                    f"op {op_loss_val:.4f}, "
+                    f"value {value_loss_val:.4f}, "
+                    f"exec {exec_loss_val:.4f}, "
+                    f"stats {stats_loss_val:.4f}"
                     f", op_acc {loss_accum['op_accuracy']:.4f}, "
                     f"full_op_match {loss_accum['full_dag_op_match']:.4f}, "
                     f"sign_acc {loss_accum['sign_accuracy']:.4f}"
+                    f", time {dt*1000:.2f}ms"
                 )
-
-                # Add internal losses if present
-                internal_loss_keys = [
-                    k
-                    for k in loss_accum.keys()
-                    if k.endswith("_loss")
-                    and k not in ["total_loss", "sign_loss", "digit_loss", "op_loss"]
-                ]
-                if internal_loss_keys:
-                    internal_msg = ", ".join(
-                        [
-                            f"{k.replace('_loss', '')} {loss_accum[k]:.6f}"
-                            for k in internal_loss_keys
-                        ]
-                    )
-                    log_msg += f", {internal_msg}"
-
-                log_msg += f", time {dt*1000:.2f}ms"
 
                 # realtime training log emitted via wandb
                 if master_process:
@@ -725,16 +738,13 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "train/op_loss": loss_accum["op_loss"],
                         "train/value_loss": loss_accum["value_loss"],
                         "train/exec_loss": loss_accum["exec_loss"],
+                        "train/stats_loss": loss_accum["stats_loss"],
                         "lr": current_lr,
                         "train/op_accuracy": loss_accum["op_accuracy"],
                         "train/full_dag_op_match": loss_accum["full_dag_op_match"],
                         "train/sign_accuracy": loss_accum["sign_accuracy"],
                         "train/time_per_iter_ms": dt * 1000,
                     }
-
-                    # Add raw exec_loss for comparison
-                    if "exec_loss_raw" in loss_accum:
-                        log_dict["train/exec_loss_raw"] = loss_accum["exec_loss_raw"]
 
                     # Add internal losses and gradient cosines to wandb logging
                     for key, value in loss_accum.items():

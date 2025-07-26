@@ -53,8 +53,8 @@ def test_causal_mask_invariance_for_predictor():
     hidden_modified[..., -1, :] += torch.randn_like(hidden_modified[..., -1, :]) * 10.0
 
     with torch.no_grad():
-        sign_ref, digits_ref, ops_ref = predictor(hidden_base)
-        sign_mod, digits_mod, ops_mod = predictor(hidden_modified)
+        sign_ref, digits_ref, ops_ref, _ = predictor(hidden_base)
+        sign_mod, digits_mod, ops_mod, _ = predictor(hidden_modified)
 
     assert torch.allclose(
         sign_ref[..., :-1, :], sign_mod[..., :-1, :], atol=1e-5, rtol=1e-5
@@ -83,7 +83,7 @@ def test_operation_probs_finite_and_normalised_after_large_logits():
     hidden = torch.randn(B, T, H) * 1e4  # Enormous magnitude ⇒ very large logits
 
     with torch.no_grad():
-        _sgn, _log, op_probs = predictor(hidden)
+        _, _, op_probs, _ = predictor(hidden)
 
     # All probabilities must be finite and each row should sum to ~1
     assert torch.isfinite(

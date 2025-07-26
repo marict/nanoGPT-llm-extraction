@@ -250,8 +250,41 @@ def _compute_exec_loss(
         # Soft overflow penalty (based on ln magnitude) – much smaller coeff
         overflow_pen = F.softplus((pred_ln - 30.0)).mean() * 0.0005
 
-        # Scale down core loss to align with baseline (~2–3 early on)
-        return 0.1 * (ln_loss + abs_loss) + overflow_pen
+        # Scale down core loss to align with baseline (~2–3 early on), then normalize by fixed scale
+        raw_loss = 0.3 * (ln_loss + abs_loss) + overflow_pen
+        return raw_loss
+
+
+def _compute_statistics_loss(
+    pred_statistics: dict,  # dict with 'initial', 'intermediate', 'final' containing (B, T, num_stats) tensors
+    target_statistics: dict,  # dict with 'initial', 'intermediate', 'final' containing (B, T, num_stats) tensors
+    device_type: str,
+) -> torch.Tensor:
+    """Compute MSE loss for auxiliary statistical predictions (per-token)."""
+    with torch.amp.autocast(device_type=device_type, enabled=False):
+        total_loss = 0.0
+        num_components = 0
+
+        # Compute loss for each statistics component
+        for key in ["initial", "intermediate", "final"]:
+            if key in pred_statistics and key in target_statistics:
+                pred = pred_statistics[key].to(torch.float32)  # (B, T, num_stats)
+                target = target_statistics[key].to(torch.float32)  # (B, T, num_stats)
+
+                # MSE loss for this component (averaged over batch, sequence, and features)
+                component_loss = F.mse_loss(pred, target)
+                total_loss += component_loss
+                num_components += 1
+
+        # Average across components if any exist, then apply fixed scaling
+        if num_components > 0:
+            stats_loss_scale = 8.0  # Fixed scale based on typical early training values
+            return total_loss / num_components / stats_loss_scale
+        else:
+            # Return zero loss if no statistics to compute
+            return torch.tensor(
+                0.0, device=pred_statistics["initial"].device, dtype=torch.float32
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -261,11 +294,13 @@ def compute_dag_structure_loss(
     pred_sign_logits: torch.Tensor,  # (B,T,N) raw logits (not tanh-activated)
     pred_digit_logits: torch.Tensor,  # (B,T,N,D,base) raw logits (not probabilities)
     pred_op_logits: torch.Tensor,  # (B,T,depth,n_ops) raw logits (not probabilities)
+    pred_statistics: dict,  # dict with 'initial', 'intermediate', 'final' containing (B, num_stats) tensors
     target_sgn: torch.Tensor,  # (B,T,N)
     target_digits: torch.Tensor,  # (B,T,N,D,base) one-hot
     target_ops: torch.Tensor,
     target_initial_values: torch.Tensor,  # (B,T,N) - target initial values as floats
     target_final_exec: torch.Tensor,  # (B,T) - target final execution values as floats
+    target_statistics: dict,  # dict with 'initial', 'intermediate', 'final' containing (B, num_stats) tensors
     cfg: DAGTrainConfig,
 ) -> Dict[str, torch.Tensor]:
     """Compute robust DAG-structure prediction loss.
@@ -304,19 +339,20 @@ def compute_dag_structure_loss(
         device_type,
     )
 
-    # Combine all losses with their respective weights
-    total_loss = (
-        cfg.sign_loss_weight * sign_loss
-        + cfg.digit_loss_weight * digit_loss
-        + cfg.op_loss_weight * op_loss
-        + cfg.value_loss_weight * value_loss
+    # Compute statistics loss with fixed scaling
+    stats_loss = _compute_statistics_loss(
+        pred_statistics, target_statistics, device_type
     )
 
-    # Soft capping for exec loss: use tanh to keep it bounded while preserving gradients
-    # Scale exec_loss to ~[0,10] range before tanh, then scale back to ~[0,5] range
-    # This keeps it meaningful while preventing blowups
-    exec_loss_capped = 5.0 * torch.tanh(exec_loss / 5.0)
-    total_loss += cfg.exec_loss_weight * exec_loss_capped
+    # Combine all losses with automatic balancing (no manual weights)
+    total_loss = (
+        sign_loss
+        + digit_loss
+        + op_loss
+        + value_loss
+        + exec_loss  # Automatic scaling built-in
+        + stats_loss  # Automatic scaling built-in
+    )
 
     return {
         "total_loss": total_loss,
@@ -325,6 +361,7 @@ def compute_dag_structure_loss(
         "op_loss": op_loss,
         "value_loss": value_loss,
         "exec_loss": exec_loss,
+        "stats_loss": stats_loss,
     }
 
 
@@ -495,6 +532,7 @@ def evaluate_dag_model(
             "op_loss",
             "value_loss",
             "exec_loss",
+            "stats_loss",
         )
     }
     total_metrics = {
@@ -522,9 +560,11 @@ def evaluate_dag_model(
             with ctx:
                 if cfg.full_backbone and hasattr(model, "dag"):
                     hidden = model.forward_hidden(input_tokens)
-                    pred_sgn, _, pred_ops = model.dag.plan_predictor(hidden)
+                    pred_sgn, _, pred_ops, pred_statistics = model.dag.plan_predictor(
+                        hidden
+                    )
                 else:
-                    pred_sgn, _, pred_ops = model(input_tokens)
+                    pred_sgn, _, pred_ops, pred_statistics = model(input_tokens)
 
                 pred_sgn = pred_sgn.mean(dim=1)
 
@@ -611,16 +651,35 @@ def evaluate_dag_model(
                     structures["target_final_exec"].to(device).unsqueeze(1)
                 )  # Add sequence dim
 
+                # Extract target statistics from structures and broadcast to match pred_statistics shape
+                seq_len = pred_statistics["initial"].shape[1]
+                target_statistics = {
+                    "initial": structures["target_initial_stats"]
+                    .to(device)
+                    .unsqueeze(1)
+                    .expand(-1, seq_len, -1),
+                    "intermediate": structures["target_intermediate_stats"]
+                    .to(device)
+                    .unsqueeze(1)
+                    .expand(-1, seq_len, -1),
+                    "final": structures["target_final_stats"]
+                    .to(device)
+                    .unsqueeze(1)
+                    .expand(-1, seq_len, -1),
+                }
+
                 # Compute loss using all logits for numerical stability
                 losses = compute_dag_structure_loss(
                     last_sign_logits,
                     last_digit_logits,
                     last_operation_logits,
+                    pred_statistics,
                     tgt_sgn.unsqueeze(1),
                     tgt_digits.unsqueeze(1),
                     tgt_ops.unsqueeze(1),
                     target_initial_values,
                     target_final_exec,
+                    target_statistics,
                     cfg,
                 )
 

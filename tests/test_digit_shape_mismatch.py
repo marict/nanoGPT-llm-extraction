@@ -7,6 +7,15 @@ from models.dag_model import OP_NAMES
 from predictor_utils import compute_dag_structure_loss
 
 
+def _dummy_statistics(batch_size, seq_len=1):
+    """Create dummy statistics for testing."""
+    return {
+        "initial": torch.zeros(batch_size, seq_len, 15),
+        "intermediate": torch.zeros(batch_size, seq_len, 15),
+        "final": torch.zeros(batch_size, seq_len, 10),
+    }
+
+
 def _make_one_hot(indices: torch.Tensor, num_classes: int = 10) -> torch.Tensor:
     """Utility to convert an index tensor to one-hot representation."""
     shape = (*indices.shape, num_classes)
@@ -31,13 +40,9 @@ def _build_common_tensors(batch: int, seq: int, nodes: int, depth: int):
 
 
 def _dummy_cfg():
-    """Minimal namespace carrying the loss weights and config parameters."""
+    """Minimal namespace carrying the config parameters."""
     return types.SimpleNamespace(
-        sign_loss_weight=0.0,
-        digit_loss_weight=1.0,
-        op_loss_weight=0.0,
-        value_loss_weight=1.0,
-        exec_loss_weight=1.0,
+        # All loss weights removed - using automatic balancing
         max_digits=4,
         max_decimal_places=2,
         base=10,
@@ -61,16 +66,19 @@ def test_digit_shape_match_no_error():
     target_initial_values = torch.ones(batch, seq, nodes)
     target_final_exec = torch.ones(batch, seq, 1)
 
+    dummy_stats = _dummy_statistics(batch, seq)
     # Should not raise
     compute_dag_structure_loss(
         pred_sgn,
         pred_digits,
         pred_ops,
+        dummy_stats,
         tgt_sgn,
         tgt_digits,
         tgt_ops,
         target_initial_values,
         target_final_exec,
+        dummy_stats,
         _dummy_cfg(),
     )
 
@@ -95,15 +103,18 @@ def test_digit_shape_mismatch_raises_error():
     target_initial_values = torch.ones(batch, seq, nodes)
     target_final_exec = torch.ones(batch, seq, 1)
 
+    dummy_stats = _dummy_statistics(batch, seq)
     with pytest.raises(ValueError):
         compute_dag_structure_loss(
             pred_sgn,
             pred_digits,
             pred_ops,
+            dummy_stats,
             tgt_sgn,
             tgt_digits,
             tgt_ops,
             target_initial_values,
             target_final_exec,
+            dummy_stats,
             _dummy_cfg(),
         )

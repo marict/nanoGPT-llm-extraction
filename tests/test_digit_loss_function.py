@@ -7,6 +7,15 @@ from models.dag_model import OP_NAMES
 from predictor_utils import compute_dag_structure_loss
 
 
+def _dummy_statistics(batch_size, seq_len=1):
+    """Create dummy statistics for testing."""
+    return {
+        "initial": torch.zeros(batch_size, seq_len, 15),
+        "intermediate": torch.zeros(batch_size, seq_len, 15),
+        "final": torch.zeros(batch_size, seq_len, 10),
+    }
+
+
 def _make_one_hot(indices: torch.Tensor, num_classes: int) -> torch.Tensor:
     """Utility to convert an index tensor to one-hot representation."""
     shape = (*indices.shape, num_classes)
@@ -59,25 +68,23 @@ def test_digit_loss_zero_and_nonzero(batch, seq, nodes, digits, depth):
     )  # This gives 10.0 where target is 1, -10.0 elsewhere
 
     cfg = types.SimpleNamespace(
-        sign_loss_weight=0.0,
-        digit_loss_weight=1.0,
-        op_loss_weight=0.0,
-        value_loss_weight=1.0,
-        exec_loss_weight=1.0,
         max_digits=3,
         max_decimal_places=1,
         base=10,
     )
 
+    dummy_stats = _dummy_statistics(batch, seq)
     losses_correct = compute_dag_structure_loss(
         pred_sgn,
         pred_digits_correct,
         pred_ops,
+        dummy_stats,
         tgt_sgn,
         tgt_digits,
         tgt_ops,
         tgt_initial_values,
         tgt_final_exec,
+        dummy_stats,
         cfg,
     )
 
@@ -94,11 +101,13 @@ def test_digit_loss_zero_and_nonzero(batch, seq, nodes, digits, depth):
         pred_sgn,
         pred_digits_wrong,
         pred_ops,
+        dummy_stats,
         tgt_sgn,
         tgt_digits,
         tgt_ops,
         tgt_initial_values,
         tgt_final_exec,
+        dummy_stats,
         cfg,
     )
 
