@@ -293,8 +293,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     # Initialize loss accumulator for logging
     loss_accum = _empty_metrics()
 
-    exec_loss_max_clip = getattr(cfg, "exec_loss_max_clip", 2.0)
-
     # Store validation metrics for combined logging
     pending_val_metrics = None
 
@@ -570,11 +568,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         .expand(-1, T, -1),
                     }
 
-                    # Extract learnable uncertainty weighting parameters
-                    if hasattr(raw_model, "dag"):  # GPT backbone with DAG
-                        log_vars = raw_model.dag.plan_predictor.log_vars
-                    else:  # Standalone predictor
-                        log_vars = raw_model.dag_predictor.log_vars
+                    log_vars = raw_model.dag_predictor.log_vars
 
                     # Compute losses with learned uncertainty weighting
                     losses = compute_dag_structure_loss(
@@ -591,6 +585,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         cfg,
                         log_vars=log_vars,
                     )
+                    loss = losses["total_loss"] / cfg.gradient_accumulation_steps
 
                     # Compute gradient cosines when we're doing regular logging
                     should_compute_gradient_cosines = (
@@ -600,7 +595,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         - 1  # Only on last micro-step
                         and master_process
                     )
-
                     if should_compute_gradient_cosines:
                         # Compute gradient cosines for analysis
                         model_params = list(raw_model.parameters())
@@ -628,31 +622,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                             model_params,
                         )
                         losses.update(gradient_cosines)
-
-                    # Replace exec_loss with clipped version for training stability
-                    raw_exec_loss = losses["exec_loss"].item()
-                    clipped_exec_loss = min(raw_exec_loss, exec_loss_max_clip)
-
-                    # Recompute total_loss with smoothed exec_loss for training (automatic balancing)
-                    smoothed_total_loss = (
-                        losses["sign_loss"]
-                        + losses["digit_loss"]
-                        + losses["op_loss"]
-                        + losses["value_loss"]
-                        + clipped_exec_loss  # Automatic scaling
-                        + losses["stats_loss"]  # Automatic scaling
-                    )
-
-                    # Replace exec_loss with clipped version for training stability
-                    losses["exec_loss_raw"] = losses["exec_loss"]  # Preserve raw value
-                    losses["exec_loss"] = torch.tensor(
-                        clipped_exec_loss, device=losses["exec_loss"].device
-                    )
-                    losses["total_loss"] = smoothed_total_loss
-
-                    loss = losses["total_loss"] / cfg.gradient_accumulation_steps
-
-                    # Accumulate losses for logging
                 for key, value in losses.items():
                     if isinstance(value, torch.Tensor):
                         if key == "uncertainty_weights":
@@ -703,9 +672,9 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
             if cfg.grad_clip > 0:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
-
             scaler.step(optimizer)
             scaler.update()
+            optimizer.zero_grad(set_to_none=True)
 
             # Timing and logging
             dt = time.time() - t0

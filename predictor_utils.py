@@ -56,31 +56,27 @@ def tokenize_texts(texts: List[str], sequence_length: int, device: str) -> torch
 def _compute_sign_loss(
     pred_sign_logits: torch.Tensor,
     target_sgn: torch.Tensor,
-    device_type: str,
 ) -> torch.Tensor:
     """Compute binary cross-entropy loss for sign prediction using logits.
 
     Args:
         pred_sign_logits: Raw sign logits (B,T,N)
         target_sgn: Target signs (B,T,N) in {-1,1}
-        device_type: Device type for autocast
     """
-    with torch.amp.autocast(device_type=device_type, enabled=False):
-        # Convert target signs {-1,1} to binary targets {0,1}
-        binary_targets = ((target_sgn > 0).float()).view(-1)
-        pred_sign_logits_flat = pred_sign_logits.view(-1).to(torch.float32)
+    # Convert target signs {-1,1} to binary targets {0,1}
+    binary_targets = ((target_sgn > 0).float()).view(-1)
+    pred_sign_logits_flat = pred_sign_logits.view(-1).to(torch.float32)
 
-        # Use binary cross entropy directly (clean, no backwards compatibility)
-        sign_loss = F.binary_cross_entropy_with_logits(
-            pred_sign_logits_flat, binary_targets, reduction="mean"
-        )
+    # Use binary cross entropy directly (clean, no backwards compatibility)
+    sign_loss = F.binary_cross_entropy_with_logits(
+        pred_sign_logits_flat, binary_targets, reduction="mean"
+    )
     return sign_loss
 
 
 def _compute_digit_loss(
     pred_digit_logits: torch.Tensor,
     target_digits: torch.Tensor,
-    device_type: str,
 ) -> torch.Tensor:
     """Compute cross-entropy loss for digit prediction."""
 
@@ -105,38 +101,37 @@ def _compute_digit_loss(
         )
 
     # Loss computation ---------------------------------------------------------
-    with torch.amp.autocast(device_type=device_type, enabled=False):
-        logits_flat = pred_digit_logits.reshape(-1, base).to(
-            torch.float32
-        )  # (B*T*N*D,base)
+    logits_flat = pred_digit_logits.reshape(-1, base).to(
+        torch.float32
+    )  # (B*T*N*D,base)
 
-        target_flat = target_digits.reshape(-1, base)
-        row_sums = target_flat.sum(dim=-1)
+    target_flat = target_digits.reshape(-1, base)
+    row_sums = target_flat.sum(dim=-1)
 
-        # Validation: every row must be a valid one-hot distribution
-        if (row_sums == 0).any():
-            offending = torch.nonzero(row_sums == 0).flatten()[:5].tolist()
-            raise ValueError(
-                "Encountered target digit rows with all zeros (invalid one-hot). "
-                f"Example flat indices: {offending}. This indicates a bug in the "
-                "dataset generation pipeline."
-            )
+    # Validation: every row must be a valid one-hot distribution
+    if (row_sums == 0).any():
+        offending = torch.nonzero(row_sums == 0).flatten()[:5].tolist()
+        raise ValueError(
+            "Encountered target digit rows with all zeros (invalid one-hot). "
+            f"Example flat indices: {offending}. This indicates a bug in the "
+            "dataset generation pipeline."
+        )
 
-        # Allow a tiny numerical tolerance when checking that rows sum to 1.0
-        if not torch.allclose(row_sums, torch.ones_like(row_sums), atol=1e-6):
-            bad = torch.nonzero(
-                ~torch.isclose(row_sums, torch.ones_like(row_sums), atol=1e-6)
-            )
-            first_bad = bad.flatten()[:5].tolist()
-            raise ValueError(
-                "Target digit rows are expected to be one-hot (sum to 1). "
-                f"Found rows that sum to values != 1. Example flat indices: {first_bad}."
-            )
+    # Allow a tiny numerical tolerance when checking that rows sum to 1.0
+    if not torch.allclose(row_sums, torch.ones_like(row_sums), atol=1e-6):
+        bad = torch.nonzero(
+            ~torch.isclose(row_sums, torch.ones_like(row_sums), atol=1e-6)
+        )
+        first_bad = bad.flatten()[:5].tolist()
+        raise ValueError(
+            "Target digit rows are expected to be one-hot (sum to 1). "
+            f"Found rows that sum to values != 1. Example flat indices: {first_bad}."
+        )
 
-        target_idx = target_flat.argmax(dim=-1)
+    target_idx = target_flat.argmax(dim=-1)
 
-        # Standard cross-entropy over raw logits
-        digit_loss = F.cross_entropy(logits_flat, target_idx, reduction="mean")
+    # Standard cross-entropy over raw logits
+    digit_loss = F.cross_entropy(logits_flat, target_idx, reduction="mean")
 
     return digit_loss
 
@@ -144,7 +139,6 @@ def _compute_digit_loss(
 def _compute_op_loss(
     pred_op_logits: torch.Tensor,
     target_ops: torch.Tensor,
-    device_type: str,
 ) -> torch.Tensor:
     """Compute cross-entropy loss for operation prediction using logits.
 
@@ -154,10 +148,9 @@ def _compute_op_loss(
         device_type: Device type for autocast
     """
     _, _, _, n_ops = pred_op_logits.shape
-    with torch.amp.autocast(device_type=device_type, enabled=False):
-        target_idx = target_ops.view(-1, n_ops).argmax(dim=-1)
-        pred_op_logits_flat = pred_op_logits.view(-1, n_ops).to(torch.float32)
-        op_loss = F.cross_entropy(pred_op_logits_flat, target_idx, reduction="mean")
+    target_idx = target_ops.view(-1, n_ops).argmax(dim=-1)
+    pred_op_logits_flat = pred_op_logits.view(-1, n_ops).to(torch.float32)
+    op_loss = F.cross_entropy(pred_op_logits_flat, target_idx, reduction="mean")
     return op_loss
 
 
@@ -175,32 +168,30 @@ def _compute_value_loss(
     pred_digit_logits: torch.Tensor,
     target_initial_values: torch.Tensor,
     cfg,
-    device_type: str,
 ) -> torch.Tensor:
     """Magnitude-only value loss (log-space adaptive Huber + small absolute term)."""
-    with torch.amp.autocast(device_type=device_type, enabled=False):
-        # Magnitude prediction from digit logits
-        pred_digit_probs = F.softmax(pred_digit_logits.to(torch.float32), dim=-1)
-        pred_mag = digits_to_magnitude(
-            pred_digit_probs, cfg.max_digits, cfg.max_decimal_places, cfg.base
-        )  # (B,T,N)
+    # Magnitude prediction from digit logits
+    pred_digit_probs = F.softmax(pred_digit_logits.to(torch.float32), dim=-1)
+    pred_mag = digits_to_magnitude(
+        pred_digit_probs, cfg.max_digits, cfg.max_decimal_places, cfg.base
+    )  # (B,T,N)
 
-        tgt_mag = target_initial_values.abs().to(torch.float32)
+    tgt_mag = target_initial_values.abs().to(torch.float32)
 
-        eps = 1e-6
-        pred_ln = torch.log(pred_mag + eps)
-        tgt_ln = torch.log(tgt_mag + eps)
-        ln_err = pred_ln - tgt_ln
-        beta_ln = torch.quantile(ln_err.detach().abs().flatten(), 0.9).clamp_min(1e-6)
-        ln_loss = _robust_huber(ln_err, beta_ln)
+    eps = 1e-6
+    pred_ln = torch.log(pred_mag + eps)
+    tgt_ln = torch.log(tgt_mag + eps)
+    ln_err = pred_ln - tgt_ln
+    beta_ln = torch.quantile(ln_err.detach().abs().flatten(), 0.9).clamp_min(1e-6)
+    ln_loss = _robust_huber(ln_err, beta_ln)
 
-        # Small absolute-space component to keep zeros stable
-        abs_err = pred_mag - tgt_mag
-        beta_abs = torch.quantile(abs_err.detach().abs().flatten(), 0.9).clamp_min(1e-6)
-        abs_loss = _robust_huber(abs_err, beta_abs)
+    # Small absolute-space component to keep zeros stable
+    abs_err = pred_mag - tgt_mag
+    beta_abs = torch.quantile(abs_err.detach().abs().flatten(), 0.9).clamp_min(1e-6)
+    abs_loss = _robust_huber(abs_err, beta_abs)
 
-        # Scale to keep early-training value_loss in ~1 range
-        return ln_loss + abs_loss
+    # Scale to keep early-training value_loss in ~1 range
+    return ln_loss + abs_loss
 
 
 def _compute_exec_loss(
@@ -209,73 +200,69 @@ def _compute_exec_loss(
     pred_ops: torch.Tensor,
     target_final_exec: torch.Tensor,
     cfg,
-    device_type: str,
 ) -> torch.Tensor:
     """Execution loss on magnitudes only (log-space adaptive Huber + overflow penalty)."""
-    with torch.amp.autocast(device_type=device_type, enabled=False):
-        pred_digit_probs = F.softmax(pred_digit_logits.to(torch.float32), dim=-1)
+    pred_digit_probs = F.softmax(pred_digit_logits.to(torch.float32), dim=-1)
 
-        # Stack execution returns sign & ln(|value|) – signs are included but
-        # the loss ignores them (magnitude-only). Using real predicted signs
-        # ensures gradients still flow through the sign branch.
-        _, pred_ln = execute_stack(
-            pred_sgn,
-            pred_digit_probs,
-            pred_ops,
-            max_digits=cfg.max_digits,
-            max_decimal_places=cfg.max_decimal_places,
-            base=cfg.base,
-            ignore_clip=True,
-        )
+    # Stack execution returns sign & ln(|value|) – signs are included but
+    # the loss ignores them (magnitude-only). Using real predicted signs
+    # ensures gradients still flow through the sign branch.
+    _, pred_ln = execute_stack(
+        pred_sgn,
+        pred_digit_probs,
+        pred_ops,
+        max_digits=cfg.max_digits,
+        max_decimal_places=cfg.max_decimal_places,
+        base=cfg.base,
+        ignore_clip=True,
+    )
 
-        # Soft capping using tanh to prevent overflow while maintaining gradients
-        # tanh(x/10) * 50 gives soft saturation around 50, but with smooth gradients
-        pred_ln_soft = torch.tanh(pred_ln / 10.0) * 50.0
-        pred_mag = torch.exp(pred_ln_soft).reshape(-1)
-        tgt_mag = target_final_exec.abs().reshape(-1).to(torch.float32)
+    # Soft capping using tanh to prevent overflow while maintaining gradients
+    # tanh(x/10) * 50 gives soft saturation around 50, but with smooth gradients
+    pred_ln_soft = torch.tanh(pred_ln / 10.0) * 50.0
+    pred_mag = torch.exp(pred_ln_soft).reshape(-1)
+    tgt_mag = target_final_exec.abs().reshape(-1).to(torch.float32)
 
-        # Log-space error ------------------------------------------------------
-        eps = 1e-6
-        pred_ln_flat = torch.log(pred_mag + eps)
-        tgt_ln_flat = torch.log(tgt_mag + eps)
-        ln_err = pred_ln_flat - tgt_ln_flat
-        beta_ln = torch.quantile(ln_err.detach().abs(), 0.9).clamp_min(1e-6)
-        ln_loss = _robust_huber(ln_err, beta_ln)
+    # Log-space error ------------------------------------------------------
+    eps = 1e-6
+    pred_ln_flat = torch.log(pred_mag + eps)
+    tgt_ln_flat = torch.log(tgt_mag + eps)
+    ln_err = pred_ln_flat - tgt_ln_flat
+    beta_ln = torch.quantile(ln_err.detach().abs(), 0.9).clamp_min(1e-6)
+    ln_loss = _robust_huber(ln_err, beta_ln)
 
-        # Small absolute-space term -------------------------------------------
-        abs_err = pred_mag - tgt_mag
-        beta_abs = torch.quantile(abs_err.detach().abs(), 0.9).clamp_min(1e-6)
-        abs_loss = 0.02 * _robust_huber(abs_err, beta_abs)
+    # Small absolute-space term -------------------------------------------
+    abs_err = pred_mag - tgt_mag
+    beta_abs = torch.quantile(abs_err.detach().abs(), 0.9).clamp_min(1e-6)
+    abs_loss = 0.02 * _robust_huber(abs_err, beta_abs)
 
-        # Soft overflow penalty (based on ln magnitude) – much smaller coeff
-        overflow_pen = F.softplus((pred_ln - 30.0)).mean() * 0.0005
+    # Soft overflow penalty (based on ln magnitude) – much smaller coeff
+    overflow_pen = F.softplus((pred_ln - 30.0)).mean() * 0.0005
 
-        # Scale down core loss to align with baseline (~2–3 early on)
-        raw_loss = (ln_loss + abs_loss) + overflow_pen
-        return raw_loss
+    # Scale down core loss to align with baseline (~2–3 early on)
+    raw_loss = (ln_loss + abs_loss) + overflow_pen
+    return raw_loss / 1e6
 
 
 def _compute_statistics_loss(
     pred_statistics: dict,  # dict with 'initial', 'intermediate', 'final' containing (B, T, num_stats) tensors
     target_statistics: dict,  # dict with 'initial', 'intermediate', 'final' containing (B, T, num_stats) tensors
-    device_type: str,
 ) -> torch.Tensor:
     """Compute MSE loss for auxiliary statistical predictions (per-token)."""
-    with torch.amp.autocast(device_type=device_type, enabled=False):
-        total_loss = 0.0
-        # Compute loss for each statistics component
-        for key in ["initial", "intermediate", "final"]:
-            if key in pred_statistics and key in target_statistics:
-                pred = pred_statistics[key].to(torch.float32)  # (B, T, num_stats)
-                target = target_statistics[key].to(torch.float32)  # (B, T, num_stats)
+    total_loss = 0.0
+    # Compute loss for each statistics component
+    for key in ["initial", "intermediate", "final"]:
+        if key in pred_statistics and key in target_statistics:
+            pred = pred_statistics[key].to(torch.float32)  # (B, T, num_stats)
+            target = target_statistics[key].to(torch.float32)  # (B, T, num_stats)
 
-                # MSE loss for this component (averaged over batch, sequence, and features)
-                component_loss = F.mse_loss(pred, target)
-                total_loss += component_loss
+            # MSE loss for this component (averaged over batch, sequence, and features)
+            component_loss = F.mse_loss(pred, target)
+            total_loss += component_loss
 
-        # Scale down to reasonable range for uncertainty weighting (stats can be very large numbers)
-        # This prevents numerical precision issues with log_vars in uncertainty weighting
-        return total_loss / 1e6
+    # Scale down to reasonable range for uncertainty weighting (stats can be very large numbers)
+    # This prevents numerical precision issues with log_vars in uncertainty weighting
+    return total_loss / 1e12
 
 
 # --------------------------------------------------------------------------- #
@@ -295,30 +282,16 @@ def compute_dag_structure_loss(
     cfg: DAGTrainConfig,
     log_vars: torch.Tensor,  # (6,) learnable log-variance parameters for uncertainty weighting
 ) -> Dict[str, torch.Tensor]:
-    """Compute robust DAG-structure prediction loss.
-
-    The formulation includes cross-entropy for sign, cross-entropy for digits, cross-entropy for operations,
-    and MSE for initial values and final execution values.
-
-    All target tensors are required parameters.
-    """
-    # Determine device type once for proper autocast context switching
-    device_type = (
-        pred_sign_logits.device.type
-        if isinstance(pred_sign_logits, torch.Tensor)
-        else "cuda"
-    )
+    """Compute robust DAG-structure prediction loss."""
 
     # Compute individual loss components (now pass logits directly for better numerical stability)
-    sign_loss = _compute_sign_loss(pred_sign_logits, target_sgn, device_type)
-    digit_loss = _compute_digit_loss(pred_digit_logits, target_digits, device_type)
-    op_loss = _compute_op_loss(pred_op_logits, target_ops, device_type)
+    sign_loss = _compute_sign_loss(pred_sign_logits, target_sgn)
+    digit_loss = _compute_digit_loss(pred_digit_logits, target_digits)
+    op_loss = _compute_op_loss(pred_op_logits, target_ops)
 
     # For value and execution losses, we need tanh-activated signs and probabilities
     pred_sgn = torch.tanh(pred_sign_logits)
-    value_loss = _compute_value_loss(
-        pred_digit_logits, target_initial_values, cfg, device_type
-    )
+    value_loss = _compute_value_loss(pred_digit_logits, target_initial_values, cfg)
 
     # For execution loss, we need probabilities, so convert logits
     pred_ops = F.softmax(pred_op_logits, dim=-1)
@@ -328,13 +301,10 @@ def compute_dag_structure_loss(
         pred_ops,
         target_final_exec,
         cfg,
-        device_type,
     )
 
     # Compute statistics loss
-    stats_loss = _compute_statistics_loss(
-        pred_statistics, target_statistics, device_type
-    )
+    stats_loss = _compute_statistics_loss(pred_statistics, target_statistics)
 
     # Combine losses using learned uncertainty weighting
     # Learned uncertainty weighting: exp(-s_i) * L_i + s_i
@@ -343,11 +313,12 @@ def compute_dag_structure_loss(
         [sign_loss, digit_loss, op_loss, value_loss, exec_loss, stats_loss]
     )
 
-    # Apply uncertainty weighting formula
+    # Apply learned uncertainty weighting: exp(-s_i) * L_i + s_i
+    # This works consistently in both training and evaluation modes
     weighted_losses = torch.exp(-log_vars) * losses_tensor + log_vars
     total_loss = weighted_losses.sum()
 
-    # For logging, also compute the weighting factors
+    # For logging, compute the weighting factors (detached to avoid interfering with gradients)
     uncertainty_weights = torch.exp(-log_vars).detach()
 
     return {
@@ -358,7 +329,7 @@ def compute_dag_structure_loss(
         "value_loss": value_loss,
         "exec_loss": exec_loss,
         "stats_loss": stats_loss,
-        "uncertainty_weights": uncertainty_weights,  # For monitoring the learned weights
+        "uncertainty_weights": uncertainty_weights,
     }
 
 
