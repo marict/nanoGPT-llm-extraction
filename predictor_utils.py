@@ -197,10 +197,10 @@ def _compute_value_loss(
         # Small absolute-space component to keep zeros stable
         abs_err = pred_mag - tgt_mag
         beta_abs = torch.quantile(abs_err.detach().abs().flatten(), 0.9).clamp_min(1e-6)
-        abs_loss = 0.02 * _robust_huber(abs_err, beta_abs)
+        abs_loss = _robust_huber(abs_err, beta_abs)
 
         # Scale to keep early-training value_loss in ~1 range
-        return 0.1 * (ln_loss + abs_loss)
+        return ln_loss + abs_loss
 
 
 def _compute_exec_loss(
@@ -251,7 +251,7 @@ def _compute_exec_loss(
         overflow_pen = F.softplus((pred_ln - 30.0)).mean() * 0.0005
 
         # Scale down core loss to align with baseline (~2–3 early on)
-        raw_loss = 0.3 * (ln_loss + abs_loss) + overflow_pen
+        raw_loss = (ln_loss + abs_loss) + overflow_pen
         return raw_loss
 
 
@@ -273,7 +273,9 @@ def _compute_statistics_loss(
                 component_loss = F.mse_loss(pred, target)
                 total_loss += component_loss
 
-        return total_loss
+        # Scale down to reasonable range for uncertainty weighting (stats can be very large numbers)
+        # This prevents numerical precision issues with log_vars in uncertainty weighting
+        return total_loss / 1e6
 
 
 # --------------------------------------------------------------------------- #
@@ -291,6 +293,7 @@ def compute_dag_structure_loss(
     target_final_exec: torch.Tensor,  # (B,T) - target final execution values as floats
     target_statistics: dict,  # dict with 'initial', 'intermediate', 'final' containing (B, num_stats) tensors
     cfg: DAGTrainConfig,
+    log_vars: torch.Tensor,  # (6,) learnable log-variance parameters for uncertainty weighting
 ) -> Dict[str, torch.Tensor]:
     """Compute robust DAG-structure prediction loss.
 
@@ -333,15 +336,19 @@ def compute_dag_structure_loss(
         pred_statistics, target_statistics, device_type
     )
 
-    # Combine all losses with automatic balancing (no manual weights)
-    total_loss = (
-        sign_loss
-        + digit_loss
-        + op_loss
-        + value_loss
-        + exec_loss  # Automatic scaling built-in
-        + stats_loss  # Automatic scaling built-in
+    # Combine losses using learned uncertainty weighting
+    # Learned uncertainty weighting: exp(-s_i) * L_i + s_i
+    # log_vars shape: (6,) for [sign, digit, op, value, exec, stats]
+    losses_tensor = torch.stack(
+        [sign_loss, digit_loss, op_loss, value_loss, exec_loss, stats_loss]
     )
+
+    # Apply uncertainty weighting formula
+    weighted_losses = torch.exp(-log_vars) * losses_tensor + log_vars
+    total_loss = weighted_losses.sum()
+
+    # For logging, also compute the weighting factors
+    uncertainty_weights = torch.exp(-log_vars).detach()
 
     return {
         "total_loss": total_loss,
@@ -351,6 +358,7 @@ def compute_dag_structure_loss(
         "value_loss": value_loss,
         "exec_loss": exec_loss,
         "stats_loss": stats_loss,
+        "uncertainty_weights": uncertainty_weights,  # For monitoring the learned weights
     }
 
 
@@ -577,6 +585,8 @@ def evaluate_dag_model(
                         if hasattr(model.dag.plan_predictor, "last_sign_logits")
                         else None
                     )
+                    # Extract learnable uncertainty weighting parameters
+                    log_vars = model.dag.plan_predictor.log_vars
                 else:
                     # Stand-alone predictor model
                     last_digit_logits = (
@@ -594,6 +604,8 @@ def evaluate_dag_model(
                         if hasattr(model.dag_predictor, "last_sign_logits")
                         else None
                     )
+                    # Extract learnable uncertainty weighting parameters
+                    log_vars = model.dag_predictor.log_vars
 
                 if last_digit_logits is None:
                     raise RuntimeError("last_digit_logits not found for evaluation")
@@ -670,6 +682,7 @@ def evaluate_dag_model(
                     target_final_exec,
                     target_statistics,
                     cfg,
+                    log_vars=log_vars,
                 )
 
                 # Metrics
@@ -813,9 +826,10 @@ def evaluate_dag_model(
                     print(f"Allowed operations: {sample_obj.allowed_operations}")
                     print("==========================\n")
 
-            # Aggregate
+            # Aggregate losses (skip uncertainty_weights which is for logging only)
             for k, v in losses.items():
-                total_losses[k] += v.item()
+                if k != "uncertainty_weights":
+                    total_losses[k] += v.item()
             total_metrics["op_accuracy"] += op_acc.item()
             total_metrics["full_dag_op_match"] += full_match.item()
             total_metrics["sign_accuracy"] += sign_acc.item()
