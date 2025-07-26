@@ -240,7 +240,7 @@ def _compute_exec_loss(
 
     # Scale down core loss to align with baseline (~2–3 early on)
     raw_loss = (ln_loss + abs_loss) + overflow_pen
-    return raw_loss / 1e6
+    return raw_loss / 1e12
 
 
 def _compute_statistics_loss(
@@ -286,8 +286,7 @@ def _compute_statistics_loss(
 
     # Scale down to reasonable range for uncertainty weighting (stats can be very large numbers)
     # This prevents numerical precision issues with log_vars in uncertainty weighting
-    # Using 1e12 scaling factor - stats loss can be extremely large (1e14+) compared to other losses (~1-500)
-    scaled_loss = total_loss / 1e12
+    scaled_loss = total_loss / 1e24
 
     # Final safety check - return 0 if loss is NaN/inf
     if torch.isnan(scaled_loss) or torch.isinf(scaled_loss):
