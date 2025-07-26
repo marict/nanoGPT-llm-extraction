@@ -145,7 +145,6 @@ def _compute_op_loss(
     Args:
         pred_op_logits: Operation logits (B,T,D,n_ops)
         target_ops: Target operation one-hot vectors (B,T,D,n_ops)
-        device_type: Device type for autocast
     """
     _, _, _, n_ops = pred_op_logits.shape
     target_idx = target_ops.view(-1, n_ops).argmax(dim=-1)
@@ -256,13 +255,39 @@ def _compute_statistics_loss(
             pred = pred_statistics[key].to(torch.float32)  # (B, T, num_stats)
             target = target_statistics[key].to(torch.float32)  # (B, T, num_stats)
 
+            # Check for NaN/inf in inputs before computing loss
+            if torch.isnan(pred).any() or torch.isnan(target).any():
+                print(f"Warning: NaN detected in statistics {key} - skipping")
+                continue
+            if torch.isinf(pred).any() or torch.isinf(target).any():
+                print(f"Warning: Inf detected in statistics {key} - skipping")
+                continue
+
             # MSE loss for this component (averaged over batch, sequence, and features)
             component_loss = F.mse_loss(pred, target)
+
+            # Additional safety check
+            if torch.isnan(component_loss) or torch.isinf(component_loss):
+                print(f"Warning: NaN/Inf in statistics loss component {key} - skipping")
+                continue
+
             total_loss += component_loss
 
     # Scale down to reasonable range for uncertainty weighting (stats can be very large numbers)
     # This prevents numerical precision issues with log_vars in uncertainty weighting
-    return total_loss / 1e12
+    scaled_loss = total_loss / 1e12
+
+    # Final safety check - return 0 if loss is NaN/inf
+    if torch.isnan(scaled_loss) or torch.isinf(scaled_loss):
+        print(f"Warning: Final statistics loss is NaN/Inf, returning 0.0")
+        # Try to get device from first available statistics tensor, fallback to CPU
+        try:
+            device = pred_statistics[next(iter(pred_statistics))].device
+        except (StopIteration, KeyError):
+            device = "cpu"
+        return torch.tensor(0.0, device=device, dtype=torch.float32)
+
+    return scaled_loss
 
 
 # --------------------------------------------------------------------------- #

@@ -174,17 +174,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     elif cfg.dtype == "bfloat16" and not torch.cuda.is_bf16_supported():
         actual_dtype = "float16"
 
-    ptdtype = {
-        "float32": torch.float32,
-        "bfloat16": torch.bfloat16,
-        "float16": torch.float16,
-    }[actual_dtype]
-
-    ctx = (
-        nullcontext()
-        if device == "cpu"
-        else torch.amp.autocast(device_type=device, dtype=ptdtype)
-    )
+    ctx = nullcontext()
 
     # --------------------------------------------------------------------- #
     # Model-aware Data loading (will be created after model is initialized)
@@ -338,12 +328,24 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 )
                 eval_time_ms = (time.time() - eval_start_time) * 1000 / cfg.eval_iters
                 if master_process:
+                    # Format validation weights (get current learned weights from model)
+                    if hasattr(raw_model, "dag"):
+                        val_uncertainty_weights = raw_model.dag.plan_predictor.log_vars
+                    else:
+                        val_uncertainty_weights = raw_model.dag_predictor.log_vars
+                    val_weights = torch.exp(-val_uncertainty_weights).detach()
+                    val_weights_str = f"[{val_weights[0]:.3f},{val_weights[1]:.3f},{val_weights[2]:.3f},{val_weights[3]:.3f},{val_weights[4]:.3f},{val_weights[5]:.3f}]"
+
                     eval_msg = (
-                        f"[val] iter {iter_num}: total_loss {eval_losses['total_loss']:.4f}, "
-                        f"sign_loss {eval_losses['sign_loss']:.4f}, digit_loss {eval_losses['digit_loss']:.4f}, "
-                        f"op_loss {eval_losses['op_loss']:.4f}, value_loss {eval_losses['value_loss']:.4f}, "
-                        f"exec_loss {eval_losses['exec_loss']:.4f}, op_acc {eval_losses['op_accuracy']:.4f}, "
-                        f"stats_loss {eval_losses['stats_loss']:.4f}, "
+                        f"[val] iter {iter_num}: loss {eval_losses['total_loss']:.4f}, "
+                        f"sign {eval_losses['sign_loss']:.4f}, "
+                        f"digit {eval_losses['digit_loss']:.4f}, "
+                        f"op {eval_losses['op_loss']:.4f}, "
+                        f"value {eval_losses['value_loss']:.4f}, "
+                        f"exec {eval_losses['exec_loss']:.4f}, "
+                        f"stats {eval_losses['stats_loss']:.4f}, "
+                        f"weights {val_weights_str}, "
+                        f"op_acc {eval_losses['op_accuracy']:.4f}, "
                         f"full_op_match {eval_losses['full_dag_op_match']:.4f}, "
                         f"sign_acc {eval_losses['sign_accuracy']:.4f}, "
                         f"executed_mse {eval_losses['executed_mse']:.4f}"
