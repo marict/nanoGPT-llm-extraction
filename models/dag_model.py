@@ -288,6 +288,29 @@ def compute_multi_value_statistics(values):
     if len(arr) <= 1:
         return np.zeros(15)  # Fallback for edge cases
 
+    # Safe computation of skewness and kurtosis with fallback for edge cases
+    def safe_skew(arr):
+        """Compute skewness safely, returning 0 for edge cases."""
+        try:
+            # Check if all values are identical (or very close)
+            if np.std(arr) < 1e-12:
+                return 0.0  # No skewness when no variation
+            skew_val = stats.skew(arr)
+            return 0.0 if np.isnan(skew_val) or np.isinf(skew_val) else skew_val
+        except (RuntimeWarning, ValueError):
+            return 0.0
+
+    def safe_kurtosis(arr):
+        """Compute kurtosis safely, returning 0 for edge cases."""
+        try:
+            # Check if all values are identical (or very close)
+            if np.std(arr) < 1e-12:
+                return 0.0  # No excess kurtosis when no variation
+            kurt_val = stats.kurtosis(arr)
+            return 0.0 if np.isnan(kurt_val) or np.isinf(kurt_val) else kurt_val
+        except (RuntimeWarning, ValueError):
+            return 0.0
+
     return np.array(
         [
             np.mean(arr),  # 0: mean
@@ -296,8 +319,8 @@ def compute_multi_value_statistics(values):
             np.max(arr),  # 3: maximum
             np.median(arr),  # 4: median
             np.ptp(arr),  # 5: range (max - min)
-            stats.skew(arr),  # 6: skewness
-            stats.kurtosis(arr),  # 7: kurtosis
+            safe_skew(arr),  # 6: skewness (safe computation)
+            safe_kurtosis(arr),  # 7: kurtosis (safe computation)
             np.percentile(arr, 25),  # 8: 25th percentile
             np.percentile(arr, 75),  # 9: 75th percentile
             np.sum(arr > 0),  # 10: count positive

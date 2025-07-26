@@ -275,7 +275,8 @@ def _compute_statistics_loss(
 
     # Scale down to reasonable range for uncertainty weighting (stats can be very large numbers)
     # This prevents numerical precision issues with log_vars in uncertainty weighting
-    scaled_loss = total_loss / 1e12
+    # Using 1e6 scaling factor for better numerical stability than previous 1e12
+    scaled_loss = total_loss / 1e6
 
     # Final safety check - return 0 if loss is NaN/inf
     if torch.isnan(scaled_loss) or torch.isinf(scaled_loss):

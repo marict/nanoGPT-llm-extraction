@@ -335,7 +335,7 @@ class TestLossComputation:
             "final": torch.randn(B, T, 10),
         }
 
-        loss = _compute_statistics_loss(pred_statistics, target_statistics, "cpu")
+        loss = _compute_statistics_loss(pred_statistics, target_statistics)
 
         assert isinstance(loss, torch.Tensor), "Loss should be a tensor"
         assert loss.numel() == 1, "Loss should be scalar"
@@ -357,7 +357,7 @@ class TestLossComputation:
             "final": torch.randn(B, T, 10),
         }
 
-        loss = _compute_statistics_loss(pred_statistics, target_statistics, "cpu")
+        loss = _compute_statistics_loss(pred_statistics, target_statistics)
         loss.backward()
 
         # Check gradients exist
