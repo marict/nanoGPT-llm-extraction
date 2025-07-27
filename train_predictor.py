@@ -906,7 +906,7 @@ def main() -> None:
         if os.getenv("RUNPOD_POD_ID") and (
             cfg is None or not getattr(cfg, "keep_alive", False)
         ):
-            pass
+            runpod_service.stop_runpod()
 
         # Re-raise the exception to ensure proper exit code
         raise
