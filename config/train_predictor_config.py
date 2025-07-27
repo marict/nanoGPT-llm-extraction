@@ -44,7 +44,7 @@ batch_size = 64
 block_size = 512
 
 # Model architecture (larger for RunPod training)
-n_head = 4
+n_head = 1
 n_layer = 4
 n_embd = n_head * 64
 dropout = 0.1
