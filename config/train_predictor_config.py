@@ -79,7 +79,7 @@ loss_flags = {
     "sign": True,
     "digit": True,
     "op": True,
-    "value": False,
-    "exec": False,
+    "value": True,
+    "exec": True,
     "stats": False,
 }
