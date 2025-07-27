@@ -85,7 +85,7 @@ loss_flags = {
     "sign": True,
     "digit": True,
     "op": True,
-    "value": False,
+    "value": True,
     "exec": False,
     "stats": False,
 }

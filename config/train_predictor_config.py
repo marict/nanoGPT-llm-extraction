@@ -74,3 +74,12 @@ check_nans = False  # Check for NaNs in cloud training
 
 # Random seeds
 seed = 42
+
+loss_flags = {
+    "sign": True,
+    "digit": True,
+    "op": True,
+    "value": False,
+    "exec": False,
+    "stats": False,
+}
