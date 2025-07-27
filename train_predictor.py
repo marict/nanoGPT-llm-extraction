@@ -23,7 +23,6 @@ from models.predictor_only_model import PredictorOnlyModel
 from predictor_config import DAGTrainConfig
 from predictor_utils import (
     compute_dag_structure_loss,
-    compute_gradient_cosines,
     evaluate_dag_model,
     tokenize_texts,
 )
@@ -52,21 +51,14 @@ def _empty_metrics() -> dict[str, float]:
         "sign_loss": 0.0,
         "digit_loss": 0.0,
         "op_loss": 0.0,
-        "value_loss": 0.0,  # Robust loss on initial values
-        "exec_loss": 0.0,  # Robust loss on final execution values
+        "value_loss": 0.0,
+        "exec_loss": 0.0,
         "op_accuracy": 0.0,
         "full_dag_op_match": 0.0,
         "sign_accuracy": 0.0,
-        # Gradient cosine metrics are added dynamically when computed
-        "grad_cosine_sign_loss": 0.0,
-        "grad_cosine_digit_loss": 0.0,
-        "grad_cosine_op_loss": 0.0,
-        "grad_cosine_value_loss": 0.0,
-        "grad_cosine_exec_loss": 0.0,
+        "initial_values_mse": 0.0,
+        "final_exec_mse": 0.0,
     }
-
-
-# (TORCH_2_2_1, CUDA_AVAILABLE, CHECKPOINT_DIR) come from runtime
 
 
 def parse_args() -> argparse.ArgumentParser:  # type: ignore[override]
@@ -611,61 +603,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     )
                     loss = losses["total_loss"] / cfg.gradient_accumulation_steps
 
-                    # Compute gradient cosines when we're doing regular logging
-                    should_compute_gradient_cosines = (
-                        iter_num % cfg.log_interval == 0
-                        and micro_step
-                        == cfg.gradient_accumulation_steps
-                        - 1  # Only on last micro-step
-                        and master_process
-                    )
-                    if should_compute_gradient_cosines:
-                        # Compute gradient cosines for analysis
-                        model_params = list(raw_model.parameters())
-
-                        # Create a fresh loss computation for gradient cosines to avoid
-                        # interfering with the main training backward pass
-                        cosine_losses = compute_dag_structure_loss(
-                            sign_logits_seq.detach(),
-                            digit_logits_seq.detach(),
-                            operation_logits_seq.detach(),
-                            {k: v.detach() for k, v in pred_statistics.items()},
-                            target_sgn_seq,
-                            target_digits_seq,
-                            target_ops_seq,
-                            target_initial_values_seq,
-                            target_final_exec_seq,
-                            target_statistics_seq,
-                            cfg,
-                            uncertainty_params=uncertainty_params.detach(),
-                        )
-
-                        # All losses use automatic balancing (no manual weights)
-                        weighted_losses = {
-                            "sign_loss": cosine_losses["sign_loss"],
-                            "digit_loss": cosine_losses["digit_loss"],
-                            "op_loss": cosine_losses["op_loss"],
-                            "value_loss": cosine_losses["value_loss"],
-                            "exec_loss": (
-                                cosine_losses[
-                                    "exec_loss"
-                                ]  # Already scaled automatically
-                                if not cfg.check_nans
-                                or torch.isfinite(cosine_losses["exec_loss"]).all()
-                                else torch.tensor(
-                                    0.0, device=cosine_losses["exec_loss"].device
-                                )
-                            ),
-                            "stats_loss": cosine_losses[
-                                "stats_loss"
-                            ],  # Already scaled automatically
-                        }
-                        gradient_cosines = compute_gradient_cosines(
-                            weighted_losses,
-                            cosine_losses["total_loss"],
-                            model_params,
-                        )
-                        losses.update(gradient_cosines)
                 for key, value in losses.items():
                     if isinstance(value, torch.Tensor):
                         if key == "uncertainty_weights":
@@ -810,11 +747,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         ].item(),
                     }
 
-                    # Add internal losses and gradient cosines to wandb logging
                     for key, value in loss_accum.items():
-                        if key.startswith("grad_cosine_"):
-                            log_dict[f"grad/{key}"] = value
-                        elif (
+                        if (
                             key.endswith("_loss")
                             and key not in log_dict
                             and key != "total_loss"
