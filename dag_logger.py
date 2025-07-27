@@ -185,6 +185,31 @@ class DAGLogger:
         op_metrics = self._collect_op_metrics(model)
         self.logging_data["op_metrics"] = op_metrics
 
+        # 6) Uncertainty params and uncertainty weights (learnable parameters)
+        if model.dag_predictor is not None:
+            current_uncertainty_params = (
+                model.dag_predictor.uncertainty_params.detach().cpu()
+            )
+            uncertainty_weights = torch.exp(-current_uncertainty_params)
+
+            self.logging_data["uncertainty_params"] = {
+                "sign": current_uncertainty_params[0].item(),
+                "digit": current_uncertainty_params[1].item(),
+                "op": current_uncertainty_params[2].item(),
+                "value": current_uncertainty_params[3].item(),
+                "exec": current_uncertainty_params[4].item(),
+                "stats": current_uncertainty_params[5].item(),
+            }
+
+            self.logging_data["uncertainty_weights"] = {
+                "sign": uncertainty_weights[0].item(),
+                "digit": uncertainty_weights[1].item(),
+                "op": uncertainty_weights[2].item(),
+                "value": uncertainty_weights[3].item(),
+                "exec": uncertainty_weights[4].item(),
+                "stats": uncertainty_weights[5].item(),
+            }
+
     def clear_gradient_hooks(self) -> None:
         """Remove all registered gradient hooks."""
         for hook in self.gradient_hooks:
@@ -223,24 +248,40 @@ class DAGLogger:
         # Get operation metrics
         op_metrics = self._collect_op_metrics(model)
 
-        # Get gradient metrics (if available)
-        grad_metrics = {}
+        # Get gradient metrics (if available) - formatted for wandb
+        wandb_grad_metrics = {}
         if hasattr(self, "captured_gradients") and self.captured_gradients:
-            grad_metrics = self.captured_gradients.copy()
+            wandb_grad_metrics = self.captured_gradients.copy()
         else:
             # In eval mode or when no gradients are captured, use zeros
-            grad_metrics = {
+            wandb_grad_metrics = {
                 "op_logits_mean": 0.0,
             }
             for op_name in OP_NAMES:
-                grad_metrics[f"grad/op/{op_name}"] = 0.0
+                wandb_grad_metrics[f"grad/op/{op_name}"] = 0.0
 
-        # Combine all metrics
-        extra_vals = {}
-        extra_vals.update(op_metrics)
-        extra_vals.update(grad_metrics)
+        # Get uncertainty params and uncertainty weights (if computed) - formatted for wandb
+        wandb_uncertainty_metrics = {}
+        if "uncertainty_params" in self.logging_data:
+            uncertainty_params = self.logging_data["uncertainty_params"]
+            uncertainty_weights = self.logging_data["uncertainty_weights"]
 
-        return extra_vals
+            # Add with proper prefixes for wandb
+            for component in ["sign", "digit", "op", "value", "exec", "stats"]:
+                wandb_uncertainty_metrics[f"uncertainty_params/{component}"] = (
+                    uncertainty_params[component]
+                )
+                wandb_uncertainty_metrics[f"weights/{component}"] = uncertainty_weights[
+                    component
+                ]
+
+        # Combine all metrics for wandb
+        wandb_extra_vals = {}
+        wandb_extra_vals.update(op_metrics)
+        wandb_extra_vals.update(wandb_grad_metrics)
+        wandb_extra_vals.update(wandb_uncertainty_metrics)
+
+        return wandb_extra_vals
 
     def get_node_values_list(self, model) -> List[float]:
         """
@@ -415,11 +456,11 @@ class DAGLogger:
         if base_dict is None:
             base_dict = {}
 
-        # Add all logging metrics
-        log_dict = dict(base_dict)
-        log_dict.update(self.get_extra_vals(model))
+        # Add all logging metrics for wandb
+        wandb_log_dict = dict(base_dict)
+        wandb_log_dict.update(self.get_extra_vals(model))
 
-        return log_dict
+        return wandb_log_dict
 
     def _setup_op_grad_tracking(self, model):
         """

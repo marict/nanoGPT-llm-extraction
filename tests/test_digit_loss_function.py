@@ -86,7 +86,7 @@ def test_digit_loss_zero_and_nonzero(batch, seq, nodes, digits, depth):
         tgt_final_exec,
         dummy_stats,
         cfg,
-        log_vars=torch.zeros(6),
+        uncertainty_params=torch.zeros(6),
     )
 
     assert pytest.approx(losses_correct["digit_loss"].item(), abs=1e-6) == 0.0
@@ -110,7 +110,7 @@ def test_digit_loss_zero_and_nonzero(batch, seq, nodes, digits, depth):
         tgt_final_exec,
         dummy_stats,
         cfg,
-        log_vars=torch.zeros(6),
+        uncertainty_params=torch.zeros(6),
     )
 
     assert losses_wrong["digit_loss"].item() > 0.0

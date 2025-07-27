@@ -142,7 +142,7 @@ def test_value_loss_perfect_prediction(batch, seq, nodes, digits, depth):
         target_final_exec,
         dummy_stats,
         cfg,
-        log_vars=torch.zeros(6),
+        uncertainty_params=torch.zeros(6),
     )
 
     assert (
@@ -209,7 +209,7 @@ def test_value_loss_wrong_prediction(batch, seq, nodes, digits, depth):
         target_final_exec,
         dummy_stats,
         cfg,
-        log_vars=torch.zeros(6),
+        uncertainty_params=torch.zeros(6),
     )
 
     assert losses["value_loss"].item() > 0.0
@@ -293,7 +293,7 @@ def test_exec_loss_perfect_prediction(batch, seq, depth):
         target_final_exec,
         dummy_stats,
         cfg,
-        log_vars=torch.zeros(6),
+        uncertainty_params=torch.zeros(6),
     )
 
     # Note: Due to soft capping in exec_loss computation, even "perfect" predictions
@@ -365,7 +365,7 @@ def test_exec_loss_wrong_prediction(batch, seq, depth):
         target_final_exec,
         dummy_stats,
         cfg,
-        log_vars=torch.zeros(6),
+        uncertainty_params=torch.zeros(6),
     )
 
     # Should have non-zero exec loss since predictions differ
@@ -409,7 +409,7 @@ def test_value_exec_losses_computed():
         target_final_exec,
         dummy_stats,
         cfg,
-        log_vars=torch.zeros(6),
+        uncertainty_params=torch.zeros(6),
     )
 
     # Should compute both losses
@@ -455,7 +455,7 @@ def test_loss_weights_applied():
         target_final_exec,
         dummy_stats,
         cfg,
-        log_vars=torch.zeros(6),
+        uncertainty_params=torch.zeros(6),
     )
 
     # Verify all loss components exist and are finite
@@ -532,7 +532,7 @@ def test_exec_loss_uses_clipping():
         target_final_exec,
         dummy_stats,
         cfg,
-        log_vars=torch.zeros(6),
+        uncertainty_params=torch.zeros(6),
     )
 
     # The exec loss should be computed without errors

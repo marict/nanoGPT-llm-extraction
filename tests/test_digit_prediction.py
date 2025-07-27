@@ -163,7 +163,7 @@ class TestDigitPrediction(unittest.TestCase):
             target_final_exec,
             dummy_stats,
             cfg,
-            log_vars=torch.zeros(6),
+            uncertainty_params=torch.zeros(6),
         )
         total_loss = losses["total_loss"]
         self.assertTrue(torch.isfinite(total_loss))

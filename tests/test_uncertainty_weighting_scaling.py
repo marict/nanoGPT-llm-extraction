@@ -12,15 +12,18 @@ class MockUncertaintyWeightingModel(nn.Module):
 
     def __init__(self, n_losses=6):
         super().__init__()
-        # Initialize log_vars to zeros (weights = exp(-0) = 1.0)
-        self.log_vars = nn.Parameter(torch.zeros(n_losses))
+        # Initialize uncertainty_params to zeros (weights = exp(-0) = 1.0)
+        self.uncertainty_params = nn.Parameter(torch.zeros(n_losses))
 
     def compute_weighted_loss(self, losses):
-        """Apply uncertainty weighting: exp(-log_var) * loss + log_var"""
+        """Apply uncertainty weighting: exp(-uncertainty_param) * loss + uncertainty_param"""
         losses_tensor = torch.stack(losses)
-        weighted_losses = torch.exp(-self.log_vars) * losses_tensor + self.log_vars
+        weighted_losses = (
+            torch.exp(-self.uncertainty_params) * losses_tensor
+            + self.uncertainty_params
+        )
         total_loss = weighted_losses.sum()
-        weights = torch.exp(-self.log_vars).detach()
+        weights = torch.exp(-self.uncertainty_params).detach()
         return total_loss, weights
 
 
@@ -72,7 +75,7 @@ def test_uncertainty_weighting_massive_scale_differences():
                 "weights": weights.clone(),
                 "raw_losses": torch.stack(losses).clone(),
                 "weighted_losses": weighted_individual.clone(),
-                "log_vars": model.log_vars.clone(),
+                "uncertainty_params": model.uncertainty_params.clone(),
             }
         )
 
@@ -154,8 +157,8 @@ def test_uncertainty_weighting_massive_scale_differences():
     assert torch.all(final_weights >= 0), "All weights should be non-negative"
     assert torch.all(torch.isfinite(final_weights)), "All weights should be finite"
     assert torch.all(
-        torch.isfinite(final_data["log_vars"])
-    ), "All log_vars should be finite"
+        torch.isfinite(final_data["uncertainty_params"])
+    ), "All uncertainty_params should be finite"
 
     print()
     print("✅ All assertions passed!")
@@ -233,7 +236,7 @@ def test_scaling_fix_effectiveness():
     scaled_stats_loss = original_stats_loss / 1e12
     sign_loss = 0.68
 
-    # Calculate required log_vars
+    # Calculate required uncertainty_params
     original_ratio = original_stats_loss / sign_loss
     scaled_ratio = scaled_stats_loss / sign_loss
 

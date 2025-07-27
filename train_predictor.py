@@ -215,29 +215,31 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     # Optimizer setup
     # Optimiser initialisation logged elsewhere
 
-    # Separate log_vars parameters for higher learning rate
-    log_vars_params = []
+    # Separate uncertainty_params for higher learning rate
+    uncertainty_params = []
     other_params = []
 
     for name, param in model.named_parameters():
         if param.requires_grad:
-            if "log_vars" in name:
-                log_vars_params.append(param)
+            if "uncertainty_params" in name:
+                uncertainty_params.append(param)
             else:
                 other_params.append(param)
 
     # Create optimizer groups with different learning rates
-    # log_vars get 2 orders of magnitude higher learning rate for faster adaptation
-    log_vars_lr = cfg.learning_rate * 100  # 2 orders of magnitude jump
+    # uncertainty_params get 2 orders of magnitude higher learning rate for faster adaptation
+    uncertainty_params_lr = cfg.learning_rate * 100  # 2 orders of magnitude jump
 
     optim_groups = [
         {"params": other_params, "lr": cfg.learning_rate},
-        {"params": log_vars_params, "lr": log_vars_lr},
+        {"params": uncertainty_params, "lr": uncertainty_params_lr},
     ]
 
     print(f"Optimizer groups created:")
     print(f"  Main parameters: {len(other_params)} params with lr={cfg.learning_rate}")
-    print(f"  log_vars parameters: {len(log_vars_params)} params with lr={log_vars_lr}")
+    print(
+        f"  uncertainty_params: {len(uncertainty_params)} params with lr={uncertainty_params_lr}"
+    )
 
     optimizer = torch.optim.AdamW(
         optim_groups,
@@ -349,12 +351,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 eval_time_ms = (time.time() - eval_start_time) * 1000 / cfg.eval_iters
                 if master_process:
                     # Format validation weights (get current learned weights from model)
-                    if hasattr(raw_model, "dag"):
-                        val_uncertainty_weights = raw_model.dag.plan_predictor.log_vars
-                    else:
-                        val_uncertainty_weights = raw_model.dag_predictor.log_vars
-                    val_weights = torch.exp(-val_uncertainty_weights).detach()
-                    val_weights_str = f"[{val_weights[0]:.3f},{val_weights[1]:.3f},{val_weights[2]:.3f},{val_weights[3]:.3f},{val_weights[4]:.3f},{val_weights[5]:.3f}]"
+                    # Use consistent access pattern via dag_predictor property
+                    uncertainty_weights = raw_model.dag_predictor.uncertainty_params
+                    uncertainty_weights = torch.exp(-uncertainty_weights).detach()
+                    uncertainty_weights_str = f"[{uncertainty_weights[0]:.3f},{uncertainty_weights[1]:.3f},{uncertainty_weights[2]:.3f},{uncertainty_weights[3]:.3f},{uncertainty_weights[4]:.3f},{uncertainty_weights[5]:.3f}]"
 
                     eval_msg = (
                         f"[val] iter {iter_num}: loss {eval_losses['total_loss']:.4f}, "
@@ -364,7 +364,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         f"value {eval_losses['value_loss']:.4f}, "
                         f"exec {eval_losses['exec_loss']:.4f}, "
                         f"stats {eval_losses['stats_loss']:.4f}, "
-                        f"weights {val_weights_str}, "
+                        f"uncertainty_weights {uncertainty_weights_str}, "
                         f"op_acc {eval_losses['op_accuracy']:.4f}, "
                         f"full_op_match {eval_losses['full_dag_op_match']:.4f}, "
                         f"sign_acc {eval_losses['sign_accuracy']:.4f}, "
@@ -387,6 +387,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "val/full_dag_op_match": eval_losses["full_dag_op_match"],
                         "val/sign_accuracy": eval_losses["sign_accuracy"],
                         "val/executed_mse": eval_losses["executed_mse"],
+                        "val/initial_values_mse": eval_losses["initial_values_mse"],
                         "val/time_per_iter_ms": eval_time_ms,
                     }
                     # Store validation metrics for combined logging with training metrics
@@ -590,7 +591,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         .expand(-1, T, -1),
                     }
 
-                    log_vars = raw_model.dag_predictor.log_vars
+                    # Use consistent access pattern via dag_predictor property
+                    uncertainty_params = raw_model.dag_predictor.uncertainty_params
 
                     # Compute losses with learned uncertainty weighting
                     losses = compute_dag_structure_loss(
@@ -605,7 +607,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         target_final_exec_seq,
                         target_statistics_seq,
                         cfg,
-                        log_vars=log_vars,
+                        uncertainty_params=uncertainty_params,
                     )
                     loss = losses["total_loss"] / cfg.gradient_accumulation_steps
 
@@ -713,7 +715,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
                 # Format uncertainty weights for logging (exponential of log-variance)
                 uncertainty_weights = loss_accum["uncertainty_weights"]
-                weights_str = f"[{uncertainty_weights[0]:.3f},{uncertainty_weights[1]:.3f},{uncertainty_weights[2]:.3f},{uncertainty_weights[3]:.3f},{uncertainty_weights[4]:.3f},{uncertainty_weights[5]:.3f}]"
+                uncertainty_weights_str = f"[{uncertainty_weights[0]:.3f},{uncertainty_weights[1]:.3f},{uncertainty_weights[2]:.3f},{uncertainty_weights[3]:.3f},{uncertainty_weights[4]:.3f},{uncertainty_weights[5]:.3f}]"
 
                 log_msg = (
                     f"iter {iter_num}: loss {loss_accum['total_loss']:.4f}, "
@@ -723,7 +725,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     f"value {value_loss_val:.4f}, "
                     f"exec {exec_loss_val:.4f}, "
                     f"stats {stats_loss_val:.4f}, "
-                    f"weights {weights_str}, "
+                    f"uncertainty_weights {uncertainty_weights_str}, "
                     f"op_acc {loss_accum['op_accuracy']:.4f}, "
                     f"full_op_match {loss_accum['full_dag_op_match']:.4f}, "
                     f"sign_acc {loss_accum['sign_accuracy']:.4f}"
@@ -740,21 +742,16 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     # issues where the local `lr` variable drifts from the value that is ultimately
                     # used for the step (e.g. if the optimizer or scheduler modifies it).
                     current_lr = optimizer.param_groups[0]["lr"]
-                    current_log_vars_lr = (
+                    current_uncertainty_params_lr = (
                         optimizer.param_groups[1]["lr"]
                         if len(optimizer.param_groups) > 1
                         else current_lr
                     )
 
-                    # Get current log_vars values for monitoring
-                    if hasattr(raw_model, "dag"):
-                        current_log_vars = (
-                            raw_model.dag.plan_predictor.log_vars.detach().cpu()
-                        )
-                    else:
-                        current_log_vars = (
-                            raw_model.dag_predictor.log_vars.detach().cpu()
-                        )
+                    # Get current uncertainty_params values for monitoring via consistent access pattern
+                    current_uncertainty_params = (
+                        raw_model.dag_predictor.uncertainty_params.detach().cpu()
+                    )
 
                     log_dict = {
                         "iter": iter_num,
@@ -766,25 +763,31 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "train/exec_loss": loss_accum["exec_loss"],
                         "train/stats_loss": loss_accum["stats_loss"],
                         "lr": current_lr,
-                        "lr_log_vars": current_log_vars_lr,
+                        "lr_uncertainty_params": current_uncertainty_params_lr,
                         "train/op_accuracy": loss_accum["op_accuracy"],
                         "train/full_dag_op_match": loss_accum["full_dag_op_match"],
                         "train/sign_accuracy": loss_accum["sign_accuracy"],
                         "train/time_per_iter_ms": dt * 1000,
-                        # Uncertainty weights (exp(-log_vars))
-                        "weights/sign": uncertainty_weights[0].item(),
-                        "weights/digit": uncertainty_weights[1].item(),
-                        "weights/op": uncertainty_weights[2].item(),
-                        "weights/value": uncertainty_weights[3].item(),
-                        "weights/exec": uncertainty_weights[4].item(),
-                        "weights/stats": uncertainty_weights[5].item(),
-                        # Raw log_vars values for monitoring adaptation
-                        "log_vars/sign": current_log_vars[0].item(),
-                        "log_vars/digit": current_log_vars[1].item(),
-                        "log_vars/op": current_log_vars[2].item(),
-                        "log_vars/value": current_log_vars[3].item(),
-                        "log_vars/exec": current_log_vars[4].item(),
-                        "log_vars/stats": current_log_vars[5].item(),
+                        # Uncertainty weights (exp(-uncertainty_params))
+                        "uncertainty_weights/sign": uncertainty_weights[0].item(),
+                        "uncertainty_weights/digit": uncertainty_weights[1].item(),
+                        "uncertainty_weights/op": uncertainty_weights[2].item(),
+                        "uncertainty_weights/value": uncertainty_weights[3].item(),
+                        "uncertainty_weights/exec": uncertainty_weights[4].item(),
+                        "uncertainty_weights/stats": uncertainty_weights[5].item(),
+                        # Raw uncertainty_params values for monitoring adaptation
+                        "uncertainty_params/sign": current_uncertainty_params[0].item(),
+                        "uncertainty_params/digit": current_uncertainty_params[
+                            1
+                        ].item(),
+                        "uncertainty_params/op": current_uncertainty_params[2].item(),
+                        "uncertainty_params/value": current_uncertainty_params[
+                            3
+                        ].item(),
+                        "uncertainty_params/exec": current_uncertainty_params[4].item(),
+                        "uncertainty_params/stats": current_uncertainty_params[
+                            5
+                        ].item(),
                     }
 
                     # Add internal losses and gradient cosines to wandb logging

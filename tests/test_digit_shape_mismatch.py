@@ -80,7 +80,7 @@ def test_digit_shape_match_no_error():
         target_final_exec,
         dummy_stats,
         _dummy_cfg(),
-        log_vars=torch.zeros(6),
+        uncertainty_params=torch.zeros(6),
     )
 
 
@@ -118,5 +118,5 @@ def test_digit_shape_mismatch_raises_error():
             target_final_exec,
             dummy_stats,
             _dummy_cfg(),
-            log_vars=torch.zeros(6),
+            uncertainty_params=torch.zeros(6),
         )

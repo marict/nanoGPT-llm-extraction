@@ -447,9 +447,9 @@ class DAGPlanPredictor(nn.Module):
         )
 
         # Learnable uncertainty weighting parameters for multi-loss training
-        # log_vars[i] = log(σ²) for each loss component: [sign, digit, op, value, exec, stats]
+        # uncertainty_params[i] = log(σ²) for each loss component: [sign, digit, op, value, exec, stats]
         # Initialize to 0 (σ² = 1) so all losses start equally weighted
-        self.log_vars = nn.Parameter(torch.zeros(6))
+        self.uncertainty_params = nn.Parameter(torch.zeros(6))
 
         # Resolve operations from config
         self.op_names = config.op_names
@@ -1018,7 +1018,9 @@ class DifferentiableDAG(nn.Module):
         self.final_values = None
 
         # Generate unified plan (initial values + operations)
-        initial_sgn, digit_probs, operation_probs = self.plan_predictor(original_hidden)
+        initial_sgn, digit_probs, operation_probs, statistics = self.plan_predictor(
+            original_hidden
+        )
 
         if ENABLE_DEBUG_NAN_CHECKS:
             _debug_check("target_initial_values_sgn", initial_sgn)
@@ -1126,6 +1128,21 @@ class GPT(BaseGPTModel):
             self.gate_w_o = nn.Parameter(torch.full((config.n_embd,), -2.0))
             # Bias so gate can open even if means are near zero
             self.gate_b = nn.Parameter(torch.tensor(-2.0))
+
+    @property
+    def dag_predictor(self):
+        """Provide consistent access to DAG predictor across model types.
+
+        For GPT models: points to self.dag.plan_predictor
+        For PredictorOnlyModel: points to self.dag_predictor directly
+
+        This enables consistent access pattern: model.dag_predictor.uncertainty_params
+        """
+        if hasattr(self, "dag") and self.dag is not None:
+            return self.dag.plan_predictor
+        else:
+            # Fallback for models without DAG (dag_depth=0)
+            return None
 
     def clear_model_cache(self) -> None:
         """Clear all cached tensors to prevent memory leaks."""

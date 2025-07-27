@@ -83,9 +83,11 @@ class BaseGPTModel(nn.Module):
         for attr_name in dag_predictor_attrs:
             if hasattr(self, attr_name):
                 dag_predictor = getattr(self, attr_name)
-                for name, dag_module in dag_predictor.named_modules():
-                    if module is dag_module:
-                        return True
+                # Handle case where dag_predictor property returns None for dag_depth=0
+                if dag_predictor is not None:
+                    for name, dag_module in dag_predictor.named_modules():
+                        if module is dag_module:
+                            return True
 
         # Special case for dag.plan_predictor in GPT model
         if hasattr(self, "dag") and hasattr(self.dag, "plan_predictor"):

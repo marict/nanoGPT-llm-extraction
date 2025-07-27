@@ -320,7 +320,7 @@ def compute_dag_structure_loss(
     target_final_exec: torch.Tensor,  # (B,T) - target final execution values as floats
     target_statistics: dict,  # dict with 'initial', 'intermediate', 'final' containing (B, num_stats) tensors
     cfg: DAGTrainConfig,
-    log_vars: torch.Tensor,  # (6,) learnable log-variance parameters for uncertainty weighting
+    uncertainty_params: torch.Tensor,  # (6,) learnable log-variance parameters for uncertainty weighting
 ) -> Dict[str, torch.Tensor]:
     """Compute robust DAG-structure prediction loss."""
 
@@ -348,18 +348,20 @@ def compute_dag_structure_loss(
 
     # Combine losses using learned uncertainty weighting
     # Learned uncertainty weighting: exp(-s_i) * L_i + s_i
-    # log_vars shape: (6,) for [sign, digit, op, value, exec, stats]
+    # uncertainty_params shape: (6,) for [sign, digit, op, value, exec, stats]
     losses_tensor = torch.stack(
         [sign_loss, digit_loss, op_loss, value_loss, exec_loss, stats_loss]
     )
 
     # Apply learned uncertainty weighting: exp(-s_i) * L_i + s_i
     # This works consistently in both training and evaluation modes
-    weighted_losses = torch.exp(-log_vars) * losses_tensor + log_vars
+    weighted_losses = (
+        torch.exp(-uncertainty_params) * losses_tensor + uncertainty_params
+    )
     total_loss = weighted_losses.sum()
 
     # For logging, compute the weighting factors (detached to avoid interfering with gradients)
-    uncertainty_weights = torch.exp(-log_vars).detach()
+    uncertainty_weights = torch.exp(-uncertainty_params).detach()
 
     return {
         "total_loss": total_loss,
@@ -548,6 +550,7 @@ def evaluate_dag_model(
         "full_dag_op_match": 0.0,
         "sign_accuracy": 0.0,
         "executed_mse": 0.0,
+        "initial_values_mse": 0.0,
     }
 
     num_batches = 0
@@ -577,46 +580,30 @@ def evaluate_dag_model(
                 pred_sgn = pred_sgn.mean(dim=1)
 
                 # ------------------------------------------------------------------
-                # Retrieve digit logits depending on model type
+                # Retrieve digit logits using consistent access pattern
                 # ------------------------------------------------------------------
-                if hasattr(model, "dag"):
-                    # GPT backbone with DAG augmentation
-                    last_digit_logits = (
-                        model.dag.plan_predictor.last_digit_logits
-                        if hasattr(model.dag.plan_predictor, "last_digit_logits")
-                        else None
-                    )
-                    last_operation_logits = (
-                        model.dag.plan_predictor.last_operation_logits
-                        if hasattr(model.dag.plan_predictor, "last_operation_logits")
-                        else None
-                    )
-                    last_sign_logits = (
-                        model.dag.plan_predictor.last_sign_logits
-                        if hasattr(model.dag.plan_predictor, "last_sign_logits")
-                        else None
-                    )
-                    # Extract learnable uncertainty weighting parameters
-                    log_vars = model.dag.plan_predictor.log_vars
-                else:
-                    # Stand-alone predictor model
-                    last_digit_logits = (
-                        model.dag_predictor.last_digit_logits
-                        if hasattr(model.dag_predictor, "last_digit_logits")
-                        else None
-                    )
-                    last_operation_logits = (
-                        model.dag_predictor.last_operation_logits
-                        if hasattr(model.dag_predictor, "last_operation_logits")
-                        else None
-                    )
-                    last_sign_logits = (
-                        model.dag_predictor.last_sign_logits
-                        if hasattr(model.dag_predictor, "last_sign_logits")
-                        else None
-                    )
-                    # Extract learnable uncertainty weighting parameters
-                    log_vars = model.dag_predictor.log_vars
+                # Use consistent dag_predictor property for all model types
+                dag_predictor = model.dag_predictor
+                if dag_predictor is None:
+                    raise RuntimeError("Model has no DAG predictor (dag_depth=0)")
+
+                last_digit_logits = (
+                    dag_predictor.last_digit_logits
+                    if hasattr(dag_predictor, "last_digit_logits")
+                    else None
+                )
+                last_operation_logits = (
+                    dag_predictor.last_operation_logits
+                    if hasattr(dag_predictor, "last_operation_logits")
+                    else None
+                )
+                last_sign_logits = (
+                    dag_predictor.last_sign_logits
+                    if hasattr(dag_predictor, "last_sign_logits")
+                    else None
+                )
+                # Extract learnable uncertainty weighting parameters
+                uncertainty_params = dag_predictor.uncertainty_params
 
                 if last_digit_logits is None:
                     raise RuntimeError("last_digit_logits not found for evaluation")
@@ -693,7 +680,7 @@ def evaluate_dag_model(
                     target_final_exec,
                     target_statistics,
                     cfg,
-                    log_vars=log_vars,
+                    uncertainty_params=uncertainty_params,
                 )
 
                 # Metrics
@@ -748,6 +735,29 @@ def evaluate_dag_model(
                 pred_final_val = pred_final_sgn * torch.exp(pred_final_log)
 
                 executed_mse = F.mse_loss(pred_final_val, tgt_final_val)
+
+                # ------------------------------------------------------------------ #
+                # Compute MSE between initial values of target and predicted DAGs    #
+                # ------------------------------------------------------------------ #
+
+                # Convert predicted digits to magnitudes for all samples in batch
+                pred_magnitudes = digits_to_magnitude(
+                    pred_digit_probs.squeeze(1),  # (B, N, D, base)
+                    cfg.max_digits,
+                    cfg.max_decimal_places,
+                    cfg.base,
+                )  # (B, N)
+
+                # Combine sign and magnitude to get predicted initial values
+                pred_initial_values = (
+                    torch.sign(pred_sgn.squeeze(1)) * pred_magnitudes
+                )  # (B, N)
+
+                # Get target initial values (remove sequence dimension if present)
+                tgt_initial_values = target_initial_values.squeeze(1)  # (B, N)
+
+                # Compute MSE between initial values
+                initial_values_mse = F.mse_loss(pred_initial_values, tgt_initial_values)
 
                 # -------------------------------------------------------------- #
                 # Console debug: print the last sample from the batch
@@ -845,6 +855,7 @@ def evaluate_dag_model(
             total_metrics["full_dag_op_match"] += full_match.item()
             total_metrics["sign_accuracy"] += sign_acc.item()
             total_metrics["executed_mse"] += executed_mse.item()
+            total_metrics["initial_values_mse"] += initial_values_mse.item()
             num_batches += 1
 
     if num_batches:
