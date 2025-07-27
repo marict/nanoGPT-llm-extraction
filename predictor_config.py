@@ -73,6 +73,20 @@ class DAGTrainConfig(BaseConfig):
     # predictors restricted to a subset of arithmetic ops (e.g. only add, subtract, identity).
     op_names: list[str] = field(default_factory=lambda: OP_NAMES.copy())
 
+    # Loss configuration - flags to enable/disable specific loss components
+    # Disabled losses are still computed for logging but excluded from optimization
+    # Available flags: "sign", "digit", "op", "value", "exec", "stats"
+    loss_flags: dict[str, bool] = field(
+        default_factory=lambda: {
+            "sign": True,
+            "digit": True,
+            "op": True,
+            "value": False,
+            "exec": False,
+            "stats": False,
+        }
+    )
+
     # Backbone options
     full_backbone: bool = False
     n_layer: int = 12

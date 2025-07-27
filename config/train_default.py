@@ -1,5 +1,7 @@
 """Ultra-fast CPU configuration used by default when running ``train.py``."""
 
+from dataclasses import field
+
 # evaluate every step and run minimal iterations by default
 eval_interval = 1
 log_interval = 1
@@ -57,3 +59,14 @@ min_lr = 1e-4
 backend = "gloo"
 dtype = "float32"  # Fastest on most systems
 compile = False  # Skip compilation overhead
+
+loss_flags: dict[str, bool] = field(
+    default_factory=lambda: {
+        "sign": False,
+        "digit": False,
+        "op": False,
+        "value": False,
+        "exec": False,
+        "stats": False,
+    }
+)

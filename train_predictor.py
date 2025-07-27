@@ -579,7 +579,14 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     )
 
                 # Backward pass
-                scaler.scale(loss).backward()
+                # Skip backward if loss doesn't require gradients (e.g., when all losses disabled)
+                if loss.requires_grad:
+                    scaler.scale(loss).backward()
+                else:
+                    if master_process:
+                        print(
+                            f"[{time.time() - setup_start:.2f}s] Warning: Loss doesn't require gradients (total_loss={loss.item():.6f}), skipping backward pass"
+                        )
 
                 # Check for NaN/Inf gradients in training (conditional on config)
                 if cfg.check_nans:

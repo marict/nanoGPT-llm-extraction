@@ -80,3 +80,12 @@ check_nans = False
 
 # Random seeds
 seed = 42
+
+loss_flags = {
+    "sign": True,
+    "digit": True,
+    "op": True,
+    "value": False,
+    "exec": False,
+    "stats": False,
+}

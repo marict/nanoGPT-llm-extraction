@@ -322,8 +322,24 @@ def compute_dag_structure_loss(
     final_token_pos: torch.Tensor,  # (B,) - final token position for each batch element
     cfg: DAGTrainConfig,
     uncertainty_params: torch.Tensor,  # (6,) learnable log-variance parameters for uncertainty weighting
+    loss_flags: (
+        Dict[str, bool] | None
+    ) = None,  # Optional override for cfg.loss_flags (deprecated)
 ) -> Dict[str, torch.Tensor]:
-    """Compute robust DAG-structure prediction loss with position masking."""
+    """Compute robust DAG-structure prediction loss with position masking.
+
+    Args:
+        loss_flags: Optional dictionary to selectively disable losses. Keys are:
+            - "sign": Enable/disable sign loss
+            - "digit": Enable/disable digit loss
+            - "op": Enable/disable operation loss
+            - "value": Enable/disable value loss
+            - "exec": Enable/disable execution loss
+            - "stats": Enable/disable statistics loss
+            Defaults to None (all losses enabled). Missing keys default to enabled.
+            Disabled losses are still computed for logging but excluded from total_loss.
+            The uncertainty weighting is applied only to enabled losses.
+    """
 
     B, T = pred_sign_logits.shape[:2]
 
@@ -340,8 +356,15 @@ def compute_dag_structure_loss(
             f"Consider increasing block_size or filtering longer examples during data generation."
         )
 
-    # Clamp final_token_pos to valid range (should be no-op after validation)
-    final_token_pos = torch.clamp(final_token_pos, 0, T - 1)
+    # Verify all positions are valid after validation (should always pass)
+    if (final_token_pos < 0).any() or (final_token_pos >= T).any():
+        invalid_low = (final_token_pos < 0).any()
+        invalid_high = (final_token_pos >= T).any()
+        raise RuntimeError(
+            f"BUG: Invalid final_token_pos found after validation. "
+            f"Negative positions: {invalid_low}, positions >= {T}: {invalid_high}. "
+            f"This indicates a bug in the validation logic above."
+        )
 
     # Extract predictions at final token positions using advanced indexing
     batch_indices = torch.arange(B, device=pred_sign_logits.device)
@@ -401,21 +424,52 @@ def compute_dag_structure_loss(
     # Compute statistics loss
     stats_loss = _compute_statistics_loss(selected_statistics, target_statistics_seq)
 
-    # Combine losses using learned uncertainty weighting
-    # Learned uncertainty weighting: exp(-s_i) * L_i + s_i
-    # uncertainty_params shape: (6,) for [sign, digit, op, value, exec, stats]
-    losses_tensor = torch.stack(
-        [sign_loss, digit_loss, op_loss, value_loss, exec_loss, stats_loss]
-    )
+    # Use loss flags from config, with parameter override for backwards compatibility
+    if loss_flags is None:
+        loss_flags = (
+            cfg.loss_flags
+            if hasattr(cfg, "loss_flags")
+            else {
+                "sign": True,
+                "digit": True,
+                "op": True,
+                "value": True,
+                "exec": True,
+                "stats": True,
+            }
+        )
 
-    # Apply learned uncertainty weighting: exp(-s_i) * L_i + s_i
-    # This works consistently in both training and evaluation modes
-    weighted_losses = (
-        torch.exp(-uncertainty_params) * losses_tensor + uncertainty_params
-    )
-    total_loss = weighted_losses.sum()
+    # Define loss names and values in order matching uncertainty_params
+    loss_names = ["sign", "digit", "op", "value", "exec", "stats"]
+    all_losses = [sign_loss, digit_loss, op_loss, value_loss, exec_loss, stats_loss]
 
-    # For logging, compute the weighting factors (detached to avoid interfering with gradients)
+    # Filter enabled losses and corresponding uncertainty parameters
+    enabled_losses = []
+    enabled_uncertainty_params = []
+
+    for i, (name, loss_value) in enumerate(zip(loss_names, all_losses)):
+        if loss_flags.get(name, True):  # Default to enabled if flag not specified
+            enabled_losses.append(loss_value)
+            enabled_uncertainty_params.append(uncertainty_params[i])
+
+    # Combine enabled losses using learned uncertainty weighting
+    if enabled_losses:
+        # Stack enabled losses and uncertainty parameters
+        losses_tensor = torch.stack(enabled_losses)
+        enabled_uncertainty_tensor = torch.stack(enabled_uncertainty_params)
+
+        # Apply learned uncertainty weighting: exp(-s_i) * L_i + s_i
+        weighted_losses = (
+            torch.exp(-enabled_uncertainty_tensor) * losses_tensor
+            + enabled_uncertainty_tensor
+        )
+        total_loss = weighted_losses.sum()
+    else:
+        # If no losses are enabled, return zero loss
+        device = sign_loss.device
+        total_loss = torch.tensor(0.0, device=device, dtype=torch.float32)
+
+    # For logging, compute the weighting factors for all losses (detached to avoid interfering with gradients)
     uncertainty_weights = torch.exp(-uncertainty_params).detach()
 
     return {
