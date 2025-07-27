@@ -40,7 +40,7 @@ printing_style_probs = {
 
 # Model configuration
 gradient_accumulation_steps = 1
-batch_size = 256
+batch_size = 128
 block_size = 384
 
 # Model architecture (larger for RunPod training)
