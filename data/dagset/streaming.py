@@ -626,6 +626,7 @@ def generate_single_dag_example(
     # Test-only overrides – callers should provide **both** or **neither**
     _operations_override: list[str] | None = None,
     _initial_values_override: list[float] | None = None,
+    tokenizer=None,
 ) -> DAGExample:
     """Generate a single DAG computation example as a simple math expression."""
 
@@ -669,6 +670,17 @@ def generate_single_dag_example(
         max_decimal_places=max_decimal_places,
         base=base,
     )
+
+    # Add final token position to structure dict
+    if tokenizer is None:
+        tokenizer = get_encoding("gpt2")
+
+    tokens = tokenizer.encode_ordinary(text)
+    if len(tokens) > 0:
+        final_token_pos = len(tokens) - 1
+    else:
+        final_token_pos = 0
+    structure_dict["final_token_pos"] = final_token_pos
 
     if train:
         # For training, only create essential attributes to minimize overhead
@@ -731,8 +743,7 @@ class DAGStructureDataset:
         self,
         max_depth: int = 8,
         seed: int = 42,
-        tokenizer: str = "gpt2",
-        max_seq_length: int = 512,
+        tokenizer_str: str = "gpt2",
         english_conversion_probability: float = 0.0,
         integer_no_decimal_probability: float = 0.0,
         expression_simplification_probability: float = 0.0,
@@ -749,8 +760,7 @@ class DAGStructureDataset:
         self.num_initial_values = max_depth + 1
         self.seed = seed
         self.num_generated = 0
-        self.tokenizer = tokenizer
-        self.max_seq_length = max_seq_length
+        self.tokenizer = get_encoding(tokenizer_str)
         self.english_conversion_probability = english_conversion_probability
         self.integer_no_decimal_probability = integer_no_decimal_probability
         self.expression_simplification_probability = (
@@ -779,9 +789,6 @@ class DAGStructureDataset:
             self.allowed_op_indices = [
                 OP_NAMES.index(op) for op in self.allowed_operations
             ]
-
-        # Initialize tokenizer
-        self.enc = get_encoding(tokenizer)
 
         # Operation name to index mapping
         self.op_name_to_idx = {name: i for i, name in enumerate(OP_NAMES)}
@@ -822,6 +829,7 @@ class DAGStructureDataset:
                     allowed_operations=self.allowed_operations,
                     printing_style_probs=self.printing_style_probs,
                     train=train,
+                    tokenizer=self.tokenizer,
                 )
             except Exception:
                 logging.error(
@@ -877,6 +885,9 @@ class DAGStructureDataset:
         )  # multi-value stats
         batched_target_final_stats = torch.zeros(batch_size, 10)  # single-value stats
 
+        # Initialize final token positions tensor
+        batched_final_token_pos = torch.zeros(batch_size, dtype=torch.long)
+
         # Fill batched tensors
         for i, (structure, example) in enumerate(zip(structures, examples)):
             depth = example.depth
@@ -910,6 +921,9 @@ class DAGStructureDataset:
             ]
             batched_target_final_stats[i] = structure["target_final_stats"]
 
+            # Extract final token position
+            batched_final_token_pos[i] = structure["final_token_pos"]
+
         return {
             "target_initial_sgn": batched_initial_sgn,
             "target_initial_log": batched_initial_log,
@@ -920,6 +934,7 @@ class DAGStructureDataset:
             "target_initial_stats": batched_target_initial_stats,
             "target_intermediate_stats": batched_target_intermediate_stats,
             "target_final_stats": batched_target_final_stats,
+            "final_token_pos": batched_final_token_pos,
         }
 
     def create_dataloader(

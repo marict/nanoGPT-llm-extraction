@@ -312,39 +312,94 @@ def compute_dag_structure_loss(
     pred_sign_logits: torch.Tensor,  # (B,T,N) raw logits (not tanh-activated)
     pred_digit_logits: torch.Tensor,  # (B,T,N,D,base) raw logits (not probabilities)
     pred_op_logits: torch.Tensor,  # (B,T,depth,n_ops) raw logits (not probabilities)
-    pred_statistics: dict,  # dict with 'initial', 'intermediate', 'final' containing (B, num_stats) tensors
-    target_sgn: torch.Tensor,  # (B,T,N)
-    target_digits: torch.Tensor,  # (B,T,N,D,base) one-hot
-    target_ops: torch.Tensor,
-    target_initial_values: torch.Tensor,  # (B,T,N) - target initial values as floats
-    target_final_exec: torch.Tensor,  # (B,T) - target final execution values as floats
-    target_statistics: dict,  # dict with 'initial', 'intermediate', 'final' containing (B, num_stats) tensors
+    pred_statistics: dict,  # dict with 'initial', 'intermediate', 'final' containing (B,T,num_stats) tensors
+    target_sgn: torch.Tensor,  # (B,N) - single target per batch
+    target_digits: torch.Tensor,  # (B,N,D,base) - single target per batch
+    target_ops: torch.Tensor,  # (B,depth,n_ops) - single target per batch
+    target_initial_values: torch.Tensor,  # (B,N) - single target per batch
+    target_final_exec: torch.Tensor,  # (B,) - single target per batch
+    target_statistics: dict,  # dict with 'initial', 'intermediate', 'final' containing (B,num_stats) tensors
+    final_token_pos: torch.Tensor,  # (B,) - final token position for each batch element
     cfg: DAGTrainConfig,
     uncertainty_params: torch.Tensor,  # (6,) learnable log-variance parameters for uncertainty weighting
 ) -> Dict[str, torch.Tensor]:
-    """Compute robust DAG-structure prediction loss."""
+    """Compute robust DAG-structure prediction loss with position masking."""
 
-    # Compute individual loss components (now pass logits directly for better numerical stability)
-    sign_loss = _compute_sign_loss(pred_sign_logits, target_sgn)
-    digit_loss = _compute_digit_loss(pred_digit_logits, target_digits)
-    op_loss = _compute_op_loss(pred_op_logits, target_ops)
+    B, T = pred_sign_logits.shape[:2]
+
+    # Check that all final token positions are within sequence bounds
+    if (final_token_pos >= T).any():
+        invalid_positions = final_token_pos >= T
+        invalid_indices = torch.nonzero(invalid_positions).flatten()
+        max_invalid_pos = final_token_pos[invalid_positions].max().item()
+        raise ValueError(
+            f"Final token positions exceed sequence length. "
+            f"Found {invalid_indices.numel()} examples with final_token_pos >= {T}. "
+            f"Maximum invalid position: {max_invalid_pos}. "
+            f"This indicates training examples longer than block_size ({T}). "
+            f"Consider increasing block_size or filtering longer examples during data generation."
+        )
+
+    # Clamp final_token_pos to valid range (should be no-op after validation)
+    final_token_pos = torch.clamp(final_token_pos, 0, T - 1)
+
+    # Extract predictions at final token positions using advanced indexing
+    batch_indices = torch.arange(B, device=pred_sign_logits.device)
+    selected_sign_logits = pred_sign_logits[batch_indices, final_token_pos]  # (B,N)
+    selected_digit_logits = pred_digit_logits[
+        batch_indices, final_token_pos
+    ]  # (B,N,D,base)
+    selected_op_logits = pred_op_logits[
+        batch_indices, final_token_pos
+    ]  # (B,depth,n_ops)
+    selected_statistics = {
+        key: pred_statistics[key][batch_indices, final_token_pos]  # (B,num_stats)
+        for key in pred_statistics.keys()
+    }
+
+    # Add singleton sequence dimension for compatibility with helper functions
+    selected_sign_logits = selected_sign_logits.unsqueeze(1)  # (B,1,N)
+    selected_digit_logits = selected_digit_logits.unsqueeze(1)  # (B,1,N,D,base)
+    selected_op_logits = selected_op_logits.unsqueeze(1)  # (B,1,depth,n_ops)
+    selected_statistics = {
+        key: value.unsqueeze(1)
+        for key, value in selected_statistics.items()  # (B,1,num_stats)
+    }
+
+    # Add singleton sequence dimension to targets
+    target_sgn_seq = target_sgn.unsqueeze(1)  # (B,1,N)
+    target_digits_seq = target_digits.unsqueeze(1)  # (B,1,N,D,base)
+    target_ops_seq = target_ops.unsqueeze(1)  # (B,1,depth,n_ops)
+    target_initial_values_seq = target_initial_values.unsqueeze(1)  # (B,1,N)
+    target_final_exec_seq = target_final_exec.unsqueeze(1)  # (B,1)
+    target_statistics_seq = {
+        key: value.unsqueeze(1)
+        for key, value in target_statistics.items()  # (B,1,num_stats)
+    }
+
+    # Compute individual loss components using selected predictions
+    sign_loss = _compute_sign_loss(selected_sign_logits, target_sgn_seq)
+    digit_loss = _compute_digit_loss(selected_digit_logits, target_digits_seq)
+    op_loss = _compute_op_loss(selected_op_logits, target_ops_seq)
 
     # For value and execution losses, we need tanh-activated signs and probabilities
-    pred_sgn = torch.tanh(pred_sign_logits)
-    value_loss = _compute_value_loss(pred_digit_logits, target_initial_values, cfg)
+    selected_sgn = torch.tanh(selected_sign_logits)
+    value_loss = _compute_value_loss(
+        selected_digit_logits, target_initial_values_seq, cfg
+    )
 
     # For execution loss, we need probabilities, so convert logits
-    pred_ops = F.softmax(pred_op_logits, dim=-1)
+    selected_ops = F.softmax(selected_op_logits, dim=-1)
     exec_loss = _compute_exec_loss(
-        pred_sgn,
-        pred_digit_logits,
-        pred_ops,
-        target_final_exec,
+        selected_sgn,
+        selected_digit_logits,
+        selected_ops,
+        target_final_exec_seq,
         cfg,
     )
 
     # Compute statistics loss
-    stats_loss = _compute_statistics_loss(pred_statistics, target_statistics)
+    stats_loss = _compute_statistics_loss(selected_statistics, target_statistics_seq)
 
     # Combine losses using learned uncertainty weighting
     # Learned uncertainty weighting: exp(-s_i) * L_i + s_i
@@ -470,13 +525,13 @@ def evaluate_dag_model(
             with ctx:
                 if cfg.full_backbone and hasattr(model, "dag"):
                     hidden = model.forward_hidden(input_tokens)
-                    pred_sgn, _, pred_ops, pred_statistics = model.dag.plan_predictor(
-                        hidden
+                    pred_sgn, pred_digit_probs, pred_ops, pred_statistics = (
+                        model.dag.plan_predictor(hidden)
                     )
                 else:
-                    pred_sgn, _, pred_ops, pred_statistics = model(input_tokens)
-
-                pred_sgn = pred_sgn.mean(dim=1)
+                    pred_sgn, pred_digit_probs, pred_ops, pred_statistics = model(
+                        input_tokens
+                    )
 
                 # ------------------------------------------------------------------
                 # Retrieve digit logits using consistent access pattern
@@ -486,110 +541,77 @@ def evaluate_dag_model(
                 if dag_predictor is None:
                     raise RuntimeError("Model has no DAG predictor (dag_depth=0)")
 
-                last_digit_logits = (
-                    dag_predictor.last_digit_logits
-                    if hasattr(dag_predictor, "last_digit_logits")
-                    else None
-                )
-                last_operation_logits = (
-                    dag_predictor.last_operation_logits
-                    if hasattr(dag_predictor, "last_operation_logits")
-                    else None
-                )
-                last_sign_logits = (
-                    dag_predictor.last_sign_logits
-                    if hasattr(dag_predictor, "last_sign_logits")
-                    else None
-                )
+                # Get raw logits for all positions
+                pred_sign_logits = dag_predictor.last_sign_logits
+                pred_digit_logits = dag_predictor.last_digit_logits
+                pred_op_logits = dag_predictor.last_operation_logits
                 # Extract learnable uncertainty weighting parameters
                 uncertainty_params = dag_predictor.uncertainty_params
 
-                if last_digit_logits is None:
+                if pred_digit_logits is None:
                     raise RuntimeError("last_digit_logits not found for evaluation")
-                if last_sign_logits is None:
+                if pred_sign_logits is None:
                     raise RuntimeError("last_sign_logits not found for evaluation")
-                if last_operation_logits is None:
+                if pred_op_logits is None:
                     raise RuntimeError("last_operation_logits not found for evaluation")
 
-                last_digit_logits = last_digit_logits.mean(dim=1)  # (B,N,D,base)
-                last_operation_logits = last_operation_logits.mean(
-                    dim=1
-                )  # (B,depth,n_ops)
-                last_sign_logits = last_sign_logits.mean(dim=1)  # (B,N)
-                pred_ops = pred_ops.mean(dim=1)
+                # Extract final token positions
+                final_token_pos = structures["final_token_pos"].to(device)
+                # Targets for loss calculation
+                tgt_sgn = structures["target_initial_sgn"].to(device)
+                tgt_digits = structures["target_initial_digits"].to(device)
+                tgt_ops = structures["target_operation_probs"].to(device)
 
-                # Convert operation logits to probabilities for metrics and execution
-                if last_operation_logits is not None:
-                    pred_ops = F.softmax(last_operation_logits, dim=-1)
-                else:
-                    # Fallback to using probabilities directly (should not happen with updated model)
-                    pred_ops = pred_ops
-
-                # Convert sign logits to tanh-activated signs for metrics and execution
-                pred_sgn = torch.tanh(last_sign_logits)
-
-                nodes, depth = tgt_sgn.size(1), tgt_ops.size(1)
-                if pred_sgn.size(1) != nodes or pred_ops.size(1) != depth:
-                    raise ValueError(
-                        "Prediction shape mismatch: "
-                        f"nodes {pred_sgn.size(1)} vs {nodes}, depth {pred_ops.size(1)} vs {depth}"
-                    )
-
-                # Sequence dimension for loss function compatibility
-                last_sign_logits = last_sign_logits.unsqueeze(1)
-                pred_sgn = pred_sgn.unsqueeze(1)
-                last_digit_logits = last_digit_logits.unsqueeze(1)
-                last_operation_logits = last_operation_logits.unsqueeze(1)
-
-                # Extract target initial values and final execution values from structures
-                target_initial_values = (
-                    structures["target_initial_values"].to(device).unsqueeze(1)
-                )  # Add sequence dim
-                target_final_exec = (
-                    structures["target_final_exec"].to(device).unsqueeze(1)
-                )  # Add sequence dim
-
-                # Extract target statistics from structures and broadcast to match pred_statistics shape
-                seq_len = pred_statistics["initial"].shape[1]
+                # Extract remaining targets
+                target_initial_values = structures["target_initial_values"].to(device)
+                target_final_exec = structures["target_final_exec"].to(device)
                 target_statistics = {
-                    "initial": structures["target_initial_stats"]
-                    .to(device)
-                    .unsqueeze(1)
-                    .expand(-1, seq_len, -1),
-                    "intermediate": structures["target_intermediate_stats"]
-                    .to(device)
-                    .unsqueeze(1)
-                    .expand(-1, seq_len, -1),
-                    "final": structures["target_final_stats"]
-                    .to(device)
-                    .unsqueeze(1)
-                    .expand(-1, seq_len, -1),
+                    "initial": structures["target_initial_stats"].to(device),
+                    "intermediate": structures["target_intermediate_stats"].to(device),
+                    "final": structures["target_final_stats"].to(device),
                 }
 
-                # Compute loss using all logits for numerical stability
+                # Compute loss using new signature with final token positions
                 losses = compute_dag_structure_loss(
-                    last_sign_logits,
-                    last_digit_logits,
-                    last_operation_logits,
+                    pred_sign_logits,
+                    pred_digit_logits,
+                    pred_op_logits,
                     pred_statistics,
-                    tgt_sgn.unsqueeze(1),
-                    tgt_digits.unsqueeze(1),
-                    tgt_ops.unsqueeze(1),
+                    tgt_sgn,
+                    tgt_digits,
+                    tgt_ops,
                     target_initial_values,
                     target_final_exec,
                     target_statistics,
+                    final_token_pos,
                     cfg,
                     uncertainty_params=uncertainty_params,
                 )
 
-                # Metrics
-                op_correct = (
-                    pred_ops.squeeze(1).argmax(dim=-1).eq(tgt_ops.argmax(dim=-1))
+                # Extract predictions at final positions for metrics
+                B = pred_sign_logits.shape[0]
+                batch_indices = torch.arange(B, device=pred_sign_logits.device)
+                final_token_pos_clamped = torch.clamp(
+                    final_token_pos, 0, pred_sign_logits.shape[1] - 1
                 )
+
+                pred_ops_final = pred_op_logits[
+                    batch_indices, final_token_pos_clamped
+                ]  # (B, depth, n_ops)
+                pred_sgn_final = pred_sign_logits[
+                    batch_indices, final_token_pos_clamped
+                ]  # (B, N)
+
+                # Convert to probabilities and tanh-activated signs for metrics
+                pred_ops = F.softmax(pred_ops_final, dim=-1)
+                pred_sgn = torch.tanh(pred_sgn_final)
+
+                # Metrics
+                op_correct = pred_ops.argmax(dim=-1).eq(tgt_ops.argmax(dim=-1))
                 op_acc = op_correct.float().mean()
                 full_match = op_correct.all(dim=-1).float().mean()
 
-                sign_correct = torch.sign(pred_sgn.squeeze(1)).eq(torch.sign(tgt_sgn))
+                sign_correct = torch.sign(pred_sgn).eq(torch.sign(tgt_sgn))
                 sign_acc = sign_correct.float().mean()
 
                 # ------------------------------------------------------------------ #
@@ -598,15 +620,18 @@ def evaluate_dag_model(
 
                 # Target tensors --------------------------------------------------
                 tgt_sign = tgt_sgn.unsqueeze(1)  # (B,1,N)
-                tgt_digit_probs = tgt_digits.unsqueeze(1)  # (B,1,N,D,10)
+                tgt_digit_probs = tgt_digits.unsqueeze(1)  # (B,1,N,D,base)
                 tgt_ops_seq = tgt_ops.unsqueeze(1)  # (B,1,depth,n_ops)
 
                 # Prediction tensors ---------------------------------------------
-                pred_sign = pred_sgn.squeeze(1).unsqueeze(1)  # (B,1,N)
-                pred_digit_probs = last_digit_logits.softmax(dim=-1)  # (B,1,N,D,10)
-                pred_ops_seq = pred_ops.unsqueeze(
+                pred_sign = pred_sgn.unsqueeze(1)  # (B,1,N)
+                pred_digit_probs_final = pred_digit_logits[
+                    batch_indices, final_token_pos_clamped
+                ]  # (B,N,D,base)
+                pred_digit_probs = F.softmax(pred_digit_probs_final, dim=-1).unsqueeze(
                     1
-                )  # (B,1,depth,n_ops) - converted from logits above
+                )  # (B,1,N,D,base)
+                pred_ops_seq = pred_ops.unsqueeze(1)  # (B,1,depth,n_ops)
 
                 # Execute stacks - use clipping for consistency with training
                 tgt_final_sgn, tgt_final_log = execute_stack(
@@ -673,9 +698,9 @@ def evaluate_dag_model(
                     # Sign vectors (N,) and digit logits (N,D,10)
                     pred_sign_vec = pred_sgn.squeeze(1)[batch_idx]
 
-                    pred_digits_vec = last_digit_logits.squeeze(1)[batch_idx].softmax(
-                        dim=-1
-                    )
+                    pred_digits_vec = pred_digit_logits[
+                        batch_indices, final_token_pos_clamped
+                    ][batch_idx].softmax(dim=-1)
 
                     # Convert digit distributions to magnitudes
                     pred_mag_vec = digits_to_magnitude(

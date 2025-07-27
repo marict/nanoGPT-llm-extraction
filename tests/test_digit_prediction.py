@@ -11,11 +11,17 @@ from train_predictor import DAGTrainConfig
 
 def _dummy_statistics(batch_size, seq_len=1):
     """Create dummy statistics for testing."""
-    return {
+    dummy_pred_stats = {
         "initial": torch.zeros(batch_size, seq_len, 15),
         "intermediate": torch.zeros(batch_size, seq_len, 15),
         "final": torch.zeros(batch_size, seq_len, 10),
     }
+    dummy_target_stats = {
+        "initial": torch.zeros(batch_size, 15),
+        "intermediate": torch.zeros(batch_size, 15),
+        "final": torch.zeros(batch_size, 10),
+    }
+    return dummy_pred_stats, dummy_target_stats
 
 
 class TestDigitPrediction(unittest.TestCase):
@@ -128,16 +134,19 @@ class TestDigitPrediction(unittest.TestCase):
         # ------------------------------------------------------------------
         N = model.config.dag_depth + 1
         D_total = max_digits + max_decimals
-        sign_target = torch.randint(0, 2, (B, T, N)).float() * 2 - 1  # ±1
+        sign_target = (
+            torch.randint(0, 2, (B, N)).float() * 2 - 1
+        )  # ±1 (remove T dimension)
 
         # One-hot targets for digits – choose argmax of current probs for determinism
         digit_probs = F.softmax(digit_logits.detach(), dim=-1)
-        digit_idx = digit_probs.argmax(dim=-1)  # (B,T,N,D)
-        target_digits = F.one_hot(digit_idx, num_classes=10).float()
+        # Take final position for target creation
+        digit_idx_final = digit_probs[:, -1, :, :].argmax(dim=-1)  # (B,N,D)
+        target_digits = F.one_hot(digit_idx_final, num_classes=10).float()  # (B,N,D,10)
 
         # Operation targets: always choose first op for simplicity
         depth, n_ops = model.config.dag_depth, pred_ops.shape[-1]
-        target_ops = torch.zeros(B, T, depth, n_ops)
+        target_ops = torch.zeros(B, depth, n_ops)  # Remove T dimension
         target_ops[..., 0] = 1.0
 
         # Training config with appropriate digit settings
@@ -147,21 +156,25 @@ class TestDigitPrediction(unittest.TestCase):
         cfg.max_decimal_places = max_decimals
 
         # Add dummy targets for the new losses
-        target_initial_values = torch.ones(B, T, N)
-        target_final_exec = torch.ones(B, T, 1)
+        target_initial_values = torch.ones(B, N)  # Remove T dimension
+        target_final_exec = torch.ones(B)  # Remove T and node dimensions
 
-        dummy_stats = _dummy_statistics(B, T)
+        # Create final token positions (use last sequence position)
+        final_token_pos = torch.full((B,), T - 1, dtype=torch.long)
+
+        dummy_pred_stats, dummy_target_stats = _dummy_statistics(B, T)
         losses = compute_dag_structure_loss(
             pred_sgn,
             digit_logits,
             pred_ops,
-            dummy_stats,
+            dummy_pred_stats,
             sign_target,
             target_digits,
             target_ops,
             target_initial_values,
             target_final_exec,
-            dummy_stats,
+            dummy_target_stats,
+            final_token_pos,
             cfg,
             uncertainty_params=torch.zeros(6),
         )

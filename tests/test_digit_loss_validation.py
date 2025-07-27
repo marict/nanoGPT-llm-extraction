@@ -21,7 +21,7 @@ def test_digit_loss_raises_on_all_zero_target(device_type):
     # Third digit slot intentionally remains all zeros → should trigger error
 
     with pytest.raises(ValueError, match="all zeros"):
-        _compute_digit_loss(pred_digit_logits, target_digits, device_type)
+        _compute_digit_loss(pred_digit_logits, target_digits)
 
 
 @pytest.mark.parametrize("device_type", ["cpu"])
@@ -36,6 +36,6 @@ def test_digit_loss_valid_one_hot(device_type):
     for d in range(D):
         target_digits[:, 0, 0, d, d % base] = 1.0
 
-    loss = _compute_digit_loss(pred_digit_logits, target_digits, device_type)
+    loss = _compute_digit_loss(pred_digit_logits, target_digits)
     assert loss.ndim == 0  # scalar tensor
     assert torch.isfinite(loss) and loss > 0

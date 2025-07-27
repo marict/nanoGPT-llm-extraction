@@ -12,13 +12,13 @@ name = "dag_predictor-default"
 
 # Training intervals
 # ------------------
-# Evaluate every step and keep logs chatty for debugging.
-max_iters = 10
-eval_interval = 3
+# Ultra-minimal for speed.
+max_iters = 2
+eval_interval = 1
 log_interval = 1
 eval_iters = 1
 eval_once = False
-always_save_checkpoint = True
+always_save_checkpoint = False  # Skip checkpointing for speed
 # Remove any stale checkpoints when starting a new run.
 clear_previous_checkpoints = True
 
@@ -28,61 +28,53 @@ init_from = "scratch"  # or "resume"
 # Dataset configuration
 dataset = "dagset"  # Use DAG dataset for predictor training
 
-# DAG dataset parameters
-max_dag_depth = 6  # Match the model dag_depth for consistency
-# Choose 4 to match the NALU paper
-max_digits = 4
-max_decimal_places = 4
-base = 10  # Dataset generation now supports configurable bases
+# DAG dataset parameters - minimal for speed
+max_dag_depth = 2  # Minimal depth
+max_digits = 2  # Minimal digits
+max_decimal_places = 1  # Minimal decimal places
+base = 10
 
-# Expression generation settings
-english_conversion_probability = 0.5
-integer_no_decimal_probability = 0.5
-expression_simplification_probability = 0.5
-expression_expansion_probability = 0.5
-printing_style_probs = {
-    "sstr": 0.25,
-    "pretty": 0.25,
-    "ascii": 0.25,
-    "latex": 0.25,
-}
-# Data generation settings
+# Expression generation settings - simplified for speed
+english_conversion_probability = 0.0  # Skip to avoid string processing
+integer_no_decimal_probability = 1.0  # Only integers for speed
+expression_simplification_probability = 0.0  # Skip simplification
+expression_expansion_probability = 0.0  # Skip expansion
+printing_style_probs = {"sstr": 1.0}  # Only simplest format
 
-# Training hyperparameters
+# Training hyperparameters - minimal
 gradient_accumulation_steps = 1
-batch_size = 4
-block_size = 32
+batch_size = 2  # Minimal batch size
+block_size = 8  # Minimal block size
 
-# Model architecture (should match target model)
+# Model architecture - tiny for speed
 n_head = 1
-n_layer = 2
-n_embd = 32
+n_layer = 1  # Minimal layers
+n_embd = 8  # Minimal embedding
 dropout = 0.0
-bias = True  # Enable bias for ALU weight patching compatibility
-dag_depth = 4  # Target DAG depth
+bias = False  # Simpler for speed
+dag_depth = 2  # Match max_dag_depth for consistency
 
 
-# Optimization
-learning_rate = 6e-4
-weight_decay = 1e-1
+# Optimization - minimal
+learning_rate = 1e-3
+weight_decay = 0.0  # Skip for speed
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
 
-# Learning rate schedule
-warmup_iters = 2
-lr_decay_iters = 6
-min_lr = 1e-5
+# Learning rate schedule - minimal
+warmup_iters = 0  # Skip warmup
+lr_decay_iters = 2
+min_lr = 1e-4
 
-use_cyclical_lr = True
-cyclical_lr_period = 2
-cyclical_lr_amplitude = 0.1
+use_cyclical_lr = False  # Skip cyclical LR
+cyclical_lr_period = 1
+cyclical_lr_amplitude = 0.0
 
 # System settings
 backend = "gloo"
-# Keep this for mixed-precision support on modern CPUs/GPUs; fine on most hardware.
-dtype = "bfloat16"
-compile = True
+dtype = "float32"  # Fastest on most systems
+compile = False  # Skip compilation overhead
 keep_alive = False
 check_nans = False
 

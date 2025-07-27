@@ -17,8 +17,7 @@ from models.dag_model import (
     compute_single_value_statistics,
     execute_stack,
 )
-from predictor_config import DAGTrainConfig
-from predictor_utils import _compute_statistics_loss, compute_dag_structure_loss
+from predictor_utils import _compute_statistics_loss
 
 
 class TestStatisticsComputation:

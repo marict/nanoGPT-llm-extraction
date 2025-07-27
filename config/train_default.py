@@ -1,11 +1,11 @@
-"""Minimal CPU configuration used by default when running ``train.py``."""
+"""Ultra-fast CPU configuration used by default when running ``train.py``."""
 
-# evaluate every step and run a single iteration by default
-eval_interval = 3
+# evaluate every step and run minimal iterations by default
+eval_interval = 1
 log_interval = 1
 eval_iters = 1
 eval_once = False
-always_save_checkpoint = True
+always_save_checkpoint = False  # Skip checkpointing for speed
 init_from = "scratch"
 
 # Math evaluation settings for quick testing
@@ -14,36 +14,46 @@ math_eval_examples = 1
 name = "daggpt-default"
 
 # tiny dataset and network for quick local testing
-dataset = "proofpile"
+dataset = "dagset"  # Fast synthetic data instead of file-based proofpile
 gradient_accumulation_steps = 1
-batch_size = 4
-block_size = 32
-subset = 0.000001
+batch_size = 2  # Minimal batch size
+block_size = 8  # Minimal block size
 clear_previous_checkpoints = True
+
+# DAG dataset parameters - minimal for speed
+max_dag_depth = 2  # Minimal depth
+max_digits = 2  # Minimal digits
+max_decimal_places = 1  # Minimal decimal places
+base = 10
+
+# Expression generation settings - simplified for speed
+english_conversion_probability = 0.0  # Skip to avoid string processing
+integer_no_decimal_probability = 1.0  # Only integers for speed
+expression_simplification_probability = 0.0  # Skip simplification
+expression_expansion_probability = 0.0  # Skip expansion
+printing_style_probs = {"sstr": 1.0}  # Only simplest format
 
 n_layer = 1
 n_head = 1
-n_embd = 32
+n_embd = 8  # Minimal embedding
 dropout = 0.0
 bias = False
 
-dag_depth = 4
+dag_depth = 2  # Match max_dag_depth for consistency
 
-learning_rate = 6e-4
-max_iters = 6
-weight_decay = 1e-1
+learning_rate = 1e-3
+max_iters = 2  # Ultra-minimal iterations
+weight_decay = 0.0  # Skip for speed
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
 
 math_eval_max_examples = 1
 decay_lr = False
-warmup_iters = 2000
-lr_decay_iters = 600000
-min_lr = 6e-5
-
+warmup_iters = 0  # Skip warmup
+lr_decay_iters = 2
+min_lr = 1e-4
 
 backend = "gloo"
-dtype = "bfloat16"  # keep this, fine on A100/H100
-# dtype = "float32"
-compile = False
+dtype = "float32"  # Fastest on most systems
+compile = False  # Skip compilation overhead

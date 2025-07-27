@@ -450,6 +450,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 "intermediate": structures["target_intermediate_stats"].to(device),
                 "final": structures["target_final_stats"].to(device),
             }
+            final_token_pos = structures["final_token_pos"].to(device)
 
             loss_accum = _empty_metrics()
 
@@ -467,137 +468,55 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
                     if cfg.full_backbone and hasattr(raw_model, "dag"):
                         hidden = raw_model.forward_hidden(input_tokens)
-                        pred_sgn, _, pred_ops, pred_statistics = (
+                        pred_sgn, pred_digit_probs, pred_ops, pred_statistics = (
                             raw_model.dag.plan_predictor(hidden)
                         )
                     else:
-                        pred_sgn, _, pred_ops, pred_statistics = raw_model(input_tokens)
-
-                    # Average over sequence dimension
-                    pred_sgn_avg = pred_sgn.mean(dim=1)  # (B, num_nodes_pred)
+                        pred_sgn, pred_digit_probs, pred_ops, pred_statistics = (
+                            raw_model(input_tokens)
+                        )  # (B, num_nodes_pred)
+                    # Get raw logits for loss computation
                     if hasattr(raw_model, "dag"):  # GPT backbone with DAG
-                        last_digit_logits = (
+                        pred_sign_logits = raw_model.dag.plan_predictor.last_sign_logits
+                        pred_digit_logits = (
                             raw_model.dag.plan_predictor.last_digit_logits
-                            if hasattr(
-                                raw_model.dag.plan_predictor, "last_digit_logits"
-                            )
-                            else None
                         )
-                        last_operation_logits = (
+                        pred_op_logits = (
                             raw_model.dag.plan_predictor.last_operation_logits
-                            if hasattr(
-                                raw_model.dag.plan_predictor, "last_operation_logits"
-                            )
-                            else None
-                        )
-                        last_sign_logits = (
-                            raw_model.dag.plan_predictor.last_sign_logits
-                            if hasattr(raw_model.dag.plan_predictor, "last_sign_logits")
-                            else None
                         )
                     else:  # PredictorOnlyModel
-                        last_digit_logits = (
-                            raw_model.dag_predictor.last_digit_logits
-                            if hasattr(raw_model.dag_predictor, "last_digit_logits")
-                            else None
-                        )
-                        last_operation_logits = (
-                            raw_model.dag_predictor.last_operation_logits
-                            if hasattr(raw_model.dag_predictor, "last_operation_logits")
-                            else None
-                        )
-                        last_sign_logits = (
-                            raw_model.dag_predictor.last_sign_logits
-                            if hasattr(raw_model.dag_predictor, "last_sign_logits")
-                            else None
-                        )
-                    if last_digit_logits is None:
+                        pred_sign_logits = raw_model.dag_predictor.last_sign_logits
+                        pred_digit_logits = raw_model.dag_predictor.last_digit_logits
+                        pred_op_logits = raw_model.dag_predictor.last_operation_logits
+
+                    # Validate required logits are available
+                    if pred_sign_logits is None:
+                        raise RuntimeError("last_sign_logits not set in plan_predictor")
+                    if pred_digit_logits is None:
                         raise RuntimeError(
                             "last_digit_logits not set in plan_predictor"
                         )
-                    if last_sign_logits is None:
-                        raise RuntimeError("last_sign_logits not set in plan_predictor")
-                    if last_operation_logits is None:
+                    if pred_op_logits is None:
                         raise RuntimeError(
                             "last_operation_logits not set in plan_predictor"
                         )
 
-                    digit_logits_avg = last_digit_logits.mean(dim=1)  # (B,N,D,10)
-                    operation_logits_avg = last_operation_logits.mean(
-                        dim=1
-                    )  # (B,depth,n_ops)
-                    sign_logits_avg = last_sign_logits.mean(dim=1)  # (B,N)
-                    pred_ops_avg = pred_ops.mean(dim=1)  # (B, depth_pred, n_ops)
-
-                    # Ensure target and prediction tensors have compatible shapes
-                    target_nodes = target_sgn.size(1)
-                    pred_nodes = pred_sgn_avg.size(1)
-                    target_depth = target_ops.size(1)
-                    pred_depth = pred_ops_avg.size(1)
-
-                    # Verify dimension consistency - fail fast on mismatches
-                    if pred_nodes != target_nodes:
-                        raise ValueError(
-                            f"Model node dimension mismatch: predicted {pred_nodes} nodes, "
-                            f"but target has {target_nodes} nodes. This indicates a configuration "
-                            f"inconsistency between model dag_depth and data max_dag_depth. "
-                            f"Check that cfg.dag_depth == cfg.max_dag_depth."
-                        )
-
-                    if pred_depth != target_depth:
-                        raise ValueError(
-                            f"Model depth dimension mismatch: predicted depth {pred_depth}, "
-                            f"but target has depth {target_depth}. This indicates a configuration "
-                            f"inconsistency between model dag_depth and data max_dag_depth. "
-                            f"Check that cfg.dag_depth == cfg.max_dag_depth."
-                        )
-
-                    # Add sequence dimension
-                    sign_logits_seq = sign_logits_avg.unsqueeze(1)
-                    digit_logits_seq = digit_logits_avg.unsqueeze(1)
-                    operation_logits_seq = operation_logits_avg.unsqueeze(1)
-
-                    # Add sequence dimension to targets
-                    target_sgn_seq = target_sgn.unsqueeze(1)
-                    target_digits_seq = target_digits.unsqueeze(1)
-                    target_ops_seq = target_ops.unsqueeze(1)
-
-                    # Add sequence dimension to new target values
-                    target_initial_values_seq = target_initial_values.unsqueeze(1)
-                    target_final_exec_seq = target_final_exec.unsqueeze(1)
-
-                    # Get sequence length from predictions
-                    T = pred_statistics["initial"].shape[1]
-
-                    # Broadcast statistics targets to match per-token predictions (B, T, num_stats)
-                    # Same statistics apply to all tokens since they relate to the same expression
-                    target_statistics_seq = {
-                        "initial": target_statistics["initial"]
-                        .unsqueeze(1)
-                        .expand(-1, T, -1),
-                        "intermediate": target_statistics["intermediate"]
-                        .unsqueeze(1)
-                        .expand(-1, T, -1),
-                        "final": target_statistics["final"]
-                        .unsqueeze(1)
-                        .expand(-1, T, -1),
-                    }
-
                     # Use consistent access pattern via dag_predictor property
                     uncertainty_params = raw_model.dag_predictor.uncertainty_params
 
-                    # Compute losses with learned uncertainty weighting
+                    # Compute losses with learned uncertainty weighting using new signature
                     losses = compute_dag_structure_loss(
-                        sign_logits_seq,
-                        digit_logits_seq,
-                        operation_logits_seq,
+                        pred_sign_logits,
+                        pred_digit_logits,
+                        pred_op_logits,
                         pred_statistics,
-                        target_sgn_seq,
-                        target_digits_seq,
-                        target_ops_seq,
-                        target_initial_values_seq,
-                        target_final_exec_seq,
-                        target_statistics_seq,
+                        target_sgn,
+                        target_digits,
+                        target_ops,
+                        target_initial_values,
+                        target_final_exec,
+                        target_statistics,
+                        final_token_pos,
                         cfg,
                         uncertainty_params=uncertainty_params,
                     )
@@ -615,9 +534,23 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         loss_accum[key] = value
 
                     # ------------------------------------------------------------------ #
-                    # Compute and accumulate training metrics (same as evaluation)
+                    # Compute and accumulate training metrics using final position predictions
                     # ------------------------------------------------------------------ #
-                    pred_ops_idx = pred_ops_avg.argmax(dim=-1)  # (B, depth)
+                    # Extract predictions at final token positions for metrics
+                    B = pred_sign_logits.shape[0]
+                    batch_indices = torch.arange(B, device=pred_sign_logits.device)
+                    final_token_pos_clamped = torch.clamp(
+                        final_token_pos, 0, pred_sign_logits.shape[1] - 1
+                    )
+
+                    pred_ops_final = pred_op_logits[
+                        batch_indices, final_token_pos_clamped
+                    ]  # (B, depth, n_ops)
+                    pred_sgn_final = pred_sign_logits[
+                        batch_indices, final_token_pos_clamped
+                    ]  # (B, N)
+
+                    pred_ops_idx = pred_ops_final.argmax(dim=-1)  # (B, depth)
                     target_ops_idx = target_ops.argmax(dim=-1)
                     op_correct = pred_ops_idx.eq(target_ops_idx)
                     loss_accum["op_accuracy"] += (
@@ -629,7 +562,9 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         / cfg.gradient_accumulation_steps
                     )
 
-                    sign_correct = torch.sign(pred_sgn_avg).eq(torch.sign(target_sgn))
+                    sign_correct = torch.sign(torch.tanh(pred_sgn_final)).eq(
+                        torch.sign(target_sgn)
+                    )
                     loss_accum["sign_accuracy"] += (
                         sign_correct.float().mean().item()
                         / cfg.gradient_accumulation_steps
