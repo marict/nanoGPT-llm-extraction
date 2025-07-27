@@ -172,7 +172,7 @@ def test_value_loss_perfect_prediction(batch, seq, nodes, digits, depth):
 
 @pytest.mark.parametrize("batch,seq,nodes,digits,depth", [(2, 3, 3, 5, 2)])
 def test_loss_only_at_final_token_position(batch, seq, nodes, digits, depth):
-    """Test that loss is only calculated at final token positions, not at intermediate positions."""
+    """Test that loss is calculated only at the exact final_token_pos, not at other positions."""
     max_digits = 3
     max_decimal_places = 2
 
@@ -270,8 +270,8 @@ def test_loss_only_at_final_token_position(batch, seq, nodes, digits, depth):
         uncertainty_params=torch.zeros(6),
     )
 
-    # Loss should be very low because predictions at final positions are perfect
-    # Even though predictions at other positions are completely wrong
+    # Loss should be very low because predictions at final_token_pos are perfect
+    # Even though predictions at all other positions are completely wrong
     assert (
         losses["sign_loss"].item() < 0.1
     ), f"Sign loss should be low, got {losses['sign_loss'].item()}"
@@ -324,24 +324,11 @@ def test_different_final_token_positions(batch, seq, nodes, digits, depth):
     final_token_positions = [1, 2, 3]  # Different positions for each batch element
     final_token_pos = torch.tensor(final_token_positions, dtype=torch.long)
 
-    # Set correct predictions ONLY at the respective final token positions
+    # Set correct predictions ONLY at the respective final_token_pos
     for b in range(batch):
         final_pos = final_token_positions[b]
 
-        # Correct sign predictions at final position
-        for n in range(nodes):
-            if tgt_sgn[b, n] > 0:
-                pred_sign_logits[b, final_pos, n] = 10.0
-            else:
-                pred_sign_logits[b, final_pos, n] = -10.0
-
-        # Correct digit predictions at final position
-        for n in range(nodes):
-            for d in range(digits):
-                target_digit = tgt_digits[b, n, d].argmax()
-                pred_digits[b, final_pos, n, d, target_digit] = 10.0
-
-        # Wrong predictions at all other positions
+        # Wrong predictions at ALL positions except final_token_pos
         for s in range(seq):
             if s != final_pos:
                 for n in range(nodes):
@@ -356,6 +343,19 @@ def test_different_final_token_positions(batch, seq, nodes, digits, depth):
                         target_digit = tgt_digits[b, n, d].argmax()
                         wrong_digit = (target_digit + 1) % 10
                         pred_digits[b, s, n, d, wrong_digit] = 10.0
+
+        # Correct predictions ONLY at final_token_pos
+        for n in range(nodes):
+            # Correct sign
+            if tgt_sgn[b, n] > 0:
+                pred_sign_logits[b, final_pos, n] = 10.0
+            else:
+                pred_sign_logits[b, final_pos, n] = -10.0
+
+            # Correct digits
+            for d in range(digits):
+                target_digit = tgt_digits[b, n, d].argmax()
+                pred_digits[b, final_pos, n, d, target_digit] = 10.0
 
     cfg = _build_test_config(max_digits, max_decimal_places)
     target_final_exec = torch.zeros(batch)
@@ -377,7 +377,7 @@ def test_different_final_token_positions(batch, seq, nodes, digits, depth):
         uncertainty_params=torch.zeros(6),
     )
 
-    # Losses should be low because each batch element has correct predictions at its final position
+    # Losses should be low because each batch element has correct predictions at their respective final_token_pos
     assert (
         losses["sign_loss"].item() < 0.1
     ), f"Sign loss should be low, got {losses['sign_loss'].item()}"
