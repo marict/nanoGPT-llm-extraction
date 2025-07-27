@@ -6,7 +6,9 @@ name = "predictor_pretrain"
 
 # Training intervals
 eval_interval = 20
-log_interval = 1
+log_interval = (
+    10  # Changed from 1 to reduce memory pressure from gradient cosine computation
+)
 eval_iters = 1
 eval_once = False
 clear_previous_checkpoints = False

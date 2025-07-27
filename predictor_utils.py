@@ -429,8 +429,9 @@ def compute_gradient_cosines(
         return {f"grad_cosine_{name}": 0.0 for name in weighted_losses.keys()}
 
     gradient_cosines = {}
+    loss_items = list(weighted_losses.items())
 
-    for loss_name, loss_value in weighted_losses.items():
+    for i, (loss_name, loss_value) in enumerate(loss_items):
         # Quick checks first: finite and non-zero
         if not torch.isfinite(loss_value) or loss_value.item() == 0.0:
             if not torch.isfinite(loss_value):
@@ -439,11 +440,14 @@ def compute_gradient_cosines(
             continue
 
         try:
+            # Use retain_graph=False on the last iteration to free memory
+            is_last_iteration = i == len(loss_items) - 1
+
             # Compute gradient for this loss component
             loss_grads = torch.autograd.grad(
                 loss_value,
                 model_parameters,
-                retain_graph=True,
+                retain_graph=not is_last_iteration,
                 create_graph=False,
                 allow_unused=True,
             )

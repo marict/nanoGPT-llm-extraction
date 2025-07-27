@@ -622,27 +622,47 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     if should_compute_gradient_cosines:
                         # Compute gradient cosines for analysis
                         model_params = list(raw_model.parameters())
+
+                        # Create a fresh loss computation for gradient cosines to avoid
+                        # interfering with the main training backward pass
+                        cosine_losses = compute_dag_structure_loss(
+                            sign_logits_seq.detach(),
+                            digit_logits_seq.detach(),
+                            operation_logits_seq.detach(),
+                            {k: v.detach() for k, v in pred_statistics.items()},
+                            target_sgn_seq,
+                            target_digits_seq,
+                            target_ops_seq,
+                            target_initial_values_seq,
+                            target_final_exec_seq,
+                            target_statistics_seq,
+                            cfg,
+                            uncertainty_params=uncertainty_params.detach(),
+                        )
+
                         # All losses use automatic balancing (no manual weights)
                         weighted_losses = {
-                            "sign_loss": losses["sign_loss"],
-                            "digit_loss": losses["digit_loss"],
-                            "op_loss": losses["op_loss"],
-                            "value_loss": losses["value_loss"],
+                            "sign_loss": cosine_losses["sign_loss"],
+                            "digit_loss": cosine_losses["digit_loss"],
+                            "op_loss": cosine_losses["op_loss"],
+                            "value_loss": cosine_losses["value_loss"],
                             "exec_loss": (
-                                losses["exec_loss"]  # Already scaled automatically
+                                cosine_losses[
+                                    "exec_loss"
+                                ]  # Already scaled automatically
                                 if not cfg.check_nans
-                                or torch.isfinite(losses["exec_loss"]).all()
+                                or torch.isfinite(cosine_losses["exec_loss"]).all()
                                 else torch.tensor(
-                                    0.0, device=losses["exec_loss"].device
+                                    0.0, device=cosine_losses["exec_loss"].device
                                 )
                             ),
-                            "stats_loss": losses[
+                            "stats_loss": cosine_losses[
                                 "stats_loss"
                             ],  # Already scaled automatically
                         }
                         gradient_cosines = compute_gradient_cosines(
                             weighted_losses,
-                            losses["total_loss"],
+                            cosine_losses["total_loss"],
                             model_params,
                         )
                         losses.update(gradient_cosines)
