@@ -133,7 +133,7 @@ class TestConsistentUncertaintyParamsAccess:
         logger.compute_log_statistics(model)
         log_dict = logger.get_wandb_logging_dict(model)
 
-        # Verify uncertainty_params are included
+        # Verify uncertainty_params are included (weights are redundant since weights = exp(-params))
         expected_uncertainty_params_keys = [
             "uncertainty_params/sign",
             "uncertainty_params/digit",
@@ -142,20 +142,13 @@ class TestConsistentUncertaintyParamsAccess:
             "uncertainty_params/exec",
             "uncertainty_params/stats",
         ]
-        expected_weights_keys = [
-            "uncertainty_weights/sign",
-            "uncertainty_weights/digit",
-            "uncertainty_weights/op",
-            "uncertainty_weights/value",
-            "uncertainty_weights/exec",
-            "uncertainty_weights/stats",
-        ]
 
         for key in expected_uncertainty_params_keys:
             assert key in log_dict, f"Missing {key} in DAGLogger output"
 
-        for key in expected_weights_keys:
-            assert key in log_dict, f"Missing {key} in DAGLogger output"
+        # Verify no redundant weights keys are logged
+        weights_keys = [k for k in log_dict.keys() if k.startswith("weights/")]
+        assert len(weights_keys) == 0, f"Found redundant weights keys: {weights_keys}"
 
     def test_no_backwards_compatibility_shims(self):
         """Test that we removed old access patterns without backwards compatibility."""

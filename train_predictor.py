@@ -489,19 +489,13 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         pred_sgn, pred_digit_probs, pred_ops, pred_statistics = (
                             raw_model(input_tokens)
                         )  # (B, num_nodes_pred)
-                    # Get raw logits for loss computation
-                    if hasattr(raw_model, "dag"):  # GPT backbone with DAG
-                        pred_sign_logits = raw_model.dag.plan_predictor.last_sign_logits
-                        pred_digit_logits = (
-                            raw_model.dag.plan_predictor.last_digit_logits
-                        )
-                        pred_op_logits = (
-                            raw_model.dag.plan_predictor.last_operation_logits
-                        )
-                    else:  # PredictorOnlyModel
-                        pred_sign_logits = raw_model.dag_predictor.last_sign_logits
-                        pred_digit_logits = raw_model.dag_predictor.last_digit_logits
-                        pred_op_logits = raw_model.dag_predictor.last_operation_logits
+                    # Get raw logits for loss computation using consistent dag_predictor access
+                    assert (
+                        raw_model.dag_predictor is not None
+                    ), "DAG models should always have dag_predictor"
+                    pred_sign_logits = raw_model.dag_predictor.last_sign_logits
+                    pred_digit_logits = raw_model.dag_predictor.last_digit_logits
+                    pred_op_logits = raw_model.dag_predictor.last_operation_logits
 
                     # Validate required logits are available
                     if pred_sign_logits is None:

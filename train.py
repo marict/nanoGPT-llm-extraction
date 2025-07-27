@@ -275,11 +275,8 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     # --------------------------------------------------------------------- #
     data_start = time.time()
     print(f"[{time.time() - setup_start:.2f}s] Loading data")
-    # Look for data in dataset-specific subfolder (new structure)
+    # Look for data in dataset-specific subfolder
     data_dir = Path("data") / cfg.dataset / cfg.dataset
-    # If dataset-specific subfolder doesn't exist, try legacy location
-    if not data_dir.exists():
-        data_dir = Path("data") / cfg.dataset
 
     # -------------------------------------------------------------
     # Dataset preparation (streaming-aware)

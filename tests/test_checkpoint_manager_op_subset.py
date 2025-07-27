@@ -27,13 +27,11 @@ def test_checkpoint_manager_propagates_op_subset():
         cfg, checkpoint=None, device="cpu"
     )
 
-    # Access underlying predictor module (handles DDP etc.)
-    if hasattr(model, "dag_predictor"):
-        op_names_model = model.dag_predictor.op_names
-    elif hasattr(model, "dag") and hasattr(model.dag, "plan_predictor"):
-        op_names_model = model.dag.plan_predictor.op_names
-    else:
-        raise RuntimeError("Unexpected model architecture in test")
+    # Access underlying predictor module using consistent dag_predictor property
+    assert (
+        model.dag_predictor is not None
+    ), "DAG models should always have dag_predictor"
+    op_names_model = model.dag_predictor.op_names
 
     assert op_names_model == subset, (
         "initialize_dag_model did not pass operation subset to the predictor; "

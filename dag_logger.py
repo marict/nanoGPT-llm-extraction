@@ -190,8 +190,8 @@ class DAGLogger:
             current_uncertainty_params = (
                 model.dag_predictor.uncertainty_params.detach().cpu()
             )
-            uncertainty_weights = torch.exp(-current_uncertainty_params)
 
+            # Store only the raw parameters - weights can be derived as exp(-params)
             self.logging_data["uncertainty_params"] = {
                 "sign": current_uncertainty_params[0].item(),
                 "digit": current_uncertainty_params[1].item(),
@@ -199,15 +199,6 @@ class DAGLogger:
                 "value": current_uncertainty_params[3].item(),
                 "exec": current_uncertainty_params[4].item(),
                 "stats": current_uncertainty_params[5].item(),
-            }
-
-            self.logging_data["uncertainty_weights"] = {
-                "sign": uncertainty_weights[0].item(),
-                "digit": uncertainty_weights[1].item(),
-                "op": uncertainty_weights[2].item(),
-                "value": uncertainty_weights[3].item(),
-                "exec": uncertainty_weights[4].item(),
-                "stats": uncertainty_weights[5].item(),
             }
 
     def clear_gradient_hooks(self) -> None:
@@ -260,20 +251,16 @@ class DAGLogger:
             for op_name in OP_NAMES:
                 wandb_grad_metrics[f"grad/op/{op_name}"] = 0.0
 
-        # Get uncertainty params and uncertainty weights (if computed) - formatted for wandb
+        # Get uncertainty params - only log the raw parameters (weights are redundant since weights = exp(-params))
         wandb_uncertainty_metrics = {}
         if "uncertainty_params" in self.logging_data:
             uncertainty_params = self.logging_data["uncertainty_params"]
-            uncertainty_weights = self.logging_data["uncertainty_weights"]
 
-            # Add with proper prefixes for wandb
+            # Add uncertainty parameters with proper prefixes for wandb
             for component in ["sign", "digit", "op", "value", "exec", "stats"]:
                 wandb_uncertainty_metrics[f"uncertainty_params/{component}"] = (
                     uncertainty_params[component]
                 )
-                wandb_uncertainty_metrics[f"weights/{component}"] = uncertainty_weights[
-                    component
-                ]
 
         # Combine all metrics for wandb
         wandb_extra_vals = {}
