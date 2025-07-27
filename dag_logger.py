@@ -9,7 +9,6 @@ import math
 from typing import Dict, List, Optional
 
 import torch
-import torch.nn.functional as F
 
 from models.dag_model import OP_NAMES
 
