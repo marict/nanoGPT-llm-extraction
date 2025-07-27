@@ -227,6 +227,12 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         {"params": uncertainty_params, "lr": uncertainty_params_lr},
     ]
 
+    # Verify that uncertainty parameters exist
+    assert len(uncertainty_params) > 0, (
+        "No uncertainty parameters found in model! This indicates a problem with model initialization. "
+        "DAG models should always have uncertainty_params for loss balancing."
+    )
+
     print(f"Optimizer groups created:")
     print(f"  Main parameters: {len(other_params)} params with lr={cfg.learning_rate}")
     print(
@@ -302,9 +308,17 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
     try:
         while iter_num <= cfg.max_iters:
-            lr = get_lr(iter_num, cfg=cfg)
-            for param_group in optimizer.param_groups:
-                param_group["lr"] = lr
+            # Apply different learning rate schedules to different parameter groups
+            main_lr = get_lr(iter_num, cfg=cfg)
+            uncertainty_lr = uncertainty_params_lr  # Always use full LR (no warmup for uncertainty params)
+
+            # Update learning rates for each parameter group
+            # We should always have exactly 2 groups: main params and uncertainty params
+            assert (
+                len(optimizer.param_groups) == 2
+            ), f"Expected 2 optimizer groups, got {len(optimizer.param_groups)}"
+            optimizer.param_groups[0]["lr"] = main_lr  # Main parameters
+            optimizer.param_groups[1]["lr"] = uncertainty_lr  # Uncertainty parameters
 
             # Evaluation
             if iter_num % cfg.eval_interval == 0 and master_process:
@@ -634,11 +648,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     # issues where the local `lr` variable drifts from the value that is ultimately
                     # used for the step (e.g. if the optimizer or scheduler modifies it).
                     current_lr = optimizer.param_groups[0]["lr"]
-                    current_uncertainty_params_lr = (
-                        optimizer.param_groups[1]["lr"]
-                        if len(optimizer.param_groups) > 1
-                        else current_lr
-                    )
+                    current_uncertainty_params_lr = optimizer.param_groups[1]["lr"]
 
                     # Get current uncertainty_params values for monitoring via consistent access pattern
                     current_uncertainty_params = (
