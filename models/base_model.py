@@ -23,7 +23,7 @@ class BaseGPTModel(nn.Module):
     - Weight initialization
     - Parameter counting
     - Optimizer configuration
-    - MFU estimation
+
     - Forward hidden computation
     """
 
@@ -85,13 +85,13 @@ class BaseGPTModel(nn.Module):
                 dag_predictor = getattr(self, attr_name)
                 # Handle case where dag_predictor property returns None for dag_depth=0
                 if dag_predictor is not None:
-                    for name, dag_module in dag_predictor.named_modules():
+                    for _, dag_module in dag_predictor.named_modules():
                         if module is dag_module:
                             return True
 
         # Special case for dag.plan_predictor in GPT model
         if hasattr(self, "dag") and hasattr(self.dag, "plan_predictor"):
-            for name, dag_module in self.dag.plan_predictor.named_modules():
+            for _, dag_module in self.dag.plan_predictor.named_modules():
                 if module is dag_module:
                     return True
 
@@ -167,44 +167,6 @@ class BaseGPTModel(nn.Module):
         print(f"using fused AdamW: {use_fused}")
 
         return optimizer
-
-    def estimate_mfu(self, fwdbwd_per_iter, dt):
-        """Estimate model FLOPs utilization (MFU) in units of A100 bfloat16 peak FLOPS."""
-        # Estimate FLOPs per iteration (see PaLM paper Appendix B)
-        N = self.get_num_params()
-        L, H, Q, T = (
-            self._get_n_layer(),
-            self._get_n_head(),
-            self._get_n_embd() // self._get_n_head(),
-            self._get_max_sequence_length(),
-        )
-        flops_per_token = 6 * N + 12 * L * H * Q * T
-        flops_per_fwdbwd = flops_per_token * T
-        flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
-
-        # Express as ratio of A100 peak FLOPS
-        flops_achieved = flops_per_iter * (1.0 / dt)
-        flops_promised = 312e12  # A100 GPU bfloat16 peak FLOPS
-        mfu = flops_achieved / flops_promised
-        return mfu
-
-    def crop_sequence_length(self, new_length):
-        """Adjust model to use a smaller sequence length if needed."""
-        max_length = self._get_max_sequence_length()
-        assert new_length <= max_length
-
-        # Update config
-        self._set_max_sequence_length(new_length)
-
-        # Crop position embeddings
-        self.transformer.wpe.weight = nn.Parameter(
-            self.transformer.wpe.weight[:new_length]
-        )
-
-        # Crop attention bias matrices if they exist
-        for block in self.transformer.h:
-            if hasattr(block.attn, "bias"):
-                block.attn.bias = block.attn.bias[:, :, :new_length, :new_length]
 
     # Default config access implementations (identical across all models)
     def _get_vocab_size(self):

@@ -23,9 +23,7 @@ def test_checkpoint_manager_propagates_op_subset():
     ckpt_mgr = CheckpointManager("dag")
 
     # Initialise model (no checkpoint) and verify predictor's op_names
-    model, model_config = ckpt_mgr.initialize_dag_model(
-        cfg, checkpoint=None, device="cpu"
-    )
+    model, model_config = ckpt_mgr.initialize_dag_model(cfg, checkpoint=None)
 
     # Access underlying predictor module using consistent dag_predictor property
     assert (

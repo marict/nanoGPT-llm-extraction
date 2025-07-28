@@ -118,8 +118,7 @@ def divide_log_space(
 def _add_logs_same_sign(
     sgn: torch.Tensor, lx: torch.Tensor, ly: torch.Tensor, ignore_clip: bool = False
 ):
-    # torch.logaddexp operates in natural logarithm domain, which matches our
-    # internal representation. Convert to double precision for higher numerical
+    # Convert to double precision for higher numerical
     # accuracy during calculations. MPS backend (Apple Silicon) does not support
     # float64, so fall back to float32 on those devices.
     target_dtype = torch.float64 if lx.device.type != "mps" else torch.float32
@@ -501,7 +500,6 @@ class DAGPlanPredictor(nn.Module):
             for layer in self.initial_values_predictor:
                 if isinstance(layer, nn.Linear):
                     torch.nn.init.normal_(layer.weight, mean=0.0, std=0.02)
-                    # Bias was already set above for the last layer
 
         # Cross attention for operations: dag_structure_hidden attends to initial_value_hidden
         self.cross_attn = nn.MultiheadAttention(
@@ -812,7 +810,7 @@ def execute_stack(
         )
 
     # Convert digit probabilities to magnitude using centralized function
-    from predictor_utils import digits_to_magnitude
+    from tensor_utils import digits_to_magnitude
 
     raw_value = digits_to_magnitude(
         digit_probs, max_digits, max_decimal_places, base
@@ -1051,7 +1049,7 @@ class DifferentiableDAG(nn.Module):
         # Cache for logging
         self.final_hidden = final_hidden
         # Convert digit_probs to magnitudes for logging purposes using centralized function
-        from predictor_utils import digits_to_magnitude
+        from tensor_utils import digits_to_magnitude
 
         value_abs = digits_to_magnitude(
             digit_probs,

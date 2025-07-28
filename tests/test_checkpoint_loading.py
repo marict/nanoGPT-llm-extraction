@@ -108,19 +108,20 @@ class TestCheckpointLoading:
     @patch.dict(os.environ, {"RUNPOD_POD_ID": "test_pod_123"})
     @patch("runpod_service.stop_runpod")
     def test_runpod_termination_on_missing_checkpoint(self, mock_stop_runpod):
-        """Test that RunPod instance is terminated when checkpoint is missing."""
+        """Test that checkpoint loading fails appropriately when checkpoint is missing."""
         missing_path = self.test_checkpoint_dir / "nonexistent.pt"
 
         with pytest.raises(CheckpointLoadError):
             self.checkpoint_manager.load_checkpoint_from_path(missing_path)
 
-        # Verify that runpod service stop was called
-        mock_stop_runpod.assert_called_once()
+        # CheckpointManager no longer automatically calls stop_runpod
+        # That responsibility has moved to the training scripts
+        mock_stop_runpod.assert_not_called()
 
     @patch.dict(os.environ, {"RUNPOD_POD_ID": "test_pod_123"})
     @patch("runpod_service.stop_runpod")
     def test_runpod_termination_on_invalid_checkpoint(self, mock_stop_runpod):
-        """Test that RunPod instance is terminated when checkpoint is invalid."""
+        """Test that checkpoint loading fails appropriately when checkpoint is invalid."""
         # Create checkpoint missing required keys
         incomplete_checkpoint = {"model": {"layer.weight": torch.randn(2, 2)}}
         checkpoint_path = self.create_test_checkpoint(
@@ -133,8 +134,9 @@ class TestCheckpointLoading:
                 checkpoint_path, expected_keys=expected_keys
             )
 
-        # Verify that runpod service stop was called
-        mock_stop_runpod.assert_called_once()
+        # CheckpointManager no longer automatically calls stop_runpod
+        # That responsibility has moved to the training scripts
+        mock_stop_runpod.assert_not_called()
 
     @patch.dict(os.environ, {}, clear=True)  # Clear RUNPOD_POD_ID
     def test_no_runpod_termination_when_not_on_runpod(self):
@@ -438,7 +440,7 @@ class TestCheckpointLoadingIntegration:
     @patch.dict(os.environ, {"RUNPOD_POD_ID": "integration_test_pod"})
     @patch("runpod_service.stop_runpod")
     def test_runpod_integration(self, mock_stop_runpod):
-        """Test RunPod integration in a realistic scenario."""
+        """Test checkpoint loading behavior in a realistic scenario."""
         from train import TrainConfig
 
         cfg = TrainConfig()
@@ -449,8 +451,9 @@ class TestCheckpointLoadingIntegration:
         with pytest.raises(CheckpointLoadError):
             checkpoint_manager.handle_checkpoint_loading(cfg)
 
-        # Verify RunPod termination was attempted
-        mock_stop_runpod.assert_called_once()
+        # CheckpointManager no longer automatically calls stop_runpod
+        # That responsibility has moved to the training scripts
+        mock_stop_runpod.assert_not_called()
 
 
 if __name__ == "__main__":

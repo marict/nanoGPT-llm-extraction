@@ -40,6 +40,7 @@ def test_initialize_dag_model_ignores_incompatible_checkpoint():
         "max_digits": 2,
         "max_decimal_places": 2,
         "op_names": OP_NAMES.copy(),
+        "train_uncertainty_params": True,
     }
     saved_model_cfg = PredictorOnlyConfig(**saved_cfg_dict)
     saved_model = PredictorOnlyModel(saved_model_cfg)

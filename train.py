@@ -8,8 +8,10 @@ and `train()`.
 
 from __future__ import annotations
 
+import gc
 import os
 import time
+import traceback
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -499,7 +501,6 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
         t0 = time.time()
         iter_num = locals().get("iter_num", 0)
         best_val_loss = locals().get("best_val_loss", 1e9)
-        running_mfu = -1.0
         raw_model = model.module if ddp else model
         extra_vals = {}
 
@@ -630,7 +631,6 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                             "train/loss": losses["train"],
                             "val/loss": losses["val"],
                             "lr": optimizer.param_groups[0]["lr"],
-                            "mfu": running_mfu * 100,
                             **eval_extra,
                         }
 
@@ -811,21 +811,9 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                         print(
                             f"ERROR: Failed to log training data to wandb at iter {iter_num}: {e}"
                         )
-                        import traceback
-
                         traceback.print_exc()
                     lossf = loss.item() * cfg.gradient_accumulation_steps
-                    if iter_num >= 5:
-                        mfu = raw_model.estimate_mfu(
-                            cfg.batch_size * cfg.gradient_accumulation_steps, dt
-                        )
-                        running_mfu = (
-                            0.9 * running_mfu + 0.1 * mfu if running_mfu >= 0 else mfu
-                        )
-                    print(
-                        f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, "
-                        f"mfu {running_mfu*100:.2f}%"
-                    )
+                    print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms")
 
                 # Reset error counter on successful training step
                 consecutive_errors = 0
@@ -840,8 +828,6 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
 
                 # Explicit garbage collection every 200 iterations
                 if iter_num % 200 == 0:
-                    import gc
-
                     gc.collect()
                     if device == "cuda":
                         torch.cuda.empty_cache()
@@ -906,7 +892,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
         run.finish()
 
         # Stop RunPod instance if we're running on RunPod and keep-alive is not enabled
-        if os.getenv("RUNPOD_POD_ID") and not getattr(cfg, "keep_alive", False):
+        if not getattr(cfg, "keep_alive", False):
             runpod_service.stop_runpod()
 
 

@@ -57,8 +57,6 @@ python -u "$@" 2>&1 | tee "$log_file"
 
 log "done in $(( $(date +%s)-start_time ))s"
 
-# Check if keep-alive flag was passed
-if [[ "$*" == *"--keep-alive"* ]]; then
-    log "keep-alive mode enabled – keeping container alive"
-    tail -f /dev/null
-fi
+# Keep container alive indefinitely - it's up to the code to kill runpod
+log "keeping container alive indefinitely"
+tail -f /dev/null

@@ -6,6 +6,7 @@ Common functionality for data preparation scripts.
 
 from __future__ import annotations
 
+import argparse
 import os
 import pickle
 import shutil
@@ -108,8 +109,6 @@ class DataPrep:
             runpod_data_dir: Path to RunPod data directory
             filenames: List of filenames to copy
         """
-        import shutil
-
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
         for filename in filenames:
@@ -311,8 +310,6 @@ def get_common_parser(description: str):
     Returns:
         Configured ArgumentParser
     """
-    import argparse
-
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
         "--data-dir", type=Path, default=Path("."), help="Output directory"

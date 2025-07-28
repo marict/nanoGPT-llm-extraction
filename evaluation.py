@@ -295,11 +295,10 @@ def evaluate_from_dataset_file(
     losses = []
 
     # Get model vocab size to filter out-of-range tokens
-    vocab_size = (
-        getattr(model.config, "vocab_size", 50304)
-        if hasattr(model, "config")
-        else 50304
-    )
+    try:
+        vocab_size = model.config.vocab_size
+    except AttributeError:
+        raise ValueError("Model config does not have a vocab_size attribute")
 
     with open(dataset_file, "r", encoding="utf-8") as f:
         for line in f:

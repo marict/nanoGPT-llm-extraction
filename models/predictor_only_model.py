@@ -36,6 +36,11 @@ class PredictorOnlyConfig:
     # Allowed operation names for DAG execution/prediction. Defaults to the full set.
     op_names: list[str] = field(default_factory=lambda: OP_NAMES.copy())
 
+    # Uncertainty weighting configuration
+    train_uncertainty_params: bool = (
+        True  # If False, uncertainty params stay at initial values
+    )
+
 
 class PredictorOnlyModel(BaseGPTModel):
     """

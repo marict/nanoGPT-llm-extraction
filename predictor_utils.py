@@ -15,12 +15,12 @@ from tiktoken import get_encoding
 from data.dagset.streaming import DAGExample
 from models.dag_model import OP_NAMES, execute_stack
 from predictor_config import DAGTrainConfig
+from tensor_utils import digits_to_magnitude
 
 __all__ = [
     "tokenize_texts",
     "compute_dag_structure_loss",
     "evaluate_dag_model",
-    "digits_to_magnitude",
 ]
 
 
@@ -487,40 +487,6 @@ def compute_dag_structure_loss(
 # --------------------------------------------------------------------------- #
 # Utility helpers for digit tensors
 # --------------------------------------------------------------------------- #
-
-
-def digits_to_magnitude(
-    digits: torch.Tensor,
-    max_digits: int,
-    max_decimal_places: int,
-    base: int = 10,
-) -> torch.Tensor:
-    """Convert a digit tensor to absolute magnitude.
-
-    Args:
-        digits: (..., D, base) tensor where the last dimension contains digit
-            probabilities (or one-hot values) for each decimal place.
-        max_digits: integer digits (D1).
-        max_decimal_places: fractional digits (D2).
-        base: number base for digit representation.
-
-    Returns:
-        magnitude: tensor with shape digits.shape[:-2]
-    """
-    device, dtype = digits.device, digits.dtype
-    digits_vals = (digits * torch.arange(base, device=device, dtype=dtype)).sum(
-        -1
-    )  # (..., D)
-
-    int_weights = base ** torch.arange(
-        max_digits - 1, -1, -1, device=device, dtype=dtype
-    )
-    frac_weights = base ** torch.arange(
-        -1, -max_decimal_places - 1, -1, device=device, dtype=dtype
-    )
-    weights = torch.cat((int_weights, frac_weights))  # (D,)
-    magnitude = (digits_vals * weights).sum(-1)
-    return magnitude
 
 
 # --------------------------------------------------------------------------- #

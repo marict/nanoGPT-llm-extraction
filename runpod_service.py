@@ -30,17 +30,14 @@ class RunPodError(Exception):
 
 def _check_git_status() -> None:
     """Check for uncommitted git changes and fail if any are found."""
-    try:
-        # Check if we're in a git repository
-        subprocess.run(
-            ["git", "rev-parse", "--git-dir"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=5,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return  # Skip check if not in git repo
+    # Check if we're in a git repository
+    subprocess.run(
+        ["git", "rev-parse", "--git-dir"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=5,
+    )
 
     try:
         # Get git status
@@ -92,13 +89,35 @@ def _resolve_gpu_id(gpu_type: str) -> str:
 
 def _extract_config_name(config_path: str) -> str:
     """Extract the 'name' field from a training config file."""
-    try:
-        data: dict[str, str] = {}
-        with open(config_path, "r") as f:
-            exec(f.read(), data)
-        return data.get("name", "daggpt-train")
-    except Exception:
+    from pathlib import Path
+
+    config_file = Path(config_path)
+    if not config_file.exists():
         return "daggpt-train"
+
+    if not config_file.is_file():
+        return "daggpt-train"
+
+    try:
+        with open(config_file, "r") as f:
+            content = f.read()
+    except (OSError, IOError):
+        return "daggpt-train"
+
+    if not content.strip():
+        return "daggpt-train"
+
+    data: dict[str, str] = {}
+    try:
+        exec(content, data)
+    except (SyntaxError, ValueError, TypeError, NameError, AttributeError):
+        return "daggpt-train"
+
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return "daggpt-train"
+
+    return name
 
 
 def _build_training_command(
@@ -282,6 +301,7 @@ def start_cloud_training(
         print(f"Remote training will resume W&B run: {wandb_run_id}")
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: failed to rename W&B run: {exc}")
+        raise exc
 
     print(f"Starting training job '{pod_name}' (pod {pod_id}) on {gpu_type}")
     return pod_id
@@ -314,7 +334,7 @@ def init_local_wandb_and_open_browser(
 
     except Exception as e:
         print(f"Failed to initialize W&B locally: {e}")
-        return None
+        raise e
 
 
 def _open_browser(url: str) -> None:
@@ -353,9 +373,11 @@ def stop_runpod(pod_id: str | None = None, api_key: str | None = None) -> bool:
     pod_id = pod_id or os.getenv("RUNPOD_POD_ID")
     api_key = api_key or os.getenv("RUNPOD_API_KEY")
 
-    if not pod_id or not api_key:
-        print("RUNPOD_POD_ID or RUNPOD_API_KEY not set – skipping pod stop.")
-        return False
+    if not pod_id:
+        raise ValueError("RUNPOD_POD_ID not set.")
+
+    if not api_key:
+        raise ValueError("RUNPOD_API_KEY not set.")
 
     # Try the Python SDK first
     try:
@@ -377,7 +399,7 @@ def stop_runpod(pod_id: str | None = None, api_key: str | None = None) -> bool:
         return True
     except Exception as exc:  # noqa: BLE001
         print(f"Failed to stop pod: {exc}")
-        return False
+        raise exc
 
 
 if __name__ == "__main__":

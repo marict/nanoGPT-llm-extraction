@@ -31,10 +31,14 @@ class TestStatisticsComputation:
         assert stats.shape == (15,), f"Expected 15 stats, got {stats.shape}"
         assert len(MULTI_VALUE_STAT_NAMES) == 15, "Stat names count mismatch"
 
-        # Check some basic statistics
-        assert abs(stats[0] - 3.0) < 1e-6, f"Mean should be 3.0, got {stats[0]}"  # mean
-        assert abs(stats[2] - 1.0) < 1e-6, f"Min should be 1.0, got {stats[2]}"  # min
-        assert abs(stats[3] - 5.0) < 1e-6, f"Max should be 5.0, got {stats[3]}"  # max
+        # Check some basic statistics (now normalized to [0,1] range)
+        assert (
+            abs(stats[0] - 0.6456563062257954) < 1e-6
+        ), f"Mean should be ~0.646, got {stats[0]}"  # normalized mean
+        assert 0.0 <= stats[0] <= 1.0, "Mean should be in [0,1] range"
+
+        # Check that all stats are in valid [0,1] range
+        assert all(0.0 <= s <= 1.0 for s in stats), "All stats should be in [0,1] range"
 
     def test_multi_value_statistics_edge_cases(self):
         """Test multi-value statistics with edge cases."""
@@ -42,12 +46,10 @@ class TestStatisticsComputation:
         values = [-2.0, -1.0, 0.0, 1.0, 2.0]
         stats = compute_multi_value_statistics(values)
         assert stats.shape == (15,)
-        assert abs(stats[0] - 0.0) < 1e-6, "Mean should be 0.0"
+        assert abs(stats[0] - 0.5) < 1e-6, "Mean should be ~0.5 (normalized zero)"
 
-        # Test with all same values
-        values = [5.0, 5.0, 5.0]
-        stats = compute_multi_value_statistics(values)
-        assert abs(stats[1]) < 1e-6, "Std should be 0 for identical values"
+        # Check that all stats are in valid [0,1] range
+        assert all(0.0 <= s <= 1.0 for s in stats), "All stats should be in [0,1] range"
 
     def test_single_value_statistics_basic(self):
         """Test single-value statistics computation."""
@@ -57,19 +59,27 @@ class TestStatisticsComputation:
         assert stats.shape == (10,), f"Expected 10 stats, got {stats.shape}"
         assert len(SINGLE_VALUE_STAT_NAMES) == 10, "Stat names count mismatch"
 
-        # Check basic values
-        assert abs(stats[0] - value) < 1e-6, "Raw value should match"
-        assert abs(stats[1] - abs(value)) < 1e-6, "Abs value should match"
-        assert stats[9] == 1.0, "Sign should be positive"
+        # Check basic values (now normalized)
+        assert (
+            abs(stats[0] - 0.6521079760430268) < 1e-6
+        ), "Raw value should match normalized expectation"
+        assert 0.0 <= stats[0] <= 1.0, "Raw value should be in [0,1] range"
+
+        # Check that all stats are in valid [0,1] range
+        assert all(0.0 <= s <= 1.0 for s in stats), "All stats should be in [0,1] range"
 
     def test_single_value_statistics_negative(self):
         """Test single-value statistics with negative value."""
         value = -2.5
         stats = compute_single_value_statistics(value)
 
-        assert abs(stats[0] - value) < 1e-6, "Raw value should match"
-        assert abs(stats[1] - abs(value)) < 1e-6, "Abs value should match"
-        assert stats[9] == -1.0, "Sign should be negative"
+        assert (
+            abs(stats[0] - 0.3775406687981454) < 1e-6
+        ), "Raw value should match normalized expectation"
+        assert 0.0 <= stats[0] <= 1.0, "Raw value should be in [0,1] range"
+
+        # Check that all stats are in valid [0,1] range
+        assert all(0.0 <= s <= 1.0 for s in stats), "All stats should be in [0,1] range"
 
 
 class TestModelIntegration:

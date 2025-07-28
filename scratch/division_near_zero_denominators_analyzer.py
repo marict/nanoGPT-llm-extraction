@@ -7,6 +7,8 @@ WARNING: Final value mismatch between sympy and tensor execute: -1720587.625 != 
 Includes verbose sympy evaluation tracing to compare against DAG execution.
 """
 
+import traceback
+
 import sympy
 import torch
 from sympy import symbols
@@ -109,9 +111,8 @@ def debug_execute_stack_directly(example):
 
     except Exception as e:
         print(f"❌ ERROR in execute_stack: {str(e)}")
-        import traceback
-
         traceback.print_exc()
+        raise e
 
 
 def test_specific_production_seed(seed: int):
@@ -183,12 +184,3 @@ def test_specific_production_seed(seed: int):
         print(f"Relative error:          {rel_error:.8g}")
 
     return example
-
-
-if __name__ == "__main__":
-    # Test the specific production case with verbose sympy evaluation
-    production_example = test_specific_production_seed(450429774)
-
-    print("\n" + "=" * 70)
-    print("ANALYSIS COMPLETE")
-    print("✅ Use this tool to systematically reproduce and debug DAG execution issues")

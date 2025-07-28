@@ -6,6 +6,7 @@ import argparse
 import os
 import random
 import time
+import traceback
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from torch.distributed import destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import runpod_service
+import training_utils as _tu
 import wandb
 from checkpoint_manager import CheckpointManager
 from data.dagset.streaming import create_dag_structure_dataloaders
@@ -53,6 +55,7 @@ def _empty_metrics() -> dict[str, float]:
         "op_loss": 0.0,
         "value_loss": 0.0,
         "exec_loss": 0.0,
+        "stats_loss": 0.0,
         "op_accuracy": 0.0,
         "full_dag_op_match": 0.0,
         "sign_accuracy": 0.0,
@@ -65,7 +68,6 @@ def parse_args() -> argparse.ArgumentParser:  # type: ignore[override]
     """Light wrapper that makes the *config* positional argument optional with a
     sensible default, while re-using the common parser from ``training_utils``.
     """
-    import training_utils as _tu
 
     parser = _tu.parse_args()
 
@@ -103,12 +105,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     # Will hold the sanitised W&B run name once available.
     safe_run_name: str = "default_run"
 
-    # Clean previous checkpoints unless we're running with overwrite_previous
-    if (
-        master_process
-        and cfg.clear_previous_checkpoints
-        and not getattr(cfg, "overwrite_previous", False)
-    ):
+    # Clean previous checkpoints
+    if master_process and cfg.clear_previous_checkpoints:
         checkpoint_manager.clean_previous_checkpoints(cfg.name)
 
     # W&B initialization
@@ -168,15 +166,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
     ctx = nullcontext()
 
-    # --------------------------------------------------------------------- #
-    # Model-aware Data loading (will be created after model is initialized)
-    # --------------------------------------------------------------------- #
-    train_loader = val_loader = None  # placeholders; real loaders created later
-
-    # --------------------------------------------------------------------- #
-    # Model creation and checkpoint loading
-    # --------------------------------------------------------------------- #
-
+    train_loader = None
     # Load checkpoint (if any) to resume training and obtain iteration/metrics
     expected_keys = [
         "model",
@@ -187,16 +177,15 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     ]
     checkpoint, iter_num, best_val_loss = checkpoint_manager.handle_checkpoint_loading(
         cfg,
-        device,
-        model_name,
-        expected_keys,
+        device=device,
+        expected_keys=expected_keys,
         prefer_best=cfg.save_best,
     )
 
     # Initialise or load the model via the checkpoint manager helper. This
     # centralises all checkpoint/model-config logic in one place.
     model, model_config = checkpoint_manager.initialize_dag_model(
-        cfg, checkpoint, device, setup_start
+        cfg, checkpoint, setup_start_time=setup_start
     )
 
     model.to(device)
@@ -269,15 +258,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     if ddp:
         model = DDP(model, device_ids=[int(device.split(":")[-1])])
 
-    # --------------------------------------------------------------------- #
-    # Create DataLoaders that respect the model's available operations
-    # --------------------------------------------------------------------- #
-
     raw_model = model.module if ddp else model
     # Restrict dataset to the subset of ops requested by the config (defaults to all ops)
     allowed_operations = getattr(cfg, "op_names", OP_NAMES)
-
-    train_loader, _ = create_dag_structure_dataloaders(
+    train_loader, val_loader = create_dag_structure_dataloaders(
         train_batch_size=cfg.batch_size,
         val_batch_size=cfg.batch_size,
         max_depth=cfg.dag_depth,
@@ -322,37 +306,15 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
             # Evaluation
             if iter_num % cfg.eval_interval == 0 and master_process:
-                # Recreate validation loader each time so that with a fixed
-                # `seed` we always evaluate on the *same* sequence of
-                # examples (starting from the very first batch). Without this
-                # the underlying generator would advance each epoch, giving
-                # different samples even though the RNG seed itself is fixed.
                 if cfg.seed == -1:
                     seed = random.randint(0, 10000)
                 else:
                     seed = cfg.seed
 
-                _, val_loader_eval = create_dag_structure_dataloaders(
-                    train_batch_size=cfg.batch_size,
-                    val_batch_size=cfg.batch_size,
-                    max_depth=cfg.dag_depth,
-                    # Large prime to avoid overlap with training and repeated values on each eval.
-                    seed=seed + iter_num * 97919,
-                    english_conversion_probability=cfg.english_conversion_probability,
-                    integer_no_decimal_probability=cfg.integer_no_decimal_probability,
-                    expression_simplification_probability=cfg.expression_simplification_probability,
-                    expression_expansion_probability=cfg.expression_expansion_probability,
-                    max_digits=cfg.max_digits,
-                    max_decimal_places=cfg.max_decimal_places,
-                    base=cfg.base,
-                    allowed_operations=allowed_operations,
-                    printing_style_probs=cfg.printing_style_probs,
-                )
-
                 model.eval()
                 eval_start_time = time.time()
                 eval_losses = evaluate_dag_model(
-                    raw_model, val_loader_eval, device, ctx, cfg, cfg.eval_iters, seed
+                    raw_model, val_loader, device, ctx, cfg, cfg.eval_iters, seed
                 )
                 eval_time_ms = (time.time() - eval_start_time) * 1000 / cfg.eval_iters
                 if master_process:
@@ -440,7 +402,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
                 model.train()
 
-            # Early stopping
+            # Eval once
             if iter_num == 0 and cfg.eval_once:
                 print(
                     "🎯 EVAL_ONCE: Evaluation completed. Exiting after single evaluation run."
@@ -482,12 +444,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
                     if cfg.full_backbone and hasattr(raw_model, "dag"):
                         hidden = raw_model.forward_hidden(input_tokens)
-                        pred_sgn, pred_digit_probs, pred_ops, pred_statistics = (
-                            raw_model.dag.plan_predictor(hidden)
-                        )
+                        _, _, _, pred_statistics = raw_model.dag.plan_predictor(hidden)
                     else:
-                        pred_sgn, pred_digit_probs, pred_ops, pred_statistics = (
-                            raw_model(input_tokens)
+                        _, _, _, pred_statistics = raw_model(
+                            input_tokens
                         )  # (B, num_nodes_pred)
                     # Get raw logits for loss computation using consistent dag_predictor access
                     assert (
@@ -639,7 +599,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     f", time {dt*1000:.2f}ms"
                 )
 
-                # realtime training log emitted via wandb
+                # Realtime training log emitted via wandb
                 if master_process:
                     print(log_msg)
 
@@ -704,7 +664,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     # Combine pending validation metrics if they exist
                     if pending_val_metrics is not None:
                         log_dict.update(pending_val_metrics)
-                        pending_val_metrics = None  # Clear after using
+                        pending_val_metrics = None
 
                     wandb.log(log_dict, step=iter_num, commit=True)
 
@@ -719,11 +679,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
 
     except Exception as e:
         print("Fatal error in training loop – see traceback above")
-        import traceback
-
         traceback.print_exc()
     finally:
-        # Train loop duration print removed
         # Cleanup
         if ddp:
             destroy_process_group()
@@ -749,8 +706,8 @@ def main() -> None:
         try:
             update_config(cfg, load_config_file(args.config))
         except Exception:
-            # If config loading fails, continue with defaults for runpod launch
-            pass
+            print("Failed to load config file, continuing with defaults")
+            raise e
 
         apply_overrides(cfg, overrides)
 
@@ -774,7 +731,7 @@ def main() -> None:
         )
         return
 
-    # For local training, wrap everything in error handling for proper runpod termination
+    # Wrap everything in error handling for proper runpod termination
     cfg = None
     try:
         cfg = DAGTrainConfig()
@@ -798,18 +755,13 @@ def main() -> None:
 
     except Exception as e:
         print(f"Fatal error in predictor training: {e}")
-        import traceback
-
         traceback.print_exc()
 
         # Stop RunPod instance on error if we're running on RunPod
-        if os.getenv("RUNPOD_POD_ID") and (
-            cfg is None or not getattr(cfg, "keep_alive", False)
-        ):
+        if not getattr(cfg, "keep_alive", False):
             runpod_service.stop_runpod()
 
-        # Re-raise the exception to ensure proper exit code
-        raise
+        raise e
 
 
 if __name__ == "__main__":

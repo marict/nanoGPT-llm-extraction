@@ -27,6 +27,14 @@ except ModuleNotFoundError:
 from models.dag_model import GPT, OP_NAMES, GPTConfig
 from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
 
+# Optional runpod service for instance management
+try:
+    import runpod_service
+
+    _HAVE_RUNPOD = True
+except ImportError:
+    _HAVE_RUNPOD = False
+
 # Checkpoint directory
 CHECKPOINT_DIR = (
     "/runpod-volume/checkpoints" if os.path.exists("/runpod-volume") else "checkpoints"
@@ -205,16 +213,6 @@ class CheckpointManager:
 
             print(f"ERROR: {error_msg}")
 
-            # Kill runpod instance if running on runpod
-            if os.getenv("RUNPOD_POD_ID"):
-                try:
-                    import runpod_service
-
-                    print("Stopping RunPod instance due to missing checkpoint...")
-                    runpod_service.stop_runpod()
-                except Exception as e:
-                    print(f"Warning: Failed to stop RunPod instance: {e}")
-
             raise CheckpointLoadError(error_msg)
 
         # Try to load the checkpoint
@@ -225,16 +223,6 @@ class CheckpointManager:
             error_msg = f"Failed to load checkpoint from {checkpoint_path}: {e}"
             print(f"ERROR: {error_msg}")
 
-            # Kill runpod instance if running on runpod
-            if os.getenv("RUNPOD_POD_ID"):
-                try:
-                    import runpod_service
-
-                    print("Stopping RunPod instance due to checkpoint loading error...")
-                    runpod_service.stop_runpod()
-                except Exception as stop_e:
-                    print(f"Warning: Failed to stop RunPod instance: {stop_e}")
-
             raise CheckpointLoadError(error_msg) from e
 
         # Validate checkpoint structure
@@ -244,16 +232,6 @@ class CheckpointManager:
                 error_msg = f"Checkpoint missing required keys: {missing_keys}"
                 print(f"ERROR: {error_msg}")
 
-                # Kill runpod instance if running on runpod
-                if os.getenv("RUNPOD_POD_ID"):
-                    try:
-                        import runpod_service
-
-                        print("Stopping RunPod instance due to invalid checkpoint...")
-                        runpod_service.stop_runpod()
-                    except Exception as stop_e:
-                        print(f"Warning: Failed to stop RunPod instance: {stop_e}")
-
                 raise CheckpointLoadError(error_msg)
 
         return checkpoint
@@ -262,7 +240,6 @@ class CheckpointManager:
         self,
         config,
         device: str = "cpu",
-        model_name: str = None,
         expected_keys: Optional[List[str]] = None,
         prefer_best: bool = False,
     ) -> Tuple[Optional[Dict], int, float]:
@@ -335,16 +312,6 @@ class CheckpointManager:
                         )
 
                 print(f"ERROR: {error_msg}")
-
-                # Kill runpod instance if running on runpod
-                if os.getenv("RUNPOD_POD_ID"):
-                    try:
-                        import runpod_service
-
-                        print("Stopping RunPod instance due to missing checkpoint...")
-                        runpod_service.stop_runpod()
-                    except Exception as e:
-                        print(f"Warning: Failed to stop RunPod instance: {e}")
 
                 raise CheckpointLoadError(error_msg)
 
@@ -602,7 +569,6 @@ class CheckpointManager:
         self,
         cfg,
         checkpoint: Optional[Dict],
-        device: str = "cpu",
         setup_start_time: float | None = None,
     ) -> Tuple[torch.nn.Module, object]:
         """Initialize a DAG predictor (GPT backbone or PredictorOnly) model.
