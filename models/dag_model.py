@@ -451,6 +451,10 @@ class DAGPlanPredictor(nn.Module):
         # Initialize to 0 (σ² = 1) so all losses start equally weighted
         self.uncertainty_params = nn.Parameter(torch.zeros(6))
 
+        # Disable gradient computation for uncertainty params if training is disabled
+        if not config.train_uncertainty_params:
+            self.uncertainty_params.requires_grad_(False)
+
         # Resolve operations from config
         self.op_names = config.op_names
         self.n_ops = len(self.op_names)
@@ -1088,6 +1092,11 @@ class GPTConfig:
     max_digits: int = 4  # Integer digits
     max_decimal_places: int = 6  # Fractional digits
     base: int = 10  # Number base for digit prediction (10=decimal, 16=hex, etc.)
+
+    # Uncertainty weighting configuration
+    train_uncertainty_params: bool = (
+        True  # If False, uncertainty params stay at initial values (all losses weighted equally)
+    )
 
 
 # Main GPT model

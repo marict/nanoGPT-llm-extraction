@@ -17,11 +17,12 @@ reload_reset_iters = False
 init_from = "scratch"
 
 # Dataset configuration
-dataset = "dagset"  # Use DAG dataset for predictor training
+dataset = "dagset"
 
 # DAG dataset parameters
 max_dag_depth = 4  # Must match dag_depth in model config
 # The original NALU paper had values in range 9999
+
 max_digits = 4
 max_decimal_places = 4
 base = 10
@@ -44,8 +45,8 @@ batch_size = 64
 block_size = 512
 
 # Model architecture (larger for RunPod training)
-n_head = 1
-n_layer = 4
+n_layer = 12
+n_head = 12
 n_embd = n_head * 64
 dropout = 0.1
 bias = True
@@ -71,6 +72,7 @@ dtype = "bfloat16"  # Use bfloat16 for efficiency if available
 compile = False
 keep_alive = False  # Auto-stop by default
 check_nans = False  # Check for NaNs in cloud training
+train_uncertainty_params = False
 
 # Random seeds
 seed = 42
