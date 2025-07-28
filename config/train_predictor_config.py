@@ -45,8 +45,8 @@ batch_size = 32
 block_size = 512
 
 # Model architecture (larger for RunPod training)
-n_layer = 12
-n_head = 12
+n_layer = 6
+n_head = 8
 n_embd = n_head * 64
 dropout = 0.1
 bias = True
@@ -54,6 +54,7 @@ dag_depth = max_dag_depth  # MUST match max_dag_depth above
 
 # Optimization (tuned for longer training)
 max_iters = 50000
+
 # weight_decay = 1e-1
 weight_decay = 1e-2
 beta1 = 0.9
@@ -70,7 +71,7 @@ learning_rate = 3e-4
 backend = "nccl"
 dtype = "bfloat16"  # Use bfloat16 for efficiency if available
 compile = False
-keep_alive = True  # Auto-stop by default
+keep_alive = False  # Auto-stop by default
 check_nans = False  # Check for NaNs in cloud training
 train_uncertainty_params = False
 
