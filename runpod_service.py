@@ -375,7 +375,8 @@ def stop_runpod(pod_id: str | None = None, api_key: str | None = None) -> bool:
     api_key = api_key or os.getenv("RUNPOD_API_KEY")
 
     if not pod_id:
-        raise ValueError("RUNPOD_POD_ID not set.")
+        # We are not running on Runpod so there is nothing to stop
+        return False
 
     if not api_key:
         raise ValueError("RUNPOD_API_KEY not set.")

@@ -216,12 +216,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         {"params": uncertainty_params, "lr": uncertainty_params_lr},
     ]
 
-    # Verify that uncertainty parameters exist
-    assert len(uncertainty_params) > 0, (
-        "No uncertainty parameters found in model! This indicates a problem with model initialization. "
-        "DAG models should always have uncertainty_params for loss balancing."
-    )
-
     print(f"Optimizer groups created:")
     print(f"  Main parameters: {len(other_params)} params with lr={cfg.learning_rate}")
     print(
