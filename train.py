@@ -891,9 +891,10 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
             destroy_process_group()
         run.finish()
 
-        # Stop RunPod instance if we're running on RunPod and keep-alive is not enabled
+        wandb.finish()
         if not getattr(cfg, "keep_alive", False):
             runpod_service.stop_runpod()
+        wandb.finish()
 
 
 # --------------------------------------------------------------------------- #

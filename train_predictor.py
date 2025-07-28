@@ -681,9 +681,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         if run is not None:
             run.finish()
 
-        # Stop RunPod instance if we're running on RunPod and keep-alive is not enabled
-        if os.getenv("RUNPOD_POD_ID") and not getattr(cfg, "keep_alive", False):
+        wandb.finish()
+        if not getattr(cfg, "keep_alive", False):
             runpod_service.stop_runpod()
+        wandb.finish()
 
 
 def main() -> None:
@@ -751,9 +752,10 @@ def main() -> None:
         print(f"Fatal error in predictor training: {e}")
         traceback.print_exc()
 
-        # Stop RunPod instance on error if we're running on RunPod
+        wandb.finish()
         if not getattr(cfg, "keep_alive", False):
             runpod_service.stop_runpod()
+        wandb.finish()
 
         raise e
 
