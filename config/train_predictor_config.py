@@ -70,7 +70,7 @@ learning_rate = 3e-4
 backend = "nccl"
 dtype = "bfloat16"  # Use bfloat16 for efficiency if available
 compile = False
-keep_alive = False  # Auto-stop by default
+keep_alive = True  # Auto-stop by default
 check_nans = False  # Check for NaNs in cloud training
 train_uncertainty_params = False
 
