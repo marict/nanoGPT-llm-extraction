@@ -370,6 +370,7 @@ def _open_browser(url: str) -> None:
 
 def stop_runpod(pod_id: str | None = None, api_key: str | None = None) -> bool:
     """Stop the active RunPod instance."""
+    print("Attempting to stop RunPod instance...")
     pod_id = pod_id or os.getenv("RUNPOD_POD_ID")
     api_key = api_key or os.getenv("RUNPOD_API_KEY")
 
@@ -393,6 +394,7 @@ def stop_runpod(pod_id: str | None = None, api_key: str | None = None) -> bool:
     try:
         url = f"https://rest.runpod.io/v1/pods/{pod_id}/stop"
         headers = {"Authorization": f"Bearer {api_key}"}
+        wandb.finish()
         resp = requests.post(url, headers=headers, timeout=10)
         resp.raise_for_status()
         print("Successfully requested pod stop (REST).")
