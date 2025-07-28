@@ -587,9 +587,9 @@ class CheckpointManager:
             setup_start_time = time.time()
 
         # ------------------------------------------------------------------ #
-        # Decide model type based on cfg.full_backbone flag
+        # Decide model type based on cfg.n_layer (full GPT vs lightweight predictor)
         # ------------------------------------------------------------------ #
-        use_full_backbone = getattr(cfg, "full_backbone", False)
+        use_full_gpt = getattr(cfg, "n_layer", 1) > 2
 
         # When resuming, prefer the saved model configuration; otherwise derive
         # from the current cfg.
@@ -626,7 +626,7 @@ class CheckpointManager:
                 raise CheckpointLoadError("\n".join(err_lines))
         # ------------------------------------------------------------------ #
 
-        if use_full_backbone:
+        if use_full_gpt:
             # Prepare configuration for GPT backbone
             model_cfg_dict = {
                 "vocab_size": (saved_cfg or {}).get("vocab_size", 50304),
@@ -709,7 +709,7 @@ class CheckpointManager:
                 f"[{time.time() - setup_start_time:.2f}s] ✅ Model loaded from checkpoint"
             )
         else:
-            init_msg = "Full DAGGPT" if use_full_backbone else "Predictor only"
+            init_msg = "Full DAGGPT" if use_full_gpt else "Predictor only"
             print(
                 f"[{time.time() - setup_start_time:.2f}s] ✅ {init_msg} model initialized."
             )

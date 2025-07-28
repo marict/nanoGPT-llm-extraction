@@ -484,16 +484,6 @@ def compute_dag_structure_loss(
     }
 
 
-# --------------------------------------------------------------------------- #
-# Utility helpers for digit tensors
-# --------------------------------------------------------------------------- #
-
-
-# --------------------------------------------------------------------------- #
-# Validation / evaluation
-# --------------------------------------------------------------------------- #
-
-
 def evaluate_dag_model(
     model: torch.nn.Module,
     val_loader,
@@ -543,15 +533,9 @@ def evaluate_dag_model(
 
             # Forward
             with ctx:
-                if cfg.full_backbone and hasattr(model, "dag"):
-                    hidden = model.forward_hidden(input_tokens)
-                    pred_sgn, pred_digit_probs, pred_ops, pred_statistics = (
-                        model.dag.plan_predictor(hidden)
-                    )
-                else:
-                    pred_sgn, pred_digit_probs, pred_ops, pred_statistics = model(
-                        input_tokens
-                    )
+                pred_sgn, pred_digit_probs, pred_ops, pred_statistics = model(
+                    input_tokens
+                )
 
                 # ------------------------------------------------------------------
                 # Retrieve digit logits using consistent access pattern

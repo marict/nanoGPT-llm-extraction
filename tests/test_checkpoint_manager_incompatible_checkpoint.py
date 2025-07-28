@@ -11,7 +11,6 @@ from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
 def _make_cfg(**kwargs):
     """Utility to create a SimpleNamespace config with sensible defaults."""
     defaults = {
-        "full_backbone": False,
         "n_embd": 64,
         "n_head": 4,
         "dropout": 0.0,

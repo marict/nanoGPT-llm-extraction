@@ -95,11 +95,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
         f"[{time.time() - setup_start:.2f}s] DDP setup completed in {time.time() - ddp_start:.2f}s"
     )
 
-    # Determine model name and create appropriate config
-    # Model configuration will be created (or reconstructed) later by the
-    # checkpoint manager, so we only need the model name here.
-    model_name = GPT.__name__ if cfg.full_backbone else PredictorOnlyModel.__name__
-
     # Initialize checkpoint manager
     checkpoint_manager = CheckpointManager("dag")
     # Will hold the sanitised W&B run name once available.
@@ -434,15 +429,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     # Tokenize texts properly using the mathematical expressions
                     input_tokens = tokenize_texts(texts, cfg.block_size, device)
 
-                    # Forward pass through shallow attention DAG predictor model
-
-                    if cfg.full_backbone and hasattr(raw_model, "dag"):
-                        hidden = raw_model.forward_hidden(input_tokens)
-                        _, _, _, pred_statistics = raw_model.dag.plan_predictor(hidden)
-                    else:
-                        _, _, _, pred_statistics = raw_model(
-                            input_tokens
-                        )  # (B, num_nodes_pred)
+                    # Forward pass through DAG predictor model
+                    _, _, _, pred_statistics = raw_model(input_tokens)
                     # Get raw logits for loss computation using consistent dag_predictor access
                     assert (
                         raw_model.dag_predictor is not None

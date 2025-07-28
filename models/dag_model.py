@@ -1180,6 +1180,10 @@ class GPT(BaseGPTModel):
         device = idx.device
         assert T <= self.config.block_size
 
+        # For DAG predictor training (no targets), return DAG predictor outputs directly
+        if targets is None and self.config.dag_depth > 0:
+            return self.predict_dag(idx)
+
         # GPT backbone
         pos = torch.arange(T, device=device)
         emb = self.transformer.wte(idx) + self.transformer.wpe(pos)
@@ -1232,13 +1236,24 @@ class GPT(BaseGPTModel):
 
         logits = self.lm_head(mixed_hidden)
         loss = None
+
         if targets is not None:
             loss = self._compute_loss(logits, targets)
-            if torch.is_grad_enabled():
-                assert loss.requires_grad, "Loss does not require grad"
-                assert loss.grad_fn is not None, "Loss has no grad_fn"
 
         return logits, loss
+
+    def predict_dag(self, idx):
+        """
+        Forward pass through transformer backbone to DAG predictor.
+
+        Args:
+            idx: (B, T) token IDs
+
+        Returns:
+            DAG predictor outputs (signs, digit_probs, operation_probs, statistics)
+        """
+        hidden = self.forward_hidden(idx)
+        return self.dag_predictor(hidden)
 
     @classmethod
     def from_pretrained(cls, model_type, override_args=None):
