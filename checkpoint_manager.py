@@ -651,6 +651,11 @@ class CheckpointManager:
                     "max_decimal_places", getattr(cfg, "max_decimal_places", 6)
                 ),
                 "base": (saved_cfg or {}).get("base", getattr(cfg, "base", 10)),
+                # Uncertainty weighting configuration
+                "train_uncertainty_params": (saved_cfg or {}).get(
+                    "train_uncertainty_params",
+                    getattr(cfg, "train_uncertainty_params", True),
+                ),
             }
             model_config = GPTConfig(**model_cfg_dict)
             model = GPT(model_config)
@@ -677,6 +682,11 @@ class CheckpointManager:
                     "max_decimal_places", getattr(cfg, "max_decimal_places", 6)
                 ),
                 "base": (saved_cfg or {}).get("base", getattr(cfg, "base", 10)),
+                # Uncertainty weighting configuration
+                "train_uncertainty_params": (saved_cfg or {}).get(
+                    "train_uncertainty_params",
+                    getattr(cfg, "train_uncertainty_params", True),
+                ),
             }
             model_config = PredictorOnlyConfig(**model_cfg_dict)
             model = PredictorOnlyModel(model_config)

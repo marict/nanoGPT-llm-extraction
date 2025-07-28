@@ -87,6 +87,11 @@ class DAGTrainConfig(BaseConfig):
         }
     )
 
+    # Uncertainty weighting configuration
+    train_uncertainty_params: bool = (
+        True  # If False, uncertainty params stay at initial values
+    )
+
     # Backbone options
     full_backbone: bool = False
     n_layer: int = 12
