@@ -70,10 +70,10 @@ learning_rate = 3e-4
 # System settings (optimized for RunPod)
 backend = "nccl"
 dtype = "bfloat16"  # Use bfloat16 for efficiency if available
-compile = False
-keep_alive = True  # Auto-stop by default
+compile = True
+keep_alive = False  # Auto-stop by default
 check_nans = False  # Check for NaNs in cloud training
-train_uncertainty_params = False
+train_uncertainty_params = True
 
 # Random seeds
 seed = 42
