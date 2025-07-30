@@ -128,6 +128,7 @@ def compare_models_comprehensive(
             results["dag"].update({f"math_eval_{k}": v for k, v in dag_math.items()})
         except Exception as e:
             print(f"Warning: Math evaluation failed: {e}")
+            raise e
 
     # Compute comparisons
     print("\n=== Results Comparison ===")

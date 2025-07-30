@@ -117,8 +117,6 @@ def evaluate_dag_model(
                 valid_tokens_count = valid_mask.sum().item()
                 total_tokens_count = valid_mask.numel()
 
-                total_metrics["valid_tokens"] += valid_tokens_count
-                total_metrics["total_tokens"] += total_tokens_count
                 total_metrics["valid_token_rate"] += (
                     valid_tokens_count / total_tokens_count
                 )

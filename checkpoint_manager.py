@@ -538,6 +538,7 @@ class CheckpointManager:
                 model.load_state_dict(base_model.state_dict(), strict=False)
             except Exception as e:
                 print(f"Warning: partial weight loading failed: {e}")
+                raise e
             return model, None
 
         elif checkpoint is not None:

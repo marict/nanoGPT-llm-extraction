@@ -333,8 +333,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "val/stats_loss": eval_losses["stats_loss"],
                         "val/executed_mse": eval_losses["executed_mse"],
                         "val/initial_values_mse": eval_losses["initial_values_mse"],
-                        "val/valid_tokens": eval_losses["valid_tokens"],
-                        "val/total_tokens": eval_losses["total_tokens"],
                         "val/valid_token_rate": eval_losses["valid_token_rate"],
                         "val/time_per_iter_ms": eval_time_ms,
                     }
@@ -478,12 +476,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     valid_tokens_count = valid_mask.sum().item()
                     total_tokens_count = valid_mask.numel()
 
-                    loss_accum["valid_tokens"] = loss_accum.get("valid_tokens", 0) + (
-                        valid_tokens_count / cfg.gradient_accumulation_steps
-                    )
-                    loss_accum["total_tokens"] = loss_accum.get("total_tokens", 0) + (
-                        total_tokens_count / cfg.gradient_accumulation_steps
-                    )
                     loss_accum["valid_token_rate"] = loss_accum.get(
                         "valid_token_rate", 0
                     ) + (
@@ -546,8 +538,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     f"exec {exec_loss_val:.4f}, "
                     f"stats {stats_loss_val:.4f}, "
                     f"uncertainty_weights {uncertainty_weights_str}, "
-                    f"valid_tokens {loss_accum['valid_tokens']:.0f}/{loss_accum['total_tokens']:.0f} "
-                    f"({loss_accum['valid_token_rate']*100:.1f}%), "
+                    f"valid_token_rate {loss_accum['valid_token_rate']*100:.1f}%, "
                     f"time {dt*1000:.2f}ms"
                 )
 
@@ -579,8 +570,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "train/stats_loss": loss_accum["stats_loss"],
                         "lr": current_lr,
                         "lr_uncertainty_params": current_uncertainty_params_lr,
-                        "train/valid_tokens": loss_accum["valid_tokens"],
-                        "train/total_tokens": loss_accum["total_tokens"],
                         "train/valid_token_rate": loss_accum["valid_token_rate"],
                         "train/time_per_iter_ms": dt * 1000,
                         # Uncertainty weights (exp(-uncertainty_params))

@@ -23,10 +23,28 @@ def preprocess_invalid_expression(expr_str: str) -> str | None:
         original = original + "0"
 
     # Balance parentheses BEFORE removing operators to preserve operators inside parens
+    # But avoid creating empty parentheses pairs that become tuples
     open_count = original.count("(")
     close_count = original.count(")")
     if open_count > close_count:
-        original = original + ")" * (open_count - close_count)
+        # Don't create empty parentheses - remove trailing open parens instead
+        if original.strip() == "(" * open_count:
+            # Expression is just open parentheses - invalid
+            return None
+
+        # Check for consecutive trailing open parentheses that would create empty tuples
+        # Remove trailing open parentheses to avoid creating (), (()), etc.
+        while original.endswith("(") and original.count("(") > original.count(")"):
+            original = original.rstrip("(").strip()
+            if not original:
+                return None
+            # Recalculate counts after removing trailing parens
+            open_count = original.count("(")
+            close_count = original.count(")")
+
+        # Now balance normally if there are still unmatched opens (with content between)
+        if open_count > close_count:
+            original = original + ")" * (open_count - close_count)
     elif close_count > open_count:
         # Remove excess closing parens from the right
         for _ in range(close_count - open_count):
