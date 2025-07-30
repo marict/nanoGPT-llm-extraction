@@ -11,7 +11,6 @@ from contextlib import nullcontext
 from pathlib import Path
 
 import torch
-import torch.nn.functional as F
 from torch.distributed import destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -21,8 +20,6 @@ import wandb
 from checkpoint_manager import CheckpointManager
 from data.dagset.streaming import create_dag_structure_dataloaders
 from evaluate import evaluate_dag_model
-from models.dag_model import GPT, OP_NAMES
-from models.predictor_only_model import PredictorOnlyModel
 from predictor_config import DAGTrainConfig
 from predictor_utils import (
     compute_dag_structure_loss,

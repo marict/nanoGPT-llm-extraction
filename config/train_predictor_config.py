@@ -33,15 +33,15 @@ batch_size = 32
 block_size = 512
 
 # Model architecture (larger for RunPod training)
-n_layer = 8
-n_head = 8
+n_layer = 2
+n_head = 4
 n_embd = n_head * 64
 dropout = 0.1
 bias = True
 dag_depth = max_dag_depth  # MUST match max_dag_depth above
 
 # Optimization (tuned for longer training)
-max_iters = 50000
+max_iters = 10000
 
 # weight_decay = 1e-1
 weight_decay = 1e-2
