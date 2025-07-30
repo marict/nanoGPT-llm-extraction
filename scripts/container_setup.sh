@@ -40,6 +40,12 @@ apt-get install -y --no-install-recommends tree
 # python deps
 #---------------------------------------------------------------------------#
 log "installing python deps"
+
+# Set up pip cache in persistent storage for faster subsequent installs
+export PIP_CACHE_DIR="/runpod-volume/pip-cache"
+mkdir -p "$PIP_CACHE_DIR"
+
+log "using pip cache dir: $PIP_CACHE_DIR"
 pip install -r requirements-dev.txt
 
 #---------------------------------------------------------------------------#
