@@ -34,8 +34,20 @@ MIN_CLAMP = 1e-6
 
 
 def _clip_log(log_t: torch.Tensor) -> torch.Tensor:
-    """Symmetric tanh clipping for log magnitudes with minimum of -1."""
-    return torch.tanh(log_t / LOG_LIM) * LOG_LIM
+    """Symmetric clipping for log magnitudes to prevent numerical instabilities.
+
+    Only applies clipping when values are actually close to the limits to avoid
+    unnecessary precision loss for normal-sized values.
+    """
+    # Only clip if the absolute value is close to LOG_LIM
+    # Use a threshold of 0.9 * LOG_LIM to preserve precision for normal values
+    needs_clipping = torch.abs(log_t) > (0.9 * LOG_LIM)
+
+    # For values that need clipping, use tanh clipping
+    clipped = torch.tanh(log_t / LOG_LIM) * LOG_LIM
+
+    # For values that don't need clipping, return as-is
+    return torch.where(needs_clipping, clipped, log_t)
 
 
 # Debug utility
@@ -269,12 +281,12 @@ def identity_log_space(  # Return the second operand, discard the first operand
 # For DAG execution, we may use a subset of the operations
 OP_FUNCS = [
     add_log_space,
-    subtract_log_space,
     multiply_log_space,
-    divide_log_space,
     identity_log_space,
 ]
-OP_NAMES = ["add", "subtract", "multiply", "divide", "identity"]
+# Updated to use STATE_OPS: simplified 3-operation system
+# No more 'subtract' or 'divide' - these are converted to 'add' and 'multiply'
+OP_NAMES = ["add", "multiply", "identity"]
 
 assert len(OP_FUNCS) == len(OP_NAMES), "OP_FUNCS and OP_NAMES must have the same length"
 
@@ -719,20 +731,14 @@ def apply_op(
         op_probs: probabilities over operations (… , n_ops)
         ignore_clip: if True, disable log-magnitude clipping inside operations
     """
-    # Apply all operations with the specified clipping behaviour
+    # Apply STATE_OPS operations only (add, multiply, identity)
     add_sgn, add_log = add_log_space(s1, l1, s2, l2, ignore_clip)
-    sub_sgn, sub_log = subtract_log_space(s1, l1, s2, l2, ignore_clip)
     mul_sgn, mul_log = multiply_log_space(s1, l1, s2, l2, ignore_clip)
-    div_sgn, div_log = divide_log_space(s1, l1, s2, l2, ignore_clip)
     id_sgn, id_log = identity_log_space(s1, l1, s2, l2, ignore_clip)
 
-    # Stack results
-    ops_sgn = torch.stack(
-        [add_sgn, sub_sgn, mul_sgn, div_sgn, id_sgn], dim=-1
-    )  # (B, T, 5)
-    ops_log = torch.stack(
-        [add_log, sub_log, mul_log, div_log, id_log], dim=-1
-    )  # (B, T, 5)
+    # Stack results for STATE_OPS
+    ops_sgn = torch.stack([add_sgn, mul_sgn, id_sgn], dim=-1)  # (B, T, 3)
+    ops_log = torch.stack([add_log, mul_log, id_log], dim=-1)  # (B, T, 3)
 
     # Apply soft selection using probabilities
     result_sgn = (ops_sgn * op_probs).sum(dim=-1)  # (B, T)
@@ -742,17 +748,16 @@ def apply_op(
 
 
 def _debug_apply_op(op_name: str, second: float, top: float) -> float:
-    """Apply an operation to two floats and return the result."""
+    """Apply an operation to two floats and return the result (STATE_OPS only)."""
     if op_name == "add":
         return second + top
-    if op_name == "subtract":
-        return second - top
     if op_name == "multiply":
         return second * top
-    if op_name == "divide":
-        return second / top
     if op_name == "identity":
         return second
+    raise ValueError(
+        f"Unknown operation: {op_name}. Only STATE_OPS are supported: {OP_NAMES}"
+    )
 
 
 def execute_stack(

@@ -40,7 +40,7 @@ apt-get install -y --no-install-recommends tree
 # python deps
 #---------------------------------------------------------------------------#
 log "installing python deps"
-pip install -q -r requirements-dev.txt
+pip install -r requirements-dev.txt
 
 #---------------------------------------------------------------------------#
 # debugging env vars

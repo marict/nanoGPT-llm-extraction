@@ -7,8 +7,6 @@ training script by over a hundred lines.
 
 from dataclasses import dataclass, field
 
-# Import operation names for default value
-from models.dag_model import OP_NAMES
 from training_utils import BaseConfig
 
 
@@ -29,17 +27,6 @@ class DAGTrainConfig(BaseConfig):
     max_digits: int = 4
     max_decimal_places: int | None = None
     base: int = 10  # Number base for digit prediction (10=decimal, 16=hex, etc.)
-
-    # English conversion
-    english_conversion_probability: float = 0.0
-    integer_no_decimal_probability: float = 0.0
-    expression_expansion_probability: float = 0.0
-    expression_simplification_probability: float = 0.0
-
-    # Expression rendering style probabilities
-    printing_style_probs: dict[str, float] = field(
-        default_factory=lambda: {"sstr": 1.0}
-    )
 
     # Batching / sequence
     gradient_accumulation_steps: int = 4
@@ -68,10 +55,6 @@ class DAGTrainConfig(BaseConfig):
 
     # Random seeds
     seed: int = 42
-
-    # Allowed operation names for DAG execution/prediction. This lets us train
-    # predictors restricted to a subset of arithmetic ops (e.g. only add, subtract, identity).
-    op_names: list[str] = field(default_factory=lambda: OP_NAMES.copy())
 
     # Loss configuration - flags to enable/disable specific loss components
     # Disabled losses are still computed for logging but excluded from optimization

@@ -163,18 +163,35 @@ class TestDigitPrediction(unittest.TestCase):
         final_token_pos = torch.full((B,), T - 1, dtype=torch.long)
 
         dummy_pred_stats, dummy_target_stats = _dummy_statistics(B, T)
+
+        # Create target tensors in new format directly for test
+        target_tensors = []
+        valid_mask = torch.zeros(B, T, dtype=torch.bool)
+
+        for b in range(B):
+            final_pos = final_token_pos[b].item()
+            if 0 <= final_pos < T:
+                valid_mask[b, final_pos] = True
+                target_dict = {
+                    "target_initial_sgn": sign_target[b],
+                    "target_initial_digits": target_digits[b],
+                    "target_operation_probs": target_ops[b],
+                    "target_initial_values": target_initial_values[b],
+                    "target_final_exec": target_final_exec[b].item(),
+                    "target_initial_stats": dummy_target_stats["initial"][b],
+                    "target_intermediate_stats": dummy_target_stats["intermediate"][b],
+                    "target_final_stats": dummy_target_stats["final"][b],
+                }
+                target_tensors.append(target_dict)
+
+        # Use new loss function signature
         losses = compute_dag_structure_loss(
             pred_sgn,
             digit_logits,
             pred_ops,
             dummy_pred_stats,
-            sign_target,
-            target_digits,
-            target_ops,
-            target_initial_values,
-            target_final_exec,
-            dummy_target_stats,
-            final_token_pos,
+            target_tensors,
+            valid_mask,
             cfg,
             uncertainty_params=torch.zeros(6),
         )

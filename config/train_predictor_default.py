@@ -34,13 +34,6 @@ max_digits = 2  # Minimal digits
 max_decimal_places = 1  # Minimal decimal places
 base = 10
 
-# Expression generation settings - simplified for speed
-english_conversion_probability = 0.0  # Skip to avoid string processing
-integer_no_decimal_probability = 1.0  # Only integers for speed
-expression_simplification_probability = 0.0  # Skip simplification
-expression_expansion_probability = 0.0  # Skip expansion
-printing_style_probs = {"sstr": 1.0}  # Only simplest format
-
 # Training hyperparameters - minimal
 gradient_accumulation_steps = 1
 batch_size = 2  # Minimal batch size

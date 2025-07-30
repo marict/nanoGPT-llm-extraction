@@ -12,15 +12,12 @@ import torch
 import torch.nn.functional as F
 from tiktoken import get_encoding
 
-from data.dagset.streaming import DAGExample
 from models.dag_model import OP_NAMES, execute_stack
-from predictor_config import DAGTrainConfig
 from tensor_utils import digits_to_magnitude
 
 __all__ = [
     "tokenize_texts",
     "compute_dag_structure_loss",
-    "evaluate_dag_model",
 ]
 
 
@@ -313,118 +310,169 @@ def compute_dag_structure_loss(
     pred_digit_logits: torch.Tensor,  # (B,T,N,D,base) raw logits (not probabilities)
     pred_op_logits: torch.Tensor,  # (B,T,depth,n_ops) raw logits (not probabilities)
     pred_statistics: dict,  # dict with 'initial', 'intermediate', 'final' containing (B,T,num_stats) tensors
-    target_sgn: torch.Tensor,  # (B,N) - single target per batch
-    target_digits: torch.Tensor,  # (B,N,D,base) - single target per batch
-    target_ops: torch.Tensor,  # (B,depth,n_ops) - single target per batch
-    target_initial_values: torch.Tensor,  # (B,N) - single target per batch
-    target_final_exec: torch.Tensor,  # (B,) - single target per batch
-    target_statistics: dict,  # dict with 'initial', 'intermediate', 'final' containing (B,num_stats) tensors
-    final_token_pos: torch.Tensor,  # (B,) - final token position for each batch element
-    cfg: DAGTrainConfig,
+    target_tensors: list[
+        list[dict[str, torch.Tensor]]
+    ],  # (B, T) nested list: target tensors for all positions (including zero DAGs)
+    valid_mask: torch.Tensor,  # (B,T) boolean mask indicating which positions are valid
+    cfg,  # DAGTrainConfig
     uncertainty_params: torch.Tensor,  # (6,) learnable log-variance parameters for uncertainty weighting
-    loss_flags: (
-        Dict[str, bool] | None
-    ) = None,  # Optional override for cfg.loss_flags (deprecated)
-) -> Dict[str, torch.Tensor]:
-    """Compute robust DAG-structure prediction loss with position masking.
+    loss_flags: dict = None,  # Optional override for cfg.loss_flags
+) -> dict[str, torch.Tensor]:
+    """Compute DAG-structure prediction loss across all valid tokens with masking.
+
+    This function works with the streaming.py system that generates per-token targets
+    and uses masking for invalid tokens.
 
     Args:
-        loss_flags: Optional dictionary to selectively disable losses. Keys are:
-            - "sign": Enable/disable sign loss
-            - "digit": Enable/disable digit loss
-            - "op": Enable/disable operation loss
-            - "value": Enable/disable value loss
-            - "exec": Enable/disable execution loss
-            - "stats": Enable/disable statistics loss
-            Defaults to None (all losses enabled). Missing keys default to enabled.
-            Disabled losses are still computed for logging but excluded from total_loss.
-            The uncertainty weighting is applied only to enabled losses.
+        pred_sign_logits: (B,T,N) predicted sign logits for all positions
+        pred_digit_logits: (B,T,N,D,base) predicted digit logits for all positions
+        pred_op_logits: (B,T,depth,n_ops) predicted operation logits for all positions
+        pred_statistics: Dict with prediction statistics for all positions
+        target_tensors: (B,T) nested list of target dicts (includes zero DAGs for invalid positions)
+        valid_mask: (B,T) boolean mask where True indicates valid positions
+        cfg: Training configuration
+        uncertainty_params: Learnable uncertainty weighting parameters
+        loss_flags: Optional loss component enablement flags
+
+    Returns:
+        Dict containing all loss components and total weighted loss
     """
 
     B, T = pred_sign_logits.shape[:2]
+    device = pred_sign_logits.device
 
-    # Check that all final token positions are within sequence bounds
-    if (final_token_pos >= T).any():
-        invalid_positions = final_token_pos >= T
-        invalid_indices = torch.nonzero(invalid_positions).flatten()
-        max_invalid_pos = final_token_pos[invalid_positions].max().item()
+    # Check that we have valid mask with correct shape
+    if valid_mask.shape != (B, T):
         raise ValueError(
-            f"Final token positions exceed sequence length. "
-            f"Found {invalid_indices.numel()} examples with final_token_pos >= {T}. "
-            f"Maximum invalid position: {max_invalid_pos}. "
-            f"This indicates training examples longer than block_size ({T}). "
-            f"Consider increasing block_size or filtering longer examples during data generation."
+            f"valid_mask shape {valid_mask.shape} must match (B,T) = ({B},{T})"
         )
 
-    # Verify all positions are valid after validation (should always pass)
-    if (final_token_pos < 0).any() or (final_token_pos >= T).any():
-        invalid_low = (final_token_pos < 0).any()
-        invalid_high = (final_token_pos >= T).any()
-        raise RuntimeError(
-            f"BUG: Invalid final_token_pos found after validation. "
-            f"Negative positions: {invalid_low}, positions >= {T}: {invalid_high}. "
-            f"This indicates a bug in the validation logic above."
-        )
+    # Count total valid positions across all sequences
+    num_valid_total = valid_mask.sum().item()
 
-    # Extract predictions at final token positions using advanced indexing
-    batch_indices = torch.arange(B, device=pred_sign_logits.device)
-    selected_sign_logits = pred_sign_logits[batch_indices, final_token_pos]  # (B,N)
-    selected_digit_logits = pred_digit_logits[
-        batch_indices, final_token_pos
-    ]  # (B,N,D,base)
-    selected_op_logits = pred_op_logits[
-        batch_indices, final_token_pos
-    ]  # (B,depth,n_ops)
-    selected_statistics = {
-        key: pred_statistics[key][batch_indices, final_token_pos]  # (B,num_stats)
+    if num_valid_total == 0:
+        # No valid positions - return zero losses
+        zero_loss = torch.tensor(0.0, device=device, dtype=torch.float32)
+        uncertainty_weights = torch.exp(-uncertainty_params).detach()
+
+        return {
+            "total_loss": zero_loss,
+            "sign_loss": zero_loss,
+            "digit_loss": zero_loss,
+            "op_loss": zero_loss,
+            "value_loss": zero_loss,
+            "exec_loss": zero_loss,
+            "stats_loss": zero_loss,
+            "uncertainty_weights": uncertainty_weights,
+        }
+
+    # Extract predictions and targets for valid positions only
+    valid_positions = torch.nonzero(valid_mask, as_tuple=False)  # (num_valid, 2)
+    batch_indices = valid_positions[:, 0]  # (num_valid,)
+    token_indices = valid_positions[:, 1]  # (num_valid,)
+
+    # Extract predictions at valid positions
+    valid_sign_logits = pred_sign_logits[batch_indices, token_indices]  # (num_valid, N)
+    valid_digit_logits = pred_digit_logits[
+        batch_indices, token_indices
+    ]  # (num_valid, N, D, base)
+    valid_op_logits = pred_op_logits[
+        batch_indices, token_indices
+    ]  # (num_valid, depth, n_ops)
+    valid_statistics = {
+        key: pred_statistics[key][
+            batch_indices, token_indices
+        ]  # (num_valid, num_stats)
         for key in pred_statistics.keys()
     }
 
-    # Add singleton sequence dimension for compatibility with helper functions
-    selected_sign_logits = selected_sign_logits.unsqueeze(1)  # (B,1,N)
-    selected_digit_logits = selected_digit_logits.unsqueeze(1)  # (B,1,N,D,base)
-    selected_op_logits = selected_op_logits.unsqueeze(1)  # (B,1,depth,n_ops)
-    selected_statistics = {
+    # Prepare target tensors - extract valid targets from nested structure
+    if len(target_tensors) != B:
+        raise ValueError(
+            f"Number of batch sequences ({len(target_tensors)}) must match batch size ({B})"
+        )
+
+    # Check that each sequence has T target tensors
+    for i, seq_targets in enumerate(target_tensors):
+        if len(seq_targets) != T:
+            raise ValueError(
+                f"Sequence {i} has {len(seq_targets)} target tensors, expected {T}"
+            )
+
+    # Extract targets for valid positions only
+    valid_targets = []
+    for batch_idx, token_idx in zip(batch_indices, token_indices):
+        target_dict = target_tensors[batch_idx.item()][token_idx.item()]
+        valid_targets.append(target_dict)
+
+    # Stack targets from all valid positions
+    target_sgn = torch.stack(
+        [t["target_initial_sgn"] for t in valid_targets]
+    )  # (num_valid, N)
+    target_digits = torch.stack(
+        [t["target_initial_digits"] for t in valid_targets]
+    )  # (num_valid, N, D, base)
+    target_ops = torch.stack(
+        [t["target_operation_probs"] for t in valid_targets]
+    )  # (num_valid, depth, n_ops)
+    target_initial_values = torch.stack(
+        [t["target_initial_values"] for t in valid_targets]
+    )  # (num_valid, N)
+    target_final_exec = torch.tensor(
+        [t["target_final_exec"] for t in valid_targets], device=device
+    )  # (num_valid,)
+
+    # Handle statistics targets
+    target_statistics = {}
+    stat_keys = ["initial", "intermediate", "final"]
+    for key in stat_keys:
+        if f"target_{key}_stats" in valid_targets[0]:
+            target_statistics[key] = torch.stack(
+                [t[f"target_{key}_stats"] for t in valid_targets]
+            )
+
+    # Add singleton sequence dimension for compatibility with existing loss functions
+    valid_sign_logits = valid_sign_logits.unsqueeze(1)  # (num_valid, 1, N)
+    valid_digit_logits = valid_digit_logits.unsqueeze(1)  # (num_valid, 1, N, D, base)
+    valid_op_logits = valid_op_logits.unsqueeze(1)  # (num_valid, 1, depth, n_ops)
+    valid_statistics = {
         key: value.unsqueeze(1)
-        for key, value in selected_statistics.items()  # (B,1,num_stats)
+        for key, value in valid_statistics.items()  # (num_valid, 1, num_stats)
     }
 
-    # Add singleton sequence dimension to targets
-    target_sgn_seq = target_sgn.unsqueeze(1)  # (B,1,N)
-    target_digits_seq = target_digits.unsqueeze(1)  # (B,1,N,D,base)
-    target_ops_seq = target_ops.unsqueeze(1)  # (B,1,depth,n_ops)
-    target_initial_values_seq = target_initial_values.unsqueeze(1)  # (B,1,N)
-    target_final_exec_seq = target_final_exec.unsqueeze(1)  # (B,1)
-    target_statistics_seq = {
+    target_sgn = target_sgn.unsqueeze(1)  # (num_valid, 1, N)
+    target_digits = target_digits.unsqueeze(1)  # (num_valid, 1, N, D, base)
+    target_ops = target_ops.unsqueeze(1)  # (num_valid, 1, depth, n_ops)
+    target_initial_values = target_initial_values.unsqueeze(1)  # (num_valid, 1, N)
+    target_final_exec = target_final_exec.unsqueeze(1)  # (num_valid, 1)
+    target_statistics = {
         key: value.unsqueeze(1)
-        for key, value in target_statistics.items()  # (B,1,num_stats)
+        for key, value in target_statistics.items()  # (num_valid, 1, num_stats)
     }
 
-    # Compute individual loss components using selected predictions
-    sign_loss = _compute_sign_loss(selected_sign_logits, target_sgn_seq)
-    digit_loss = _compute_digit_loss(selected_digit_logits, target_digits_seq)
-    op_loss = _compute_op_loss(selected_op_logits, target_ops_seq)
+    # Compute individual loss components using valid predictions and targets
+    sign_loss = _compute_sign_loss(valid_sign_logits, target_sgn)
+    digit_loss = _compute_digit_loss(valid_digit_logits, target_digits)
+    op_loss = _compute_op_loss(valid_op_logits, target_ops)
 
     # For value and execution losses, we need tanh-activated signs and probabilities
-    selected_sgn = torch.tanh(selected_sign_logits)
-    value_loss = _compute_value_loss(
-        selected_digit_logits, target_initial_values_seq, cfg
-    )
+    valid_sgn = torch.tanh(valid_sign_logits)
+    value_loss = _compute_value_loss(valid_digit_logits, target_initial_values, cfg)
 
     # For execution loss, we need probabilities, so convert logits
-    selected_ops = F.softmax(selected_op_logits, dim=-1)
+    valid_ops = torch.nn.functional.softmax(valid_op_logits, dim=-1)
     exec_loss = _compute_exec_loss(
-        selected_sgn,
-        selected_digit_logits,
-        selected_ops,
-        target_final_exec_seq,
+        valid_sgn,
+        valid_digit_logits,
+        valid_ops,
+        target_final_exec,
         cfg,
     )
 
     # Compute statistics loss
-    stats_loss = _compute_statistics_loss(selected_statistics, target_statistics_seq)
+    stats_loss = _compute_statistics_loss(valid_statistics, target_statistics)
 
-    # Use loss flags from config, with parameter override for backwards compatibility
+    # Use loss flags from config
     if loss_flags is None:
         loss_flags = (
             cfg.loss_flags
@@ -466,7 +514,6 @@ def compute_dag_structure_loss(
         total_loss = weighted_losses.sum()
     else:
         # If no losses are enabled, return zero loss
-        device = sign_loss.device
         total_loss = torch.tensor(0.0, device=device, dtype=torch.float32)
 
     # For logging, compute the weighting factors for all losses (detached to avoid interfering with gradients)
@@ -481,315 +528,5 @@ def compute_dag_structure_loss(
         "exec_loss": exec_loss,
         "stats_loss": stats_loss,
         "uncertainty_weights": uncertainty_weights,
+        "num_valid_tokens": torch.tensor(num_valid_total, device=device),
     }
-
-
-def evaluate_dag_model(
-    model: torch.nn.Module,
-    val_loader,
-    device: str,
-    ctx,
-    cfg,
-    eval_iters: int,
-    seed: int,
-) -> Dict[str, float]:
-    """Run evaluation on *eval_iters* batches and return aggregated metrics."""
-    model.eval()
-    _eval_random.seed(seed)
-
-    total_losses = {
-        k: 0.0
-        for k in (
-            "total_loss",
-            "sign_loss",
-            "digit_loss",
-            "op_loss",
-            "value_loss",
-            "exec_loss",
-            "stats_loss",
-        )
-    }
-    total_metrics = {
-        "op_accuracy": 0.0,
-        "full_dag_op_match": 0.0,
-        "sign_accuracy": 0.0,
-        "executed_mse": 0.0,
-        "initial_values_mse": 0.0,
-    }
-
-    num_batches = 0
-    with torch.no_grad():
-        for i, (texts, structures, examples) in enumerate(val_loader):
-            if i >= eval_iters:
-                break
-
-            # Targets → device
-            tgt_sgn = structures["target_initial_sgn"].to(device)
-            tgt_digits = structures["target_initial_digits"].to(device)
-            tgt_ops = structures["target_operation_probs"].to(device)
-
-            # Inputs
-            input_tokens = tokenize_texts(texts, cfg.block_size, device)
-
-            # Forward
-            with ctx:
-                pred_sgn, pred_digit_probs, pred_ops, pred_statistics = model(
-                    input_tokens
-                )
-
-                # ------------------------------------------------------------------
-                # Retrieve digit logits using consistent access pattern
-                # ------------------------------------------------------------------
-                # Use consistent dag_predictor property for all model types
-                dag_predictor = model.dag_predictor
-                if dag_predictor is None:
-                    raise RuntimeError("Model has no DAG predictor (dag_depth=0)")
-
-                # Get raw logits for all positions
-                pred_sign_logits = dag_predictor.last_sign_logits
-                pred_digit_logits = dag_predictor.last_digit_logits
-                pred_op_logits = dag_predictor.last_operation_logits
-                # Extract learnable uncertainty weighting parameters
-                uncertainty_params = dag_predictor.uncertainty_params
-
-                if pred_digit_logits is None:
-                    raise RuntimeError("last_digit_logits not found for evaluation")
-                if pred_sign_logits is None:
-                    raise RuntimeError("last_sign_logits not found for evaluation")
-                if pred_op_logits is None:
-                    raise RuntimeError("last_operation_logits not found for evaluation")
-
-                # Extract final token positions
-                final_token_pos = structures["final_token_pos"].to(device)
-                # Targets for loss calculation
-                tgt_sgn = structures["target_initial_sgn"].to(device)
-                tgt_digits = structures["target_initial_digits"].to(device)
-                tgt_ops = structures["target_operation_probs"].to(device)
-
-                # Extract remaining targets
-                target_initial_values = structures["target_initial_values"].to(device)
-                target_final_exec = structures["target_final_exec"].to(device)
-                target_statistics = {
-                    "initial": structures["target_initial_stats"].to(device),
-                    "intermediate": structures["target_intermediate_stats"].to(device),
-                    "final": structures["target_final_stats"].to(device),
-                }
-
-                # Compute loss using new signature with final token positions
-                losses = compute_dag_structure_loss(
-                    pred_sign_logits,
-                    pred_digit_logits,
-                    pred_op_logits,
-                    pred_statistics,
-                    tgt_sgn,
-                    tgt_digits,
-                    tgt_ops,
-                    target_initial_values,
-                    target_final_exec,
-                    target_statistics,
-                    final_token_pos,
-                    cfg,
-                    uncertainty_params=uncertainty_params,
-                )
-
-                # Extract predictions at final positions for metrics
-                B = pred_sign_logits.shape[0]
-                batch_indices = torch.arange(B, device=pred_sign_logits.device)
-                final_token_pos_clamped = torch.clamp(
-                    final_token_pos, 0, pred_sign_logits.shape[1] - 1
-                )
-
-                pred_ops_final = pred_op_logits[
-                    batch_indices, final_token_pos_clamped
-                ]  # (B, depth, n_ops)
-                pred_sgn_final = pred_sign_logits[
-                    batch_indices, final_token_pos_clamped
-                ]  # (B, N)
-
-                # Convert to probabilities and tanh-activated signs for metrics
-                pred_ops = F.softmax(pred_ops_final, dim=-1)
-                pred_sgn = torch.tanh(pred_sgn_final)
-
-                # Metrics
-                op_correct = pred_ops.argmax(dim=-1).eq(tgt_ops.argmax(dim=-1))
-                op_acc = op_correct.float().mean()
-                full_match = op_correct.all(dim=-1).float().mean()
-
-                sign_correct = torch.sign(pred_sgn).eq(torch.sign(tgt_sgn))
-                sign_acc = sign_correct.float().mean()
-
-                # ------------------------------------------------------------------ #
-                # Execute full DAGs to obtain scalar answers and compute MSE          #
-                # ------------------------------------------------------------------ #
-
-                # Target tensors --------------------------------------------------
-                tgt_sign = tgt_sgn.unsqueeze(1)  # (B,1,N)
-                tgt_digit_probs = tgt_digits.unsqueeze(1)  # (B,1,N,D,base)
-                tgt_ops_seq = tgt_ops.unsqueeze(1)  # (B,1,depth,n_ops)
-
-                # Prediction tensors ---------------------------------------------
-                pred_sign = pred_sgn.unsqueeze(1)  # (B,1,N)
-                pred_digit_probs_final = pred_digit_logits[
-                    batch_indices, final_token_pos_clamped
-                ]  # (B,N,D,base)
-                pred_digit_probs = F.softmax(pred_digit_probs_final, dim=-1).unsqueeze(
-                    1
-                )  # (B,1,N,D,base)
-                pred_ops_seq = pred_ops.unsqueeze(1)  # (B,1,depth,n_ops)
-
-                # Execute stacks - use clipping for consistency with training
-                tgt_final_sgn, tgt_final_log = execute_stack(
-                    tgt_sign,
-                    tgt_digit_probs,
-                    tgt_ops_seq,
-                    max_digits=cfg.max_digits,
-                    max_decimal_places=cfg.max_decimal_places,
-                    base=cfg.base,
-                    ignore_clip=False,  # Consistent with training behavior
-                )
-
-                pred_final_sgn, pred_final_log = execute_stack(
-                    pred_sign,
-                    pred_digit_probs,
-                    pred_ops_seq,
-                    max_digits=cfg.max_digits,
-                    max_decimal_places=cfg.max_decimal_places,
-                    base=cfg.base,
-                    ignore_clip=False,  # Consistent with training behavior
-                )
-
-                # Convert to real numbers
-                tgt_final_val = tgt_final_sgn * torch.exp(tgt_final_log)
-                pred_final_val = pred_final_sgn * torch.exp(pred_final_log)
-
-                executed_mse = F.mse_loss(pred_final_val, tgt_final_val)
-
-                # ------------------------------------------------------------------ #
-                # Compute MSE between initial values of target and predicted DAGs    #
-                # ------------------------------------------------------------------ #
-
-                # Convert predicted digits to magnitudes for all samples in batch
-                pred_magnitudes = digits_to_magnitude(
-                    pred_digit_probs.squeeze(1),  # (B, N, D, base)
-                    cfg.max_digits,
-                    cfg.max_decimal_places,
-                    cfg.base,
-                )  # (B, N)
-
-                # Combine sign and magnitude to get predicted initial values
-                pred_initial_values = (
-                    torch.sign(pred_sgn.squeeze(1)) * pred_magnitudes
-                )  # (B, N)
-
-                # Get target initial values (remove sequence dimension if present)
-                tgt_initial_values = target_initial_values.squeeze(1)  # (B, N)
-
-                # Compute MSE between initial values
-                initial_values_mse = F.mse_loss(pred_initial_values, tgt_initial_values)
-
-                # -------------------------------------------------------------- #
-                # Console debug: print the last sample from the batch
-                # -------------------------------------------------------------- #
-                if i == 0:
-                    batch_size = tgt_sgn.size(0)
-                    batch_idx = batch_size - 1
-                    sample_text = texts[batch_idx]
-                    sample_obj: DAGExample = examples[batch_idx]
-                    sample_seed = sample_obj.seed
-                    did_expand = sample_obj.did_expand
-                    did_simplify = sample_obj.did_simplify
-
-                    # Sign vectors (N,) and digit logits (N,D,10)
-                    pred_sign_vec = pred_sgn.squeeze(1)[batch_idx]
-
-                    pred_digits_vec = pred_digit_logits[
-                        batch_indices, final_token_pos_clamped
-                    ][batch_idx].softmax(dim=-1)
-
-                    # Convert digit distributions to magnitudes
-                    pred_mag_vec = digits_to_magnitude(
-                        pred_digits_vec,
-                        cfg.max_digits,
-                        cfg.max_decimal_places,
-                        cfg.base,
-                    )
-
-                    pred_real_vals = (
-                        (torch.sign(pred_sign_vec) * pred_mag_vec).cpu().tolist()
-                    )
-
-                    # Decode operations
-                    tgt_ops_row = tgt_ops[batch_idx]  # (depth, n_ops)
-                    pred_ops_row = pred_ops.squeeze(1)[batch_idx]
-                    tgt_op_indices = tgt_ops_row.argmax(dim=-1).cpu().tolist()
-                    pred_op_indices = pred_ops_row.argmax(dim=-1).cpu().tolist()
-                    tgt_op_names = [OP_NAMES[idx] for idx in tgt_op_indices]
-                    pred_op_names = [OP_NAMES[idx] for idx in pred_op_indices]
-
-                    print("\n=== Validation Sample ===")
-                    print(f"Sample RNG seed: {sample_seed}")
-                    print(f"Depth: {sample_obj.depth}")
-                    print(f"Max digits: {sample_obj.max_digits}")
-                    print(f"Base: {sample_obj.base}")
-                    print(f"Max decimal places: {sample_obj.max_decimal_places}")
-                    print(f"Printing style: {sample_obj.printing_style}")
-                    print(
-                        f"English conversion probability: {sample_obj.english_conversion_probability}"
-                    )
-                    print(
-                        f"Integer no decimal probability: {sample_obj.integer_no_decimal_probability}"
-                    )
-                    print(f"Text:\n-------\n{sample_text}\n-------\n")
-                    print(f"Sympy expression: {sample_obj.expr}")
-                    print(f"Did expand: {did_expand}")
-                    print(f"Did simplify: {did_simplify}")
-                    print(f"Sympy execution value: {sample_obj.final_value_sympy}")
-                    print(
-                        f"Target stack execution value: {sample_obj.structure_dict['target_final_exec']}"
-                    )
-                    print(
-                        f"Predicted stack execution value: {pred_final_val[batch_idx].item()}"
-                    )
-                    print("Predicted sign logits:")
-                    print(pred_sign_vec.cpu().tolist())
-                    # Print number of tokens in the sample text to check context length
-                    enc = get_encoding("gpt2")
-                    token_count = len(enc.encode_ordinary(sample_text))
-                    print(f"Token count: {token_count}")
-                    # If we have the raw DAGExample, use its original floats for nicer printing
-                    true_vals = (
-                        structures["target_initial_values"][batch_idx].cpu().tolist()
-                    )
-                    print(
-                        f"Target initial values (rounded to {cfg.max_decimal_places} dp):"
-                    )
-                    print([round(v, cfg.max_decimal_places) for v in true_vals])
-                    print(
-                        f"Predicted initial values (rounded to {cfg.max_decimal_places} dp):"
-                    )
-                    print([round(v, cfg.max_decimal_places) for v in pred_real_vals])
-                    print("Operations (ground truth):")
-                    print(tgt_op_names)
-                    print("Operations (predicted):")
-                    print(pred_op_names)
-                    print(f"Allowed operations: {sample_obj.allowed_operations}")
-                    print("==========================\n")
-
-            # Aggregate losses (skip uncertainty_weights which is for logging only)
-            for k, v in losses.items():
-                if k != "uncertainty_weights":
-                    total_losses[k] += v.item()
-            total_metrics["op_accuracy"] += op_acc.item()
-            total_metrics["full_dag_op_match"] += full_match.item()
-            total_metrics["sign_accuracy"] += sign_acc.item()
-            total_metrics["executed_mse"] += executed_mse.item()
-            total_metrics["initial_values_mse"] += initial_values_mse.item()
-            num_batches += 1
-
-    if num_batches:
-        for d in (total_losses, total_metrics):
-            for k in d:
-                d[k] /= num_batches
-
-    model.train()
-    return {**total_losses, **total_metrics}

@@ -9,17 +9,20 @@ import math
 import random
 import sys
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Dict, Iterator, List, Tuple
 
 import numpy as np
 import sympy
 import torch
+from num2words import num2words
 from sympy import im
 from tiktoken import get_encoding
 
-from data.dagset.expression_to_string import convert_number_to_english
 from models.dag_model import execute_stack
+
+from .preprocess_invalid_expression import preprocess_invalid_expression
 
 # Add parent directories to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
@@ -32,7 +35,17 @@ from models.dag_model import (
     compute_single_value_statistics,
 )
 
-from .expression_to_string import format_expression_string
+# ============================================================================
+# GENERATION SYSTEM: Separation between Generation and State Operations
+# ============================================================================
+
+# GENERATION_OPs: Used for creating readable expressions (what humans see)
+GENERATION_OPS = ["add", "subtract", "multiply", "divide", "identity"]
+
+# STATE_OPs: Used for internal DAG tensor representation (what model predicts)
+STATE_OPS = ["add", "multiply", "identity"]
+
+# ============================================================================
 
 # --------------------------------------------------------------------------- #
 # Helper utilities
@@ -65,25 +78,296 @@ class DAGTrainExample(DAGExample):
 
 @dataclass
 class DAGValExample(DAGExample):
-    """Full DAG example for validation with all attributes for logging and debugging."""
+    """Full DAG example for validation with all attributes for logging and debugging.
 
-    english_conversion_probability: float
-    integer_no_decimal_probability: float
-    printing_style: str
-    operations_named: list[str]  # (D, num_ops)
-    did_expand: bool
-    did_simplify: bool
-    operations: list[str]
+    Note: This represents N different expressions (per-token), where the fields below
+    correspond to the final/complete expression in the sequence.
+    """
+
+    full_operations_named: list[str]  # Operations for the final complete expression
+    full_operations: list[str]  # Operations for the final complete expression
     final_value_sympy: float | None = None
-    allowed_operations: list[str] | None = None
-    expr: sympy.Basic | None = None
+    full_expr: sympy.Basic | None = None  # The final complete expression
 
     def __str__(self):
         signs_shape = self.structure_dict["target_initial_sgn"].shape
         digits_shape = self.structure_dict["target_initial_digits"].shape
         operations_shape = self.structure_dict["target_operation_probs"].shape
         final_value_exec = self.structure_dict["target_final_exec"]
-        return f"DAGValExample(seed={self.seed}, text={self.text}, depth={self.depth}, signs={signs_shape}, digits={digits_shape}, operations={operations_shape}, operations_named={self.operations_named}, did_expand={self.did_expand}, did_simplify={self.did_simplify}, final_value_sympy={self.final_value_sympy}, final_value_exec={final_value_exec}, allowed_operations={self.allowed_operations}, expr={self.expr}, english_conversion_probability={self.english_conversion_probability}, integer_no_decimal_probability={self.integer_no_decimal_probability}, printing_style={self.printing_style}, base={self.base})"
+        return f"DAGValExample(seed={self.seed}, text={self.text}, depth={self.depth}, signs={signs_shape}, digits={digits_shape}, operations={operations_shape}, full_operations_named={self.full_operations_named}, final_value_sympy={self.final_value_sympy}, final_value_exec={final_value_exec}, full_expr={self.full_expr}, base={self.base})"
+
+
+# ============================================================================
+# EXTRACTION SYSTEM: Convert GENERATION_OPS to STATE_OPS
+# ============================================================================
+
+
+def extract_initial_values_and_operations(
+    expr: sympy.Basic, depth: int, max_decimal_places: int = 4
+) -> tuple[list[float], list[str]]:
+    """Extract initial values and operations from a sympy expression.
+
+    Converts GENERATION_OPS to STATE_OPS:
+    - Division operations become multiplication by reciprocals
+    - Subtraction operations become addition with negative values
+    - Returns only STATE_OPS: [add, multiply, identity]
+
+    Args:
+        expr: The sympy expression
+        depth: Target depth for padding operations
+        max_decimal_places: Maximum decimal places for reciprocal precision
+
+    Returns:
+        Tuple of (initial_values, operations) where operations are from STATE_OPS
+    """
+
+    initial_values = []
+    operations = []
+
+    def extract_all_values_and_ops(node):
+        """Recursively extract all numeric values and operation types from the expression."""
+        if isinstance(node, sympy.Number):
+            initial_values.append(float(node))
+        elif isinstance(node, sympy.Symbol):
+            try:
+                initial_values.append(float(str(node)))
+            except ValueError:
+                pass  # Skip non-numeric symbols
+        elif isinstance(node, sympy.Add):
+            # Handle addition/subtraction -> convert all to addition with proper signs
+            for arg in node.args:
+                if (
+                    isinstance(arg, sympy.Mul)
+                    and len(arg.args) >= 1
+                    and arg.args[0] == -1
+                ):
+                    # This is a subtraction term: -1 * something
+                    if len(arg.args) == 2:
+                        # Simple case: -1 * value
+                        subtracted_value = arg.args[1]
+                        if isinstance(subtracted_value, sympy.Number):
+                            initial_values.append(-float(subtracted_value))
+                        elif isinstance(subtracted_value, sympy.Symbol):
+                            try:
+                                initial_values.append(-float(str(subtracted_value)))
+                            except ValueError:
+                                initial_values.append(-1.0)  # Fallback
+                        else:
+                            # Complex subtracted term - recursively process and negate
+                            start_len = len(initial_values)
+                            extract_all_values_and_ops(subtracted_value)
+                            # Negate the last added value
+                            if len(initial_values) > start_len:
+                                initial_values[-1] = -initial_values[-1]
+                    else:
+                        # Complex multiplication being subtracted
+                        start_len = len(initial_values)
+                        extract_all_values_and_ops(arg)
+                        # The multiplication will handle the negative
+                else:
+                    # Regular addition term
+                    extract_all_values_and_ops(arg)
+
+            # Addition operation (all subtractions converted to negative values)
+            operations.append("add")
+
+        elif isinstance(node, sympy.Mul):
+            # Check if this is division (multiplication by Pow(..., -1))
+            is_division = any(
+                isinstance(arg, sympy.Pow) and len(arg.args) >= 2 and arg.args[1] == -1
+                for arg in node.args
+                if hasattr(arg, "args")
+            )
+
+            if is_division:
+                # This is division - convert to multiplication by reciprocal
+                for arg in node.args:
+                    if (
+                        isinstance(arg, sympy.Pow)
+                        and len(arg.args) >= 2
+                        and arg.args[1] == -1
+                    ):
+                        # This is the denominator (base of Pow(..., -1))
+                        denominator = arg.args[0]
+                        if isinstance(denominator, sympy.Number):
+                            denom_value = float(denominator)
+                            if denom_value != 0:
+                                reciprocal = 1.0 / denom_value
+                                reciprocal = round(reciprocal, max_decimal_places)
+                                initial_values.append(reciprocal)
+                            else:
+                                initial_values.append(1e-6)  # Avoid division by zero
+                        elif isinstance(denominator, sympy.Symbol):
+                            try:
+                                denom_value = float(str(denominator))
+                                if denom_value != 0:
+                                    reciprocal = 1.0 / denom_value
+                                    reciprocal = round(reciprocal, max_decimal_places)
+                                    initial_values.append(reciprocal)
+                                else:
+                                    initial_values.append(1e-6)
+                            except (ValueError, ZeroDivisionError):
+                                initial_values.append(1.0)  # Fallback
+                        else:
+                            initial_values.append(1.0)  # Complex denominator fallback
+                    else:
+                        # Process numerator normally
+                        extract_all_values_and_ops(arg)
+                operations.append("multiply")  # Division -> multiplication
+            else:
+                # Regular multiplication
+                for arg in node.args:
+                    # Skip the -1 factor as it's handled in Add case
+                    if not (isinstance(arg, sympy.Number) and arg == -1):
+                        extract_all_values_and_ops(arg)
+                operations.append("multiply")
+
+        elif isinstance(node, sympy.Pow):
+            # Handle power operations
+            if hasattr(node, "args"):
+                for arg in node.args:
+                    if isinstance(arg, (sympy.Number, sympy.Symbol)):
+                        extract_all_values_and_ops(arg)
+            operations.append("multiply")  # Treat as multiplication
+        elif hasattr(node, "args"):
+            # Generic case for other node types
+            for arg in node.args:
+                extract_all_values_and_ops(arg)
+
+    # Process the expression
+    extract_all_values_and_ops(expr)
+
+    # Fallback: if no operations were detected, create minimal operations
+    if not operations:
+        if len(initial_values) <= 1:
+            operations = ["add"]  # Single value, minimal operation
+        else:
+            # Multiple values, assume addition
+            operations = ["add"] * min(len(initial_values) - 1, depth)
+
+    # Ensure we have at least one initial value
+    if len(initial_values) < 1:
+        initial_values = [0.0]
+
+    # Balance values and operations
+    expected_values = len(operations) + 1
+    if len(initial_values) < expected_values:
+        initial_values.extend([1.0] * (expected_values - len(initial_values)))
+    elif len(initial_values) > expected_values:
+        initial_values = initial_values[:expected_values]
+
+    # Pad to required depth with identity operations
+    while len(operations) < depth:
+        operations.append("identity")
+    while len(initial_values) < depth + 1:
+        initial_values.append(1.0)
+
+    # Ensure exact depth
+    operations = operations[:depth]
+    initial_values = initial_values[: depth + 1]
+
+    # Verify all operations are from STATE_OPS
+    for i, op in enumerate(operations):
+        if op not in STATE_OPS:
+            operations[i] = "identity"  # Fallback for invalid ops
+
+    return initial_values, operations
+
+
+def string_to_expression(expr_str: str) -> sympy.Basic:
+    """Convert a string to a sympy expression."""
+    return sympy.parse_expr(expr_str, evaluate=False)
+
+
+def expression_to_string(expr: sympy.Basic) -> str:
+    """Convert a sympy expression to string."""
+    return str(expr)
+
+
+def convert_number_to_english(number: float, max_decimal_places: int = 6) -> str:
+    """Convert *number* to its English word equivalent using *num2words*.
+
+    The value is first rounded (half-up) to *max_decimal_places* decimal digits to
+    avoid extremely long fractional strings, then converted.  Negatives are
+    rendered with the "negative" prefix to preserve the previous output style.
+    """
+    # Quantise using Decimal to avoid floating-point surprises (e.g. 0.1+0.2)
+    quantised = Decimal(str(number)).quantize(
+        Decimal(10) ** -max_decimal_places, rounding=ROUND_HALF_UP
+    )
+
+    words = num2words(abs(quantised))
+    return f"negative {words}" if quantised < 0 else words
+
+
+def expressions_to_tensors(
+    expressions: list[sympy.Basic | str],
+    *,
+    depth: int,
+    max_digits: int,
+    max_decimal_places: int,
+    base: int = 10,
+) -> tuple[list[dict[str, torch.Tensor]], list[bool]]:
+    """Convert a list of sympy expressions to structure tensors using STATE_OPS.
+
+    This converts GENERATION_OPS to STATE_OPS:
+    - Division → multiplication by reciprocals
+    - Subtraction → addition with negative values
+    - Returns tensors using only STATE_OPS: [add, multiply, identity]
+    - Invalid expressions get "zero DAG" representations
+
+    Args:
+        expressions: List of sympy expressions or "not valid" strings
+        depth: Target depth for DAG operations
+        max_digits: Maximum number of digits for encoding
+        max_decimal_places: Maximum decimal places for encoding
+        base: Number base (default 10)
+
+    Returns:
+        Tuple of (tensor_list, valid_mask) where:
+        - tensor_list: Contains T tensors (one per token position, including zero DAGs)
+        - valid_mask: Boolean list indicating which positions were valid
+    """
+    tensor_results = []
+    valid_mask = []
+
+    for expr in expressions:
+        if expr == "not valid":
+            # Create zero DAG for invalid token position
+            zero_initial_values = [0.0] * (depth + 1)
+            zero_operations = ["identity"] * depth
+
+            zero_tensor_dict = plan_to_tensors(
+                zero_initial_values,
+                zero_operations,
+                max_digits=max_digits,
+                max_decimal_places=max_decimal_places,
+                base=base,
+            )
+            # Override final execution to be exactly zero
+            zero_tensor_dict["target_final_exec"] = 0.0
+
+            tensor_results.append(zero_tensor_dict)
+            valid_mask.append(False)
+        else:
+            # Extract initial values and operations from the sympy expression
+            # This converts GENERATION_OPS to STATE_OPS
+            initial_values, operations = extract_initial_values_and_operations(
+                expr, depth, max_decimal_places
+            )
+
+            # Convert to tensors using production code directly
+            tensor_dict = plan_to_tensors(
+                initial_values,
+                operations,
+                max_digits=max_digits,
+                max_decimal_places=max_decimal_places,
+                base=base,
+            )
+            tensor_results.append(tensor_dict)
+            valid_mask.append(True)
+
+    return tensor_results, valid_mask
 
 
 def generate_uniform_digit_number(
@@ -193,92 +477,78 @@ def generate_expression(
     seed: int,
     max_digits: int,
     max_decimal_places: int,
+    tokenizer,  # tiktoken.Encoding
     base: int = 10,
-    allowed_operations: list[str] | None,
-    expression_simplification_probability: float,
-    expression_expansion_probability: float,
-    english_conversion_probability: float = 0.0,
-    integer_no_decimal_probability: float = 0.0,
-    override_initial_values: list[float] | None = None,
-    override_operations: list[str] | None = None,
-    train: bool = False,
-) -> tuple[
-    sympy.Basic | None,
-    sympy.Basic | None,
-    list[float],
-    list[str],
-    float | None,
-    bool,
-    bool,
-]:
-    """Generate a sympy expression.
+    _enable_preprocessing: bool = True,
+) -> tuple[list[sympy.Basic | str], list[str], list[bool]]:
+    """Generate expressions using GENERATION_OPS with per-token approach.
+
+    This implements the system that:
+    1. Uses GENERATION_OPS for readable expressions (division/subtraction visible)
+    2. Generates per-token substrings for training
+    3. Applies preprocessing to convert invalid expressions to valid ones
+    4. Returns masking information for invalid tokens
+
+    Args:
+        depth: Target depth for DAG operations
+        seed: Random seed for reproducibility
+        max_digits: Maximum number of digits for encoding
+        max_decimal_places: Maximum decimal places for encoding
+        tokenizer: tiktoken tokenizer for creating per-token substrings
+        base: Number base (default 10)
+        _enable_preprocessing: Whether to apply preprocessing (default True, underscore indicates testing-only parameter)
 
     Returns:
-        Tuple of (sympy_expr, sympy_expr_with_vals, initial_values, operations, final_value, did_simplify, did_expand)
-        When train=True, returns (None, None, initial_values, operations, None, False, False) for performance
+        Tuple of (expressions, substrings, valid_mask) where:
+        - expressions: List of sympy expressions or "not valid" strings
+        - substrings: List of corresponding string representations
+        - valid_mask: Boolean list indicating which expressions are valid
     """
+
     # ------------------------------------------------------------------
-    # 1. Generate random initial values and operations
+    # 1. Generate a base expression using GENERATION_OPS
     # ------------------------------------------------------------------
     rng = random.Random(seed)
 
-    # Use provided operations or generate random ones
-    ops_set = allowed_operations or OP_NAMES
+    # Use canonical GENERATION_OPS
     sym_ops = []
 
-    if override_operations is not None:
-        sym_ops = list(override_operations)
-    else:
-        # Identities will be added later.
-        ops_set_no_identity = [op for op in ops_set if op != "identity"]
-        # Choose a random number of operations between 0 and depth.
-        # That we generate expressions with a variety of depths.
-        # Weight higher depths more heavily.
-        weights = [i + 1 for i in range(depth)]
-        num_ops = rng.choices(range(depth), weights=weights, k=1)[0]
-        # Generate random operations.
-        for i in range(num_ops):
-            op_name = rng.choice(ops_set_no_identity)
-            sym_ops.append(op_name)
+    # Identities will be added later.
+    ops_set_no_identity = [op for op in GENERATION_OPS if op != "identity"]
+    # Choose a random number of operations between 0 and depth.
+    # Weight higher depths more heavily.
+    weights = [i + 1 for i in range(depth)]
+    num_ops = rng.choices(range(depth), weights=weights, k=1)[0]
+    # Generate random operations.
+    for i in range(num_ops):
+        op_name = rng.choice(ops_set_no_identity)
+        sym_ops.append(op_name)
 
-    # Use provided initial values or generate random ones
+    # Generate random initial values
     initial_values = []
-    if override_initial_values is not None:
-        initial_values = list(override_initial_values)
-    else:
-        # Generate random values.
-        for i in range(num_ops + 1):
-            value = generate_uniform_digit_number(
-                seed=seed + i,
-                max_digits=max_digits,
-                max_decimal_places=max_decimal_places,
-                base=base,
-                allow_zero=False,
-                integer_no_decimal_probability=integer_no_decimal_probability,
-            )
-            initial_values.append(value)
+    for i in range(num_ops + 1):
+        value = generate_uniform_digit_number(
+            seed=seed + i,
+            max_digits=max_digits,
+            max_decimal_places=max_decimal_places,
+            base=base,
+            allow_zero=False,
+            integer_no_decimal_probability=0.0,
+        )
+        initial_values.append(value)
 
     # ------------------------------------------------------------------
-    # 2. Build SymPy expression from leaves + operations (full mode)
+    # 2. Build SymPy expression from leaves + operations
     # ------------------------------------------------------------------
-    # Convert values to symbols (possibly with English names based on probability)
+    # Convert values to symbols
     symbols = []
     symbol_names = []
     for val in initial_values:
-        # Determine if this value should be converted to English
-        should_convert = rng.random() < english_conversion_probability
-
-        if should_convert:
-            symbol_name = convert_number_to_english(val)
-        else:
-            # Use numerical representation
-            symbol_name = str(val)
-
+        symbol_name = str(val)
         symbols.append(sympy.Symbol(symbol_name))
         symbol_names.append(symbol_name)
 
     nodes: list[sympy.Basic] = symbols.copy()
-    ops_map: dict[sympy.Basic, str] = {}
 
     # Apply the operations in Reverse Polish Notation
     for op_name in reversed(sym_ops):
@@ -286,68 +556,62 @@ def generate_expression(
         second = nodes.pop()
         expr = _apply_sympy_op(op_name, second, top)
         nodes.append(expr)
-        ops_map[expr] = op_name
 
     assert len(nodes) == 1
-    sym_expr: sympy.Basic = nodes[0]
-
-    # For logging purposes, create a version of the sym_expr with the initial values replaced with VAL_0, VAL_1, etc.
-    sym_expr_with_vals = sym_expr.subs(
-        [
-            (sympy.Symbol(name), sympy.Symbol(f"VAL_{i}"))
-            for i, name in enumerate(symbol_names)
-        ]
-    )
-
-    final_value = None
-    if not train:
-        # Execute the sympy expression and store the final value for validation purposes.
-        value_map = {symbols[i]: initial_values[i] for i in range(len(initial_values))}
-        final_value = sympy.N(sym_expr.subs(value_map))
-
-        if im(final_value) != 0:
-            final_value = np.inf
-
-    # We swap some operations with identity to play better with the DAG model, but this is not compatible with sympy.
-    operations = [op for op in sym_ops]
-    for i, op in enumerate(operations):
-        if op == "multiply":
-            # If second value is 0, then we can discard the top and replace with 0
-            if initial_values[i] == 0.0:
-                operations[i] = "identity"
-
-        if op == "divide":
-            num_index = i
-            if initial_values[num_index] == 0.0:
-                operations[num_index] = "identity"
-
-    # Pad the rest of the operations with identity
-    operations.extend(["identity"] * (depth - len(operations)))
-    # Pad the rest of initial values with 1.0
-    initial_values.extend([1.0] * (depth + 1 - len(initial_values)))
+    base_expr: sympy.Basic = nodes[0]
 
     # ------------------------------------------------------------------
-    # 3. Optional simplify / expand for prettified expression rendering.
+    # 3. Generate per-token substrings and create expressions
     # ------------------------------------------------------------------
-    did_simplify = False
-    did_expand = False
-    if rng.random() < expression_simplification_probability:
-        sym_expr = sympy.simplify(sym_expr)
-        did_simplify = True
+    base_text = str(base_expr)
+    tokens = tokenizer.encode(base_text)
 
-    if rng.random() < expression_expansion_probability:
-        sym_expr = sympy.expand(sym_expr)
-        did_expand = True
+    expressions = []
+    substrings = []
 
-    return (
-        sym_expr,
-        sym_expr_with_vals,
-        initial_values,
-        operations,
-        final_value,
-        did_simplify,
-        did_expand,
-    )
+    # Generate all possible substring expressions from tokenization
+    for i in range(len(tokens)):
+        substring_tokens = tokens[: i + 1]
+        substring = tokenizer.decode(substring_tokens)
+        substrings.append(substring)
+
+        # Try to parse as expression
+        try:
+            expr = string_to_expression(substring.strip())
+            # Verify it's a valid mathematical expression
+            float(expr)  # This will raise if not evaluable
+            expressions.append(expr)
+        except:
+            expressions.append("not valid")
+
+    # ------------------------------------------------------------------
+    # 4. Apply preprocessing if enabled
+    # ------------------------------------------------------------------
+    if _enable_preprocessing:
+        processed_expressions = []
+        for i, expr in enumerate(expressions):
+            if expr == "not valid":
+                preprocessed = preprocess_invalid_expression(substrings[i])
+                if preprocessed:
+                    try:
+                        processed_expr = string_to_expression(preprocessed)
+                        # Verify it's evaluable
+                        float(processed_expr)
+                        processed_expressions.append(processed_expr)
+                    except Exception:
+                        processed_expressions.append("not valid")
+                else:
+                    processed_expressions.append("not valid")
+            else:
+                processed_expressions.append(expr)
+        expressions = processed_expressions
+
+    # ------------------------------------------------------------------
+    # 5. Create validity mask
+    # ------------------------------------------------------------------
+    valid_mask = [expr != "not valid" for expr in expressions]
+
+    return expressions, substrings, valid_mask
 
 
 def float_to_digit_onehot(
@@ -485,8 +749,9 @@ def plan_to_tensors(
     digits_tensor = torch.stack(digits_onehots, dim=0)
 
     # Convert operations to one-hot encoded tensors (length already validated)
-    operation_to_index = {op: i for i, op in enumerate(OP_NAMES)}
-    operations_one_hot = torch.zeros(depth, len(OP_NAMES))
+    # Use STATE_OPS for the simplified 3-operation system
+    operation_to_index = {op: i for i, op in enumerate(STATE_OPS)}
+    operations_one_hot = torch.zeros(depth, len(STATE_OPS))
 
     for i, op in enumerate(operations):
         op_idx = operation_to_index[op]
@@ -610,451 +875,124 @@ def tensors_to_plan(
     return initial_values, operation_list
 
 
-def generate_single_dag_example(
-    depth: int,
-    seed: int = 42,
-    english_conversion_probability: float = 0.0,
-    integer_no_decimal_probability: float = 0.0,
-    expression_expansion_probability: float = 0.0,
-    expression_simplification_probability: float = 0.0,
-    max_digits: int = 4,
-    max_decimal_places: int = 6,
-    base: int = 10,
-    allowed_operations: list[str] | None = None,
-    printing_style_probs: dict[str, float] | None = None,
-    train: bool = False,
-    # Test-only overrides – callers should provide **both** or **neither**
-    _operations_override: list[str] | None = None,
-    _initial_values_override: list[float] | None = None,
-    tokenizer=None,
-) -> DAGExample:
-    """Generate a single DAG computation example as a simple math expression."""
-
-    (
-        sym_expr,
-        sym_expr_with_vals,
-        initial_values,
-        operations,
-        final_value_sympy,
-        did_simplify,
-        did_expand,
-    ) = generate_expression(
-        depth=depth,
-        seed=seed,
-        max_digits=max_digits,
-        max_decimal_places=max_decimal_places,
-        base=base,
-        allowed_operations=allowed_operations,
-        expression_simplification_probability=expression_simplification_probability,
-        expression_expansion_probability=expression_expansion_probability,
-        english_conversion_probability=english_conversion_probability,
-        integer_no_decimal_probability=integer_no_decimal_probability,
-        override_initial_values=_initial_values_override,
-        override_operations=_operations_override,
-        train=train,
-    )
-
-    # Now we render the expression - no need for English conversion of operands
-    # since they're already converted if needed
-    text, printing_style = format_expression_string(
-        expression=sym_expr,
-        seed=seed,
-        english_conversion_probability=english_conversion_probability,
-        printing_style_probs=printing_style_probs,
-    )
-    # Use plan_to_tensors to get the structure dict directly
-    structure_dict = plan_to_tensors(
-        initial_values=initial_values,
-        operations=operations,
-        max_digits=max_digits,
-        max_decimal_places=max_decimal_places,
-        base=base,
-    )
-
-    # Add final token position to structure dict
-    if tokenizer is None:
-        tokenizer = get_encoding("gpt2")
-
-    tokens = tokenizer.encode_ordinary(text)
-    if len(tokens) > 0:
-        final_token_pos = len(tokens) - 1
-    else:
-        final_token_pos = 0
-    structure_dict["final_token_pos"] = final_token_pos
-
-    if train:
-        # For training, only create essential attributes to minimize overhead
-        example = DAGTrainExample(
-            text=text,
-            structure_dict=structure_dict,
-            depth=depth,
-            max_digits=max_digits,
-            max_decimal_places=max_decimal_places,
-            base=base,
-            seed=seed,
-        )
-    else:
-        # Full example creation for evaluation/debugging (original behavior)
-        example = DAGValExample(
-            text=text,
-            operations=operations,
-            depth=depth,
-            max_digits=max_digits,
-            max_decimal_places=max_decimal_places,
-            base=base,
-            english_conversion_probability=english_conversion_probability,
-            integer_no_decimal_probability=integer_no_decimal_probability,
-            printing_style=printing_style,
-            structure_dict=structure_dict,
-            final_value_sympy=final_value_sympy,
-            operations_named=operations,
-            seed=seed,
-            did_expand=did_expand,
-            did_simplify=did_simplify,
-            allowed_operations=allowed_operations,
-            expr=sym_expr_with_vals,
-        )
-
-        # Skip expensive validation during training
-        if (
-            not train
-            and final_value_sympy != np.inf
-            and not math.isclose(
-                example.structure_dict["target_final_exec"],
-                example.final_value_sympy,
-                abs_tol=1e-2,
-                rel_tol=1e-2,
-            )
-        ):
-            logging.warning(
-                f"\n\n-------------------WARNING: Final value mismatch between sympy and tensor execute: {example.structure_dict['target_final_exec']} != {example.final_value_sympy}, \nexample: {example}\n\n-------------------"
-            )
-
-    return example
-
-
-class DAGStructureDataset:
-    """
-    Dataset for pretraining DAG predictor on structure prediction.
-    Maps text descriptions to DAG structure tensors.
-    """
-
-    def __init__(
-        self,
-        max_depth: int = 8,
-        seed: int = 42,
-        tokenizer_str: str = "gpt2",
-        english_conversion_probability: float = 0.0,
-        integer_no_decimal_probability: float = 0.0,
-        expression_simplification_probability: float = 0.0,
-        expression_expansion_probability: float = 0.0,
-        max_digits: int = 4,
-        max_decimal_places: int = 6,
-        base: int = 10,
-        allowed_operations: list[str] | None = None,
-        printing_style_probs: dict[str, float] | None = None,
-    ):
-        """Initialize the DAG structure dataset."""
-        self.max_depth = max_depth
-        # For DAG with depth n, we need n+1 initial values
-        self.num_initial_values = max_depth + 1
-        self.seed = seed
-        self.num_generated = 0
-        self.tokenizer = get_encoding(tokenizer_str)
-        self.english_conversion_probability = english_conversion_probability
-        self.integer_no_decimal_probability = integer_no_decimal_probability
-        self.expression_simplification_probability = (
-            expression_simplification_probability
-        )
-        self.expression_expansion_probability = expression_expansion_probability
-        self.printing_style_probs = printing_style_probs
-        self.max_digits = max_digits
-        self.max_decimal_places = max_decimal_places
-        self.base = base
-        # If a subset of operations is provided, validate and store mapping.
-        if allowed_operations is not None:
-            invalid_ops = [op for op in allowed_operations if op not in OP_NAMES]
-            if invalid_ops:
-                raise ValueError(
-                    f"Invalid operations provided: {invalid_ops}. Available operations: {OP_NAMES}"
-                )
-            self.allowed_operations = list(allowed_operations)
-        else:
-            self.allowed_operations = None  # None implies full OP_NAMES
-
-        # Pre-compute column indices mapping from allowed subset to global OP_NAMES
-        if self.allowed_operations is None:
-            self.allowed_op_indices = list(range(len(OP_NAMES)))
-        else:
-            self.allowed_op_indices = [
-                OP_NAMES.index(op) for op in self.allowed_operations
-            ]
-
-        # Operation name to index mapping
-        self.op_name_to_idx = {name: i for i, name in enumerate(OP_NAMES)}
-        self.op_idx_to_name = {i: name for i, name in enumerate(OP_NAMES)}
-
-    def generate_batch(
-        self, batch_size: int, seed: int = 42, train: bool = False
-    ) -> Tuple[List[str], Dict[str, torch.Tensor], List[DAGExample]]:
-        """Generate a batch of structure examples.
-
-        Args:
-            batch_size: Number of examples to generate
-
-        Returns:
-            Tuple of (text_list, batched_structure_tensors)
-        """
-        texts: list[str] = []
-        structures: list[Dict[str, torch.Tensor]] = []
-        examples: List[DAGExample] = []
-
-        for i in range(batch_size):
-            # Use fixed depth - all examples in dataset should have the same depth
-            # The identity function allows us to handle cases with effective depth < max_depth naturally
-            depth = self.max_depth
-
-            try:
-                # Generate example directly with structure tensors
-                example = generate_single_dag_example(
-                    depth=depth,
-                    seed=seed + self.num_generated + i,
-                    english_conversion_probability=self.english_conversion_probability,
-                    integer_no_decimal_probability=self.integer_no_decimal_probability,
-                    expression_simplification_probability=self.expression_simplification_probability,
-                    expression_expansion_probability=self.expression_expansion_probability,
-                    max_digits=self.max_digits,
-                    max_decimal_places=self.max_decimal_places,
-                    base=self.base,
-                    allowed_operations=self.allowed_operations,
-                    printing_style_probs=self.printing_style_probs,
-                    train=train,
-                    tokenizer=self.tokenizer,
-                )
-            except Exception:
-                logging.error(
-                    f"Error generating Example with seed: {seed + self.num_generated + i}"
-                )
-                raise
-
-            texts.append(example.text)
-            structures.append(example.structure_dict)
-            examples.append(example)
-
-        # Update generation counter
-        self.num_generated += batch_size
-
-        # Batch the structure tensors
-        batched_structure = self._batch_structures(structures, examples)
-
-        return texts, batched_structure, examples
-
-    def _batch_structures(
-        self, structures: List[Dict[str, torch.Tensor]], examples: List[DAGExample]
-    ) -> Dict[str, torch.Tensor]:
-        """Batch structure tensors with proper padding.
-
-        Args:
-            structures: List of structure dictionaries.
-            examples: List of DAGExample objects with other information.
-
-        Returns:
-            Batched structure tensors
-        """
-        batch_size = len(structures)
-        max_depth = max(e.depth for e in examples)
-        max_nodes = max_depth + 1
-
-        # Initialize batched tensors
-        batched_initial_sgn = torch.zeros(batch_size, max_nodes)
-        batched_initial_log = torch.zeros(batch_size, max_nodes)
-        D_total = self.max_digits + self.max_decimal_places
-        # Use the configured base instead of hardcoding base 10
-        batched_initial_digits = torch.zeros(batch_size, max_nodes, D_total, self.base)
-        batched_operation_probs = torch.zeros(batch_size, max_depth, len(OP_NAMES))
-        batched_depths = torch.zeros(batch_size, dtype=torch.long)
-
-        # Initialize target tensors for the new loss terms
-        batched_target_initial_values = torch.zeros(batch_size, max_nodes)
-        batched_target_final_exec = torch.zeros(batch_size)
-
-        # Initialize statistics tensors
-        batched_target_initial_stats = torch.zeros(batch_size, 15)  # multi-value stats
-        batched_target_intermediate_stats = torch.zeros(
-            batch_size, 15
-        )  # multi-value stats
-        batched_target_final_stats = torch.zeros(batch_size, 10)  # single-value stats
-
-        # Initialize final token positions tensor
-        batched_final_token_pos = torch.zeros(batch_size, dtype=torch.long)
-
-        # Fill batched tensors
-        for i, (structure, example) in enumerate(zip(structures, examples)):
-            depth = example.depth
-            nodes = depth + 1
-
-            # Copy initial values
-            batched_initial_sgn[i, :nodes] = structure["target_initial_sgn"][:nodes]
-            batched_initial_log[i, :nodes] = structure["target_initial_log"][:nodes]
-            batched_initial_digits[i, :nodes] = structure["target_initial_digits"][
-                :nodes
-            ]
-
-            # Copy operation probabilities
-            batched_operation_probs[i, :depth] = structure["target_operation_probs"][
-                :depth
-            ]
-
-            # Store depth
-            batched_depths[i] = depth
-
-            # Extract target values directly from structure_dict
-            batched_target_initial_values[i, :nodes] = structure[
-                "target_initial_values"
-            ][:nodes]
-            batched_target_final_exec[i] = structure["target_final_exec"]
-
-            # Extract statistics targets
-            batched_target_initial_stats[i] = structure["target_initial_stats"]
-            batched_target_intermediate_stats[i] = structure[
-                "target_intermediate_stats"
-            ]
-            batched_target_final_stats[i] = structure["target_final_stats"]
-
-            # Extract final token position
-            batched_final_token_pos[i] = structure["final_token_pos"]
-
-        return {
-            "target_initial_sgn": batched_initial_sgn,
-            "target_initial_log": batched_initial_log,
-            "target_initial_digits": batched_initial_digits,
-            "target_operation_probs": batched_operation_probs,
-            "target_initial_values": batched_target_initial_values,
-            "target_final_exec": batched_target_final_exec,
-            "target_initial_stats": batched_target_initial_stats,
-            "target_intermediate_stats": batched_target_intermediate_stats,
-            "target_final_stats": batched_target_final_stats,
-            "final_token_pos": batched_final_token_pos,
-        }
-
-    def create_dataloader(
-        self, batch_size: int = 32, seed: int = 42, train: bool = False
-    ) -> Iterator[Tuple[List[str], Dict[str, torch.Tensor], List[DAGExample]]]:
-        """Create an infinite dataloader for structure examples.
-
-        Args:
-            batch_size: Batch size
-
-        Yields:
-            Batches of (texts, structure_tensors)
-        """
-        i = 0
-        while True:
-            texts, structures, examples = self.generate_batch(
-                batch_size, seed=seed + i, train=train
-            )
-            i += 1
-            yield texts, structures, examples
-
-
 def create_dag_structure_dataloaders(
     train_batch_size: int = 32,
     val_batch_size: int = 32,
     max_depth: int = 8,
     seed: int = 42,
-    english_conversion_probability: float = 0.0,
-    integer_no_decimal_probability: float = 0.0,
-    expression_simplification_probability: float = 0.0,
-    expression_expansion_probability: float = 0.0,
-    max_digits: int = 4,  # Maximum number of integer digits for uniform digit distribution
-    max_decimal_places: int = 6,  # Auto-derived from max_digits for uniform string distribution
-    base: int = 10,  # Number base for digit representation
-    allowed_operations: list[str] | None = None,
-    printing_style_probs: dict[str, float] | None = None,
+    max_digits: int = 4,
+    max_decimal_places: int = 6,
+    base: int = 10,
+    block_size: int = 8,
 ) -> Tuple[Iterator, Iterator]:
-    """Create train/val DAG structure dataloaders for predictor training.
+    """Create per-token train/val DAG structure dataloaders.
 
-    Args:
-        train_batch_size: Training batch size
-        val_batch_size: Validation batch size
-        max_depth: DAG depth (all examples will have this depth)
-        seed: Seed for training data
-        english_conversion_probability: Probability of converting to English (0.0 to 1.0)
-        integer_no_decimal_probability: Probability of converting to integers (0.0 to 1.0)
-        max_digits: Maximum number of integer digits (1-4 means 1-digit to 4-digit integers)
-        max_decimal_places: Maximum decimal places.
+    Uses the streaming.py per-token system directly.
 
     Returns:
-        Tuple of (train_loader, val_loader) iterators
+        Tuple of (train_loader, val_loader) that yield:
+        - texts: List[str]
+        - target_tensors: List[Dict[str, torch.Tensor]]
+        - valid_masks: torch.Tensor (B, T)
     """
-    # Use configurable english conversion rate
 
-    # Create datasets with fixed depth
-    train_dataset = DAGStructureDataset(
-        max_depth=max_depth,
-        seed=seed,
-        english_conversion_probability=english_conversion_probability,
-        integer_no_decimal_probability=integer_no_decimal_probability,
-        expression_simplification_probability=expression_simplification_probability,
-        expression_expansion_probability=expression_expansion_probability,
-        max_digits=max_digits,
-        max_decimal_places=max_decimal_places,
-        base=base,
-        allowed_operations=allowed_operations,
-        printing_style_probs=printing_style_probs,
-    )
+    def generate_batch(batch_size: int, training_seed: int):
+        """Generate a batch using the per-token format."""
+        from tiktoken import get_encoding
 
-    val_dataset = DAGStructureDataset(
-        max_depth=max_depth,
-        seed=seed,
-        english_conversion_probability=english_conversion_probability,
-        integer_no_decimal_probability=integer_no_decimal_probability,
-        expression_simplification_probability=expression_simplification_probability,
-        expression_expansion_probability=expression_expansion_probability,
-        max_digits=max_digits,
-        max_decimal_places=max_decimal_places,
-        base=base,
-        allowed_operations=allowed_operations,
-        printing_style_probs=printing_style_probs,
-    )
+        tokenizer = get_encoding("gpt2")
 
-    # Create dataloaders
-    train_loader = train_dataset.create_dataloader(
-        train_batch_size, seed=seed, train=True
-    )
-    val_loader = val_dataset.create_dataloader(
-        val_batch_size, seed=seed, train=False  # Always full examples for validation
-    )
+        all_texts = []
+        all_target_tensors = []
+        all_valid_masks = []
 
-    return train_loader, val_loader
+        for i in range(batch_size):
+            # Generate expressions
+            expressions, substrings, valid_mask_list = generate_expression(
+                depth=max_depth,
+                seed=training_seed + i,
+                max_digits=max_digits,
+                max_decimal_places=max_decimal_places,
+                tokenizer=tokenizer,
+            )
 
+            # Convert to tensors
+            target_tensors, tensor_valid_mask = expressions_to_tensors(
+                expressions,
+                depth=max_depth,
+                max_digits=max_digits,
+                max_decimal_places=max_decimal_places,
+            )
 
-if __name__ == "__main__":
-    # Simple example usage
-    print("DAG Streaming Dataset Example")
-    print("=" * 40)
+            # Get main expression (last one) as string
+            last_expr = expressions[-1] if expressions else ""
+            if last_expr == "not valid":
+                text = (
+                    substrings[-1] if substrings else ""
+                )  # Use raw substring for invalid expressions
+            else:
+                text = str(last_expr)  # Convert sympy expression to string
 
-    # Test the new padding approach
-    print("\nTesting pad_dag_plan:")
-    initial_values = [5.5, 3.2, 1.8, 4.1, 7.3, 2.9, 6.4]
-    operations = ["add", "multiply", "identity", "subtract", "add", "divide"]
+            all_texts.append(text)
+            all_target_tensors.append(
+                target_tensors
+            )  # Keep as list of lists (batch structure)
+            all_valid_masks.append(tensor_valid_mask)
 
-    print(f"Original plan:")
-    print(f"Initial values: {initial_values}")
-    print(f"Operations: {operations}")
+        # Pad valid masks to block_size (not just max within batch)
+        batched_valid_masks = []
+        for mask in all_valid_masks:
+            # Truncate or pad to block_size to match model expectations
+            if len(mask) > block_size:
+                padded = mask[:block_size]  # Truncate if too long
+            else:
+                padded = mask + [False] * (block_size - len(mask))  # Pad with False
+            batched_valid_masks.append(padded)
 
-    # Test the structure dataset (used in train_predictor.py)
-    print("\nTesting DAGStructureDataset with consistent stack-based processing:")
-    print("(Both initial values and operations processed right-to-left)")
-    structure_dataset = DAGStructureDataset(
-        max_depth=3, seed=42, max_digits=3
-    )  # max_decimal_places auto-derived as 2
-    texts, structures, seeds = structure_dataset.generate_batch(2)
-    print(f"Generated {len(texts)} structure examples")
-    print(f"Structure keys: {list(structures.keys())}")
-    print(f"Initial signs shape: {structures['initial_sgn'].shape}")
-    print(f"Operation probs shape: {structures['operation_probs'].shape}")
-    print(f"Seeds: {seeds}")
+        valid_masks_tensor = torch.tensor(batched_valid_masks, dtype=torch.bool)
 
-    print("\n✅ Example completed successfully!")
-    print("✅ Operations now processed consistently as stack (right-to-left)")
+        # Pad target tensors to block_size as well
+        padded_target_tensors = []
+        for target_tensors in all_target_tensors:
+            # Create zero DAG for padding positions
+            zero_initial_values = [0.0] * (max_depth + 1)
+            zero_operations = ["identity"] * max_depth
+            zero_tensor_dict = plan_to_tensors(
+                zero_initial_values,
+                zero_operations,
+                max_digits=max_digits,
+                max_decimal_places=max_decimal_places,
+                base=base,
+            )
+            zero_tensor_dict["target_final_exec"] = 0.0
+
+            # Truncate or pad to block_size
+            if len(target_tensors) > block_size:
+                padded_tensors = target_tensors[:block_size]  # Truncate if too long
+            else:
+                padded_tensors = target_tensors + [zero_tensor_dict] * (
+                    block_size - len(target_tensors)
+                )
+            padded_target_tensors.append(padded_tensors)
+
+        return all_texts, padded_target_tensors, valid_masks_tensor
+
+    def train_loader():
+        counter = 0
+        while True:
+            texts, target_tensors, valid_masks = generate_batch(
+                train_batch_size, seed + counter
+            )
+            counter += train_batch_size
+            yield texts, target_tensors, valid_masks
+
+    def val_loader():
+        counter = 0
+        while True:
+            texts, target_tensors, valid_masks = generate_batch(
+                val_batch_size, seed + counter + 10000
+            )
+            counter += val_batch_size
+            yield texts, target_tensors, valid_masks
+
+    return train_loader(), val_loader()

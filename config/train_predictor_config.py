@@ -27,18 +27,6 @@ max_digits = 4
 max_decimal_places = 4
 base = 10
 
-# Expression generation settings
-english_conversion_probability = 0.5
-integer_no_decimal_probability = 0.5
-expression_simplification_probability = 0.5
-expression_expansion_probability = 0.5
-printing_style_probs = {
-    "sstr": 0.25,
-    "pretty": 0.25,
-    "ascii": 0.25,
-    "latex": 0.25,
-}
-
 # Model configuration
 gradient_accumulation_steps = 1
 batch_size = 32
