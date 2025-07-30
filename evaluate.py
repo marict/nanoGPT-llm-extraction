@@ -5,7 +5,7 @@ for better code organization and separation of concerns.
 """
 
 import random as _eval_random
-from typing import Dict, List
+from typing import Dict
 
 import torch
 import torch.nn.functional as F
@@ -115,7 +115,6 @@ def evaluate_dag_model(
 
                 # Compute per-token metrics for legacy fields
                 valid_tokens_count = valid_mask.sum().item()
-                total_tokens_count = valid_mask.numel()
 
                 # Calculate expression-level valid rate (excluding padding)
                 batch_size, seq_len = valid_mask.shape
