@@ -314,8 +314,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         f"exec {eval_losses['exec_loss']:.4f}, "
                         f"stats {eval_losses['stats_loss']:.4f}, "
                         f"uncertainty_weights {uncertainty_weights_str}, "
-                        f"valid_tokens {eval_losses['valid_tokens']:.0f}/{eval_losses['total_tokens']:.0f} "
-                        f"({eval_losses['valid_token_rate']*100:.1f}%), "
+                        f"expr_valid_rate {eval_losses['expression_valid_rate']*100:.1f}%, "
                         f"executed_mse {eval_losses['executed_mse']:.4f}"
                     )
                     print(eval_msg)
@@ -333,8 +332,10 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "val/stats_loss": eval_losses["stats_loss"],
                         "val/executed_mse": eval_losses["executed_mse"],
                         "val/initial_values_mse": eval_losses["initial_values_mse"],
-                        "val/valid_token_rate": eval_losses["valid_token_rate"],
                         "val/time_per_iter_ms": eval_time_ms,
+                        "val/expression_valid_rate": eval_losses[
+                            "expression_valid_rate"
+                        ],
                     }
                     # Store validation metrics for combined logging with training metrics
                     pending_val_metrics = val_log_dict
@@ -472,16 +473,39 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     # ------------------------------------------------------------------ #
                     # Add per-token training metrics
                     # ------------------------------------------------------------------ #
-                    # Track valid token statistics for monitoring
-                    valid_tokens_count = valid_mask.sum().item()
-                    total_tokens_count = valid_mask.numel()
+                    # Calculate expression-level valid rate (excluding padding)
+                    batch_size, seq_len = valid_mask.shape
+                    expression_valid_tokens = 0
+                    expression_total_tokens = 0
 
-                    loss_accum["valid_token_rate"] = loss_accum.get(
-                        "valid_token_rate", 0
-                    ) + (
-                        (valid_tokens_count / total_tokens_count)
-                        / cfg.gradient_accumulation_steps
-                    )
+                    for b in range(batch_size):
+                        # Find the last non-padding token (expression length)
+                        sequence_mask = valid_mask[b]  # (seq_len,)
+
+                        # Find expression length by looking for the transition to padding
+                        # Padding is always False values at the end
+                        expression_length = seq_len
+                        for i in range(seq_len - 1, -1, -1):
+                            if (
+                                i == 0
+                                or sequence_mask[i]
+                                or (i < seq_len - 1 and sequence_mask[i + 1])
+                            ):
+                                expression_length = i + 1
+                                break
+
+                        # Count valid tokens within the expression (before padding)
+                        expression_tokens = sequence_mask[:expression_length]
+                        expression_valid_tokens += expression_tokens.sum().item()
+                        expression_total_tokens += expression_length
+
+                    if expression_total_tokens > 0:
+                        loss_accum["expression_valid_rate"] = loss_accum.get(
+                            "expression_valid_rate", 0
+                        ) + (
+                            (expression_valid_tokens / expression_total_tokens)
+                            / cfg.gradient_accumulation_steps
+                        )
 
                 # Backward pass
                 # Skip backward if loss doesn't require gradients (e.g., when all losses disabled)
@@ -538,7 +562,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     f"exec {exec_loss_val:.4f}, "
                     f"stats {stats_loss_val:.4f}, "
                     f"uncertainty_weights {uncertainty_weights_str}, "
-                    f"valid_token_rate {loss_accum['valid_token_rate']*100:.1f}%, "
+                    f"expr_valid_rate {loss_accum['expression_valid_rate']*100:.1f}%, "
                     f"time {dt*1000:.2f}ms"
                 )
 
@@ -570,29 +594,42 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "train/stats_loss": loss_accum["stats_loss"],
                         "lr": current_lr,
                         "lr_uncertainty_params": current_uncertainty_params_lr,
-                        "train/valid_token_rate": loss_accum["valid_token_rate"],
                         "train/time_per_iter_ms": dt * 1000,
-                        # Uncertainty weights (exp(-uncertainty_params))
-                        "uncertainty_weights/sign": uncertainty_weights[0].item(),
-                        "uncertainty_weights/digit": uncertainty_weights[1].item(),
-                        "uncertainty_weights/op": uncertainty_weights[2].item(),
-                        "uncertainty_weights/value": uncertainty_weights[3].item(),
-                        "uncertainty_weights/exec": uncertainty_weights[4].item(),
-                        "uncertainty_weights/stats": uncertainty_weights[5].item(),
-                        # Raw uncertainty_params values for monitoring adaptation
-                        "uncertainty_params/sign": current_uncertainty_params[0].item(),
-                        "uncertainty_params/digit": current_uncertainty_params[
-                            1
-                        ].item(),
-                        "uncertainty_params/op": current_uncertainty_params[2].item(),
-                        "uncertainty_params/value": current_uncertainty_params[
-                            3
-                        ].item(),
-                        "uncertainty_params/exec": current_uncertainty_params[4].item(),
-                        "uncertainty_params/stats": current_uncertainty_params[
-                            5
-                        ].item(),
+                        "train/expression_valid_rate": loss_accum[
+                            "expression_valid_rate"
+                        ],
                     }
+
+                    log_dict.update(
+                        {
+                            # Uncertainty weights (exp(-uncertainty_params))
+                            "uncertainty_weights/sign": uncertainty_weights[0].item(),
+                            "uncertainty_weights/digit": uncertainty_weights[1].item(),
+                            "uncertainty_weights/op": uncertainty_weights[2].item(),
+                            "uncertainty_weights/value": uncertainty_weights[3].item(),
+                            "uncertainty_weights/exec": uncertainty_weights[4].item(),
+                            "uncertainty_weights/stats": uncertainty_weights[5].item(),
+                            # Raw uncertainty_params values for monitoring adaptation
+                            "uncertainty_params/sign": current_uncertainty_params[
+                                0
+                            ].item(),
+                            "uncertainty_params/digit": current_uncertainty_params[
+                                1
+                            ].item(),
+                            "uncertainty_params/op": current_uncertainty_params[
+                                2
+                            ].item(),
+                            "uncertainty_params/value": current_uncertainty_params[
+                                3
+                            ].item(),
+                            "uncertainty_params/exec": current_uncertainty_params[
+                                4
+                            ].item(),
+                            "uncertainty_params/stats": current_uncertainty_params[
+                                5
+                            ].item(),
+                        }
+                    )
 
                     for key, value in loss_accum.items():
                         if (

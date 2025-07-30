@@ -47,7 +47,7 @@ def evaluate_dag_model(
         "initial_values_mse": 0.0,
         "valid_tokens": 0.0,
         "total_tokens": 0.0,
-        "valid_token_rate": 0.0,
+        "expression_valid_rate": 0.0,
     }
 
     num_batches = 0
@@ -113,13 +113,40 @@ def evaluate_dag_model(
                 for key in total_losses.keys():
                     total_losses[key] += losses[key].item()
 
-                # Compute per-token metrics
+                # Compute per-token metrics for legacy fields
                 valid_tokens_count = valid_mask.sum().item()
                 total_tokens_count = valid_mask.numel()
 
-                total_metrics["valid_token_rate"] += (
-                    valid_tokens_count / total_tokens_count
-                )
+                # Calculate expression-level valid rate (excluding padding)
+                batch_size, seq_len = valid_mask.shape
+                expression_valid_tokens = 0
+                expression_total_tokens = 0
+
+                for b in range(batch_size):
+                    # Find the last non-padding token (expression length)
+                    sequence_mask = valid_mask[b]  # (seq_len,)
+
+                    # Find expression length by looking for the transition to padding
+                    # Padding is always False values at the end
+                    expression_length = seq_len
+                    for i in range(seq_len - 1, -1, -1):
+                        if (
+                            i == 0
+                            or sequence_mask[i]
+                            or (i < seq_len - 1 and sequence_mask[i + 1])
+                        ):
+                            expression_length = i + 1
+                            break
+
+                    # Count valid tokens within the expression (before padding)
+                    expression_tokens = sequence_mask[:expression_length]
+                    expression_valid_tokens += expression_tokens.sum().item()
+                    expression_total_tokens += expression_length
+
+                if expression_total_tokens > 0:
+                    total_metrics["expression_valid_rate"] += (
+                        expression_valid_tokens / expression_total_tokens
+                    )
 
                 # Compute additional evaluation metrics
                 # For simplicity, we'll compute MSE using valid positions only

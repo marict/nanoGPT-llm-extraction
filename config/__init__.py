@@ -5,5 +5,5 @@ training scenarios, and evaluation settings.
 """
 
 # Import configuration modules so they can be accessed directly
-from config.train_predictor_config import *
-from config.train_predictor_default import *
+# Note: Don't import specific configs here to avoid override issues
+# Configs should be loaded explicitly by the training scripts
