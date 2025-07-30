@@ -8,6 +8,7 @@ import random as _eval_random
 from typing import Dict
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 
 from predictor_utils import compute_dag_structure_loss, tokenize_texts
@@ -51,9 +52,12 @@ def evaluate_dag_model(
     }
 
     num_batches = 0
-    master_process = device == "cuda" or device.startswith(
-        "cuda"
-    )  # Simple master process detection
+    # For evaluation printing, we want to show details in most cases
+    # Only skip if we're explicitly in a distributed non-master process
+    try:
+        master_process = not dist.is_initialized() or dist.get_rank() == 0
+    except:
+        master_process = True  # Default to showing details
 
     with torch.no_grad():
         for i, (texts, target_tensors, valid_mask) in enumerate(val_loader):
