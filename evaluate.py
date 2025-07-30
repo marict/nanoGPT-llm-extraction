@@ -202,7 +202,7 @@ def evaluate_dag_model(
 
                 num_batches += 1
 
-                # Optional: Print sample validation details for debugging
+                # Detailed validation sample printing
                 if master_process and (i % 10 == 0 or i < 3):
                     sample_text = texts[0] if texts else "N/A"
                     sample_valid_rate = (
@@ -213,6 +213,120 @@ def evaluate_dag_model(
                     print(
                         f'[val] batch {i}: "{sample_text[:50]}...", valid_rate={sample_valid_rate:.1%}'
                     )
+
+                    # Show detailed DAG structure for first sample in batch
+                    if valid_tokens_count > 0 and len(texts) > 0:
+                        # Reconstruct seed for this sample
+                        sample_seed = (
+                            seed + i * cfg.batch_size + 10000
+                        )  # Validation offset
+
+                        print(
+                            f"\n=== DETAILED VALIDATION SAMPLE (seed={sample_seed}) ==="
+                        )
+                        print(f"Full expression: '{texts[0]}'")
+
+                        # Get the last valid token position for this sample (complete expression)
+                        sample_mask = valid_mask[0]  # (T,)
+                        last_valid_pos = -1
+                        for pos in range(len(sample_mask)):
+                            if sample_mask[pos]:
+                                last_valid_pos = pos
+
+                        if last_valid_pos >= 0:
+                            # Get target and prediction for the final/complete expression
+                            target_dict = target_tensors[0][last_valid_pos]
+
+                            # Target values
+                            target_signs = target_dict["target_initial_sgn"]  # (N,)
+                            target_digits = target_dict[
+                                "target_initial_digits"
+                            ]  # (N, D, base)
+                            target_ops = target_dict[
+                                "target_operation_probs"
+                            ]  # (depth, n_ops)
+                            target_final_exec = target_dict["target_final_exec"]
+
+                            # Convert target digits to initial values
+                            target_initial_values = []
+                            for n in range(target_signs.shape[0]):
+                                sign = target_signs[n].item()
+                                digit_probs = target_digits[n]  # (D, base)
+                                magnitude = digits_to_magnitude(
+                                    digit_probs,
+                                    cfg.max_digits,
+                                    cfg.max_decimal_places,
+                                    cfg.base,
+                                )
+                                value = sign * magnitude
+                                target_initial_values.append(value)
+
+                            # Target operations
+                            target_op_names = []
+                            for d in range(target_ops.shape[0]):
+                                op_probs = target_ops[d]  # (n_ops,)
+                                op_idx = torch.argmax(op_probs).item()
+                                op_names = ["add", "multiply", "identity"]  # STATE_OPS
+                                target_op_names.append(op_names[op_idx])
+
+                            # Predicted values (from the forward pass)
+                            pred_signs_logit = pred_sign_logits[
+                                0, last_valid_pos
+                            ]  # (N,)
+                            pred_digits_logit = pred_digit_logits[
+                                0, last_valid_pos
+                            ]  # (N, D, base)
+                            pred_ops_logit = pred_op_logits[
+                                0, last_valid_pos
+                            ]  # (depth, n_ops)
+
+                            # Convert predictions
+                            pred_signs = torch.tanh(pred_signs_logit)
+                            pred_digit_probs = torch.softmax(pred_digits_logit, dim=-1)
+                            pred_op_probs = torch.softmax(pred_ops_logit, dim=-1)
+
+                            # Convert predicted digits to initial values
+                            pred_initial_values = []
+                            for n in range(pred_signs.shape[0]):
+                                sign = pred_signs[n].item()
+                                digit_probs = pred_digit_probs[n]  # (D, base)
+                                magnitude = digits_to_magnitude(
+                                    digit_probs,
+                                    cfg.max_digits,
+                                    cfg.max_decimal_places,
+                                    cfg.base,
+                                )
+                                value = sign * magnitude
+                                pred_initial_values.append(value)
+
+                            # Predicted operations
+                            pred_op_names = []
+                            for d in range(pred_op_probs.shape[0]):
+                                op_probs = pred_op_probs[d]  # (n_ops,)
+                                op_idx = torch.argmax(op_probs).item()
+                                op_names = ["add", "multiply", "identity"]  # STATE_OPS
+                                pred_op_names.append(op_names[op_idx])
+
+                            # Predicted final execution (from statistics)
+                            pred_final_exec = pred_statistics["final"][
+                                0, last_valid_pos, 0
+                            ].item()  # First statistic is final exec
+
+                            print(
+                                f"Target initial values: {[f'{v:.3f}' for v in target_initial_values]}"
+                            )
+                            print(
+                                f"Pred   initial values: {[f'{v:.3f}' for v in pred_initial_values]}"
+                            )
+                            print(f"Target operations:     {target_op_names}")
+                            print(f"Pred   operations:     {pred_op_names}")
+                            print(f"Target final exec:     {target_final_exec:.6f}")
+                            print(f"Pred   final exec:     {pred_final_exec:.6f}")
+                            print(
+                                f"Exec error:            {abs(target_final_exec - pred_final_exec):.6f}"
+                            )
+
+                        print("=" * 60 + "\n")
 
             except Exception as e:
                 # Fail fast on ALL exceptions during evaluation - no skipping

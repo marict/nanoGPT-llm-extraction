@@ -470,42 +470,42 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     else:
                         loss_accum[key] = value
 
-                    # ------------------------------------------------------------------ #
-                    # Add per-token training metrics
-                    # ------------------------------------------------------------------ #
-                    # Calculate expression-level valid rate (excluding padding)
-                    batch_size, seq_len = valid_mask.shape
-                    expression_valid_tokens = 0
-                    expression_total_tokens = 0
+                # ------------------------------------------------------------------ #
+                # Add per-token training metrics (OUTSIDE the loss accumulation loop)
+                # ------------------------------------------------------------------ #
+                # Calculate expression-level valid rate (excluding padding)
+                batch_size, seq_len = valid_mask.shape
+                expression_valid_tokens = 0
+                expression_total_tokens = 0
 
-                    for b in range(batch_size):
-                        # Find the last non-padding token (expression length)
-                        sequence_mask = valid_mask[b]  # (seq_len,)
+                for b in range(batch_size):
+                    # Find the last non-padding token (expression length)
+                    sequence_mask = valid_mask[b]  # (seq_len,)
 
-                        # Find expression length by looking for the transition to padding
-                        # Padding is always False values at the end
-                        expression_length = seq_len
-                        for i in range(seq_len - 1, -1, -1):
-                            if (
-                                i == 0
-                                or sequence_mask[i]
-                                or (i < seq_len - 1 and sequence_mask[i + 1])
-                            ):
-                                expression_length = i + 1
-                                break
+                    # Find expression length by looking for the transition to padding
+                    # Padding is always False values at the end
+                    expression_length = seq_len
+                    for i in range(seq_len - 1, -1, -1):
+                        if (
+                            i == 0
+                            or sequence_mask[i]
+                            or (i < seq_len - 1 and sequence_mask[i + 1])
+                        ):
+                            expression_length = i + 1
+                            break
 
-                        # Count valid tokens within the expression (before padding)
-                        expression_tokens = sequence_mask[:expression_length]
-                        expression_valid_tokens += expression_tokens.sum().item()
-                        expression_total_tokens += expression_length
+                    # Count valid tokens within the expression (before padding)
+                    expression_tokens = sequence_mask[:expression_length]
+                    expression_valid_tokens += expression_tokens.sum().item()
+                    expression_total_tokens += expression_length
 
-                    if expression_total_tokens > 0:
-                        loss_accum["expression_valid_rate"] = loss_accum.get(
-                            "expression_valid_rate", 0
-                        ) + (
-                            (expression_valid_tokens / expression_total_tokens)
-                            / cfg.gradient_accumulation_steps
-                        )
+                if expression_total_tokens > 0:
+                    loss_accum["expression_valid_rate"] = loss_accum.get(
+                        "expression_valid_rate", 0
+                    ) + (
+                        (expression_valid_tokens / expression_total_tokens)
+                        / cfg.gradient_accumulation_steps
+                    )
 
                 # Backward pass
                 # Skip backward if loss doesn't require gradients (e.g., when all losses disabled)
