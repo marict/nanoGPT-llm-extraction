@@ -29,7 +29,7 @@ base = 10
 
 # Model configuration
 gradient_accumulation_steps = 1
-batch_size = 512
+batch_size = 256
 block_size = 32
 
 # Model architecture (larger for RunPod training)
