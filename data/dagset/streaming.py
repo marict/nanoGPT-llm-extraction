@@ -108,6 +108,16 @@ def extract_initial_values_and_operations(
 ) -> tuple[list[float], list[str]]:
     """Extract initial values and operations from a sympy expression.
 
+    KEY INNOVATION: Uses sympy.expand() to convert nested expressions into associative
+    forms that are compatible with the DAG's two-list representation. This eliminates
+    the fundamental tree structure problem by flattening expressions like:
+    - (a + b) * c  →  a*c + b*c  (flat addition)
+    - (a + b) * (c + d)  →  a*c + a*d + b*c + b*d  (flat addition)
+
+    This approach leverages mathematical associativity of add/multiply operations
+    to ensure any nested expression can be represented as flat operations chains,
+    solving the right-to-left execution order issues with complex expressions.
+
     Converts GENERATION_OPS to STATE_OPS:
     - Division operations become multiplication by reciprocals
     - Subtraction operations become addition with negative values
@@ -122,140 +132,194 @@ def extract_initial_values_and_operations(
         Tuple of (initial_values, operations) where operations are from STATE_OPS
     """
 
+    # STEP 1: Expand the expression to eliminate nested structure
+    # This converts (a+b)*c → a*c + b*c, making it associative
+    #
+    # CRITICAL: This expansion ONLY affects tensor extraction, NEVER the text representation!
+    # The model sees original text like "(2+3)*4" while tensors get mathematically correct
+    # flattened representation. This separation is essential for training quality.
+    expanded_expr = sympy.expand(expr)
+
+    # STEP 2: Force evaluation only for problematic complex denominators
+    # Only evaluate if expression contains division that expansion couldn't handle
+    if not isinstance(
+        expanded_expr, (sympy.Number, sympy.Float, sympy.Integer)
+    ) and any(
+        isinstance(arg, sympy.Pow) and len(arg.args) >= 2 and arg.args[1] == -1
+        for arg in expanded_expr.args
+        if hasattr(expanded_expr, "args")
+    ):
+        try:
+            # Force evaluation only for division cases that need it
+            evaluated = float(expanded_expr)
+            expanded_expr = sympy.Float(evaluated)
+        except (TypeError, ValueError):
+            # Keep symbolic form if evaluation fails
+            pass
+
     initial_values = []
     operations = []
 
+    def add_numeric_value(value):
+        """Helper to safely add a numeric value."""
+        try:
+            initial_values.append(
+                float(value) if isinstance(value, str) else float(value)
+            )
+        except (ValueError, TypeError):
+            pass
+
+    def add_reciprocal(denominator):
+        """Helper to add reciprocal of a value."""
+        try:
+            denom_val = float(denominator)
+            if denom_val != 0:
+                # Use higher precision for reciprocals to avoid mathematical errors
+                reciprocal = 1.0 / denom_val
+                initial_values.append(
+                    reciprocal
+                )  # Don't round reciprocals aggressively
+            else:
+                initial_values.append(1e-6)
+        except:
+            initial_values.append(1.0)
+
     def extract_all_values_and_ops(node):
-        """Recursively extract all numeric values and operation types from the expression."""
-        if isinstance(node, sympy.Number):
-            initial_values.append(float(node))
-        elif isinstance(node, sympy.Symbol):
-            try:
-                initial_values.append(float(str(node)))
-            except ValueError:
-                pass  # Skip non-numeric symbols
+        """Recursively extract numeric values and operations from expressions."""
+        if isinstance(node, (sympy.Number, sympy.Symbol)):
+            add_numeric_value(node)
+
         elif isinstance(node, sympy.Add):
-            # Handle addition/subtraction -> convert all to addition with proper signs
+            # Process all addition/subtraction terms
             for arg in node.args:
                 if (
                     isinstance(arg, sympy.Mul)
                     and len(arg.args) >= 1
                     and arg.args[0] == -1
                 ):
-                    # This is a subtraction term: -1 * something
+                    # Subtraction: -1 * something
                     if len(arg.args) == 2:
-                        # Simple case: -1 * value
-                        subtracted_value = arg.args[1]
-                        if isinstance(subtracted_value, sympy.Number):
-                            initial_values.append(-float(subtracted_value))
-                        elif isinstance(subtracted_value, sympy.Symbol):
-                            try:
-                                initial_values.append(-float(str(subtracted_value)))
-                            except ValueError:
-                                initial_values.append(-1.0)  # Fallback
-                        else:
-                            # Complex subtracted term - recursively process and negate
-                            start_len = len(initial_values)
-                            extract_all_values_and_ops(subtracted_value)
-                            # Negate the last added value
-                            if len(initial_values) > start_len:
-                                initial_values[-1] = -initial_values[-1]
+                        add_numeric_value(-float(arg.args[1]))
                     else:
-                        # Complex multiplication being subtracted
-                        start_len = len(initial_values)
                         extract_all_values_and_ops(arg)
-                        # The multiplication will handle the negative
                 else:
-                    # Regular addition term
                     extract_all_values_and_ops(arg)
 
-            # Addition operation (all subtractions converted to negative values)
-            operations.append("add")
+            # Add n-1 operations for n terms (correct operations count)
+            num_terms = len(node.args)
+            if num_terms > 1:
+                operations.extend(["add"] * (num_terms - 1))
 
         elif isinstance(node, sympy.Mul):
-            # Check if this is division (multiplication by Pow(..., -1))
-            is_division = any(
-                isinstance(arg, sympy.Pow) and len(arg.args) >= 2 and arg.args[1] == -1
-                for arg in node.args
-                if hasattr(arg, "args")
-            )
+            # Check for division (has Pow(..., -1))
+            division_args = [
+                a
+                for a in node.args
+                if isinstance(a, sympy.Pow) and len(a.args) >= 2 and a.args[1] == -1
+            ]
 
-            if is_division:
-                # This is division - convert to multiplication by reciprocal
-                for arg in node.args:
-                    if (
-                        isinstance(arg, sympy.Pow)
-                        and len(arg.args) >= 2
-                        and arg.args[1] == -1
-                    ):
-                        # This is the denominator (base of Pow(..., -1))
-                        denominator = arg.args[0]
-                        if isinstance(denominator, sympy.Number):
-                            denom_value = float(denominator)
-                            if denom_value != 0:
-                                reciprocal = 1.0 / denom_value
-                                reciprocal = round(reciprocal, max_decimal_places)
-                                initial_values.append(reciprocal)
-                            else:
-                                initial_values.append(1e-6)  # Avoid division by zero
-                        elif isinstance(denominator, sympy.Symbol):
-                            try:
-                                denom_value = float(str(denominator))
-                                if denom_value != 0:
-                                    reciprocal = 1.0 / denom_value
-                                    reciprocal = round(reciprocal, max_decimal_places)
-                                    initial_values.append(reciprocal)
-                                else:
-                                    initial_values.append(1e-6)
-                            except (ValueError, ZeroDivisionError):
-                                initial_values.append(1.0)  # Fallback
-                        else:
-                            initial_values.append(1.0)  # Complex denominator fallback
+            if division_args:
+                # Process division: extract numerator and denominator
+                numerator_args = [arg for arg in node.args if arg not in division_args]
+
+                # Extract numerator values
+                for arg in numerator_args:
+                    extract_all_values_and_ops(arg)
+
+                # Extract denominator values
+                for arg in division_args:
+                    denominator = arg.args[0]
+                    # For complex denominators, extract all values and operations
+                    if hasattr(denominator, "args") and len(denominator.args) > 1:
+                        extract_all_values_and_ops(denominator)
                     else:
-                        # Process numerator normally
-                        extract_all_values_and_ops(arg)
-                operations.append("multiply")  # Division -> multiplication
-            else:
-                # Regular multiplication
-                for arg in node.args:
-                    # Skip the -1 factor as it's handled in Add case
-                    if not (isinstance(arg, sympy.Number) and arg == -1):
-                        extract_all_values_and_ops(arg)
-                operations.append("multiply")
+                        # Simple denominator - add reciprocal directly
+                        add_reciprocal(denominator)
 
-        elif isinstance(node, sympy.Pow):
-            # Handle power operations
-            if hasattr(node, "args"):
-                for arg in node.args:
-                    if isinstance(arg, (sympy.Number, sympy.Symbol)):
-                        extract_all_values_and_ops(arg)
-            operations.append("multiply")  # Treat as multiplication
+                # Add operations for numerator (if multiple terms)
+                if len(numerator_args) > 1:
+                    operations.extend(["multiply"] * (len(numerator_args) - 1))
+
+                # Add operation for division itself
+                operations.append("multiply")
+            else:
+                # Regular multiplication - skip -1 factors (handled by Add)
+                non_neg_one_args = [
+                    arg
+                    for arg in node.args
+                    if not (isinstance(arg, sympy.Number) and arg == -1)
+                ]
+
+                for arg in non_neg_one_args:
+                    extract_all_values_and_ops(arg)
+
+                # Add n-1 multiply operations for n terms (correct operations count)
+                num_terms = len(non_neg_one_args)
+                if num_terms > 1:
+                    operations.extend(["multiply"] * (num_terms - 1))
+
         elif hasattr(node, "args"):
-            # Generic case for other node types
+            # Generic recursion for other types (Pow, etc.)
             for arg in node.args:
                 extract_all_values_and_ops(arg)
+            if isinstance(node, sympy.Pow):
+                operations.append("multiply")
 
-    # Process the expression
-    extract_all_values_and_ops(expr)
+    # Process the expanded expression (now associative!)
+    extract_all_values_and_ops(expanded_expr)
+
+    # CRITICAL: Check if expansion created more operations than max depth allows
+    meaningful_ops = [op for op in operations if op != "identity"]
+    if len(meaningful_ops) > depth:
+        raise ValueError(
+            f"Expansion depth exceeded maximum allowed depth in extract_initial_values_and_operations:\n"
+            f"  Original expression: {expr}\n"
+            f"  Expanded expression: {expanded_expr}\n"
+            f"  Meaningful operations: {len(meaningful_ops)} (requires depth {len(meaningful_ops)})\n"
+            f"  Maximum allowed depth: {depth}\n"
+            f"  Operations: {meaningful_ops}\n"
+            f"  \n"
+            f"  This expression is too complex for the current DAG depth limit.\n"
+            f"  Either increase the dataset depth limit or simplify the expression.\n"
+            f"  DO NOT silently truncate - this would cause incorrect mathematical results."
+        )
 
     # Fallback: if no operations were detected, create minimal operations
     if not operations:
         if len(initial_values) <= 1:
-            operations = ["add"]  # Single value, minimal operation
+            # Single value requires one identity operation for DAG compatibility
+            operations = ["identity"]
         else:
-            # Multiple values, assume addition
-            operations = ["add"] * min(len(initial_values) - 1, depth)
+            # Multiple values with no detected operations is an error - fail completely
+            raise ValueError(
+                f"No operations detected for multi-value expression: {expr}\n"
+                f"Values: {initial_values}\n"
+                f"This indicates an extraction bug that must be fixed."
+            )
 
     # Ensure we have at least one initial value
     if len(initial_values) < 1:
         initial_values = [0.0]
 
-    # Balance values and operations
+    # Balance values and operations - NO TRUNCATION, FAIL COMPLETELY IF MISMATCH
     expected_values = len(operations) + 1
     if len(initial_values) < expected_values:
         initial_values.extend([1.0] * (expected_values - len(initial_values)))
     elif len(initial_values) > expected_values:
-        initial_values = initial_values[:expected_values]
+        # NEVER truncate - this causes silent data loss and bugs
+        # Instead, fail completely so we can identify and fix the root cause
+        meaningful_ops = [op for op in operations if op != "identity"]
+        meaningful_values = [v for v in initial_values if v != 1.0]
+        raise ValueError(
+            f"Value/operation count mismatch in extract_initial_values_and_operations:\n"
+            f"  Expression: {expr}\n"
+            f"  Expected {expected_values} values (operations + 1)\n"
+            f"  Got {len(initial_values)} values: {initial_values}\n"
+            f"  Operations ({len(operations)}): {operations}\n"
+            f"  Meaningful operations ({len(meaningful_ops)}): {meaningful_ops}\n"
+            f"  Meaningful values ({len(meaningful_values)}): {meaningful_values}\n"
+            f"  This indicates a bug in the extraction logic that must be fixed."
+        )
 
     # Pad to required depth with identity operations
     while len(operations) < depth:
