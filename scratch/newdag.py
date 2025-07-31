@@ -14,6 +14,8 @@ from typing import Tuple
 import sympy
 import torch
 import torch.nn as nn
+from sympy import postorder_traversal
+from sympy.core.numbers import Float as sympy_float
 
 # Stability constants from dag_model.py
 LOG_LIM = 23.026  # Bound on ln-magnitudes (≈ 10.0 * ln(10))
@@ -87,12 +89,19 @@ class NewDAGPlanPredictor(nn.Module):
     - All domain gates G for all steps: (B, T, intermediate_slots)
     """
 
-    def __init__(self, dag_depth: int, hidden_dim: int = 512):
+    def __init__(
+        self,
+        dag_depth: int,
+        total_nodes: int,
+        initial_slots: int,
+        intermediate_slots: int,
+        hidden_dim: int,
+    ):
         super().__init__()
         self.dag_depth = dag_depth
-        self.total_nodes = dag_depth
-        self.initial_slots = dag_depth // 2
-        self.intermediate_slots = dag_depth // 2
+        self.total_nodes = total_nodes
+        self.initial_slots = initial_slots
+        self.intermediate_slots = intermediate_slots
         self.hidden_dim = hidden_dim
 
         # Predictors for complete plan (like DAGPlanPredictor in dag_model.py)
@@ -158,21 +167,27 @@ class NewDAGExecutor(nn.Module):
     Executes using pre-predicted complete plan (like execute_stack in dag_model.py).
 
     Structure:
-    - total_nodes = dag_depth
-    - initial_slots = dag_depth // 2 (positions 0 to initial_slots-1)
-    - intermediate_slots = dag_depth // 2 (positions initial_slots to total_nodes-1)
+    - total_nodes = dag_depth * 2
+    - initial_slots = dag_depth (positions 0 to initial_slots-1)
+    - intermediate_slots = dag_depth (positions initial_slots to total_nodes-1)
     """
 
     def __init__(self, dag_depth: int, hidden_dim: int = 512):
         super().__init__()
         self.dag_depth = dag_depth
-        self.total_nodes = dag_depth
-        self.initial_slots = dag_depth // 2
-        self.intermediate_slots = dag_depth // 2
+        self.total_nodes = dag_depth * 2
+        self.initial_slots = dag_depth
+        self.intermediate_slots = dag_depth
         self.hidden_dim = hidden_dim
 
         # Plan predictor (like DAGPlanPredictor in dag_model.py)
-        self.plan_predictor = NewDAGPlanPredictor(dag_depth, hidden_dim)
+        self.plan_predictor = NewDAGPlanPredictor(
+            dag_depth,
+            self.total_nodes,
+            self.initial_slots,
+            self.intermediate_slots,
+            hidden_dim,
+        )
 
     def execute_with_plan(
         self,
@@ -335,11 +350,89 @@ class NewDAGExecutor(nn.Module):
         return self.execute_with_plan(V_mag, V_sign, O, G, debug=debug)
 
 
+def purge_negative_ones(expr: sympy.Basic) -> sympy.Basic:
+    """
+    Simplify multiplication by -1 in a sympy expression.
+    """
+
+    def transform_neg_one_mul(expr_part):
+        """Transform multiplications involving -1."""
+        if isinstance(expr_part, sympy.Mul):
+            # For DAG operations, we expect exactly 2 arguments
+            if len(expr_part.args) == 2:
+                first_arg, second_arg = expr_part.args
+
+                # Check if either argument is -1
+                first_is_neg_one = _is_negative_one(first_arg)
+                second_is_neg_one = _is_negative_one(second_arg)
+
+                if first_is_neg_one:
+                    # -1 * x = -x
+                    return -second_arg
+                elif second_is_neg_one:
+                    # x * -1 = -x
+                    return -first_arg
+
+        # For non-multiplication expressions, recurse into children
+        if hasattr(expr_part, "args") and expr_part.args:
+            new_args = [transform_neg_one_mul(arg) for arg in expr_part.args]
+            return expr_part.func(*new_args, evaluate=False)
+
+        return expr_part
+
+    def _is_negative_one(arg):
+        """Check if an argument represents -1."""
+        # Check for any numeric -1 (catches Float(-1.0), NegativeOne, Integer(-1), etc.)
+        if arg.is_number and arg.is_real:
+            val = float(arg.evalf())
+            return abs(val - (-1.0)) < 1e-10
+        return False
+
+    return transform_neg_one_mul(expr)
+
+
+def is_division(node: sympy.Basic) -> bool:
+    return (
+        isinstance(node, sympy.Mul)
+        and len(node.args) == 2
+        and isinstance(node.args[1], sympy.Pow)
+        and node.args[1].exp == -1
+    )
+
+
+def get_div_parts(node: sympy.Mul):
+    if not is_division(node):
+        raise ValueError(f"Node {node} is not a division")
+    num = node.args[0]
+    denom = node.args[1].base
+    return num, denom
+
+
+def is_subtraction(node: sympy.Basic) -> bool:
+    return (
+        isinstance(node, sympy.Add)
+        and len(node.args) == 2
+        and isinstance(node.args[1], sympy.Mul)
+        and node.args[1].args[0] == -1  # -1 * b
+    )
+
+
+def get_sub_parts(node: sympy.Add):
+    if not is_subtraction(node):
+        raise ValueError(f"Node {node} is not a subtraction")
+    minuend = node.args[0]
+    subtrahend = node.args[1].args[1]  # the b in -1*b
+    return minuend, subtrahend
+
+
 def expression_to_tensors(
     expr: sympy.Basic, dag_depth: int
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Convert a sympy expression to predictor tensor format using simplified stack-based approach.
+    Convert a sympy expression to NewDAG tensor format with proper SymPy parsing.
+
+    This function properly parses SymPy expressions and converts them to the
+    tensor format expected by NewDAGExecutor.
 
     Args:
         expr: Sympy expression to convert
@@ -348,139 +441,61 @@ def expression_to_tensors(
     Returns:
         V_mag, V_sign, O, G: Tensors for DAG execution
     """
-    total_nodes = dag_depth
-    initial_slots = dag_depth // 2
-    intermediate_slots = dag_depth // 2
+    # TODO: Implement principled conversion logic
+    # First initialize a blank predictor state of dag_depth
+    V_mag = torch.zeros(1, 1, dag_depth * 2)
+    V_sign = torch.ones(1, 1, dag_depth * 2)
+    O = torch.zeros(1, 1, dag_depth, dag_depth * 2)
+    G = torch.zeros(1, 1, dag_depth)
 
-    # Phase 1: Extract symbols and constants simply
-    symbols = sorted(expr.free_symbols, key=str)
-    constants = []
+    # Simplify negative one multiplications first
+    expr = purge_negative_ones(expr)
 
-    # Find all numeric constants in the expression
-    def find_constants(node):
-        if isinstance(node, (sympy.Integer, sympy.Float, sympy.Rational)):
-            constants.append(float(node))
-        elif isinstance(node, sympy.Pow):
-            # For power nodes like b**(-1), only collect constants from the base, not the exponent
-            find_constants(node.args[0])  # Only process the base
-        elif hasattr(node, "args"):
-            for arg in node.args:
-                find_constants(arg)
+    values = []
+    # First collect the numbers in the expression
+    for node in postorder_traversal(expr):
+        if isinstance(node, sympy_float):
+            values.append(node)
 
-    find_constants(expr)
-    constants = list(dict.fromkeys(constants))  # Remove duplicates, preserve order
+        print(f"Node type: {type(node)}")
+        print(f"Node: {node}")
+        print()
 
-    # Build initial values: symbols first, then constants
-    initial_values = [1.0] * len(symbols) + constants
-    initial_values = (initial_values + [1.0] * initial_slots)[:initial_slots]
+    for i, value in enumerate(values):
+        V_mag[0, 0, i] = float(value.evalf())
+        V_sign[0, 0, i] = 1 if float(value.evalf()) > 0 else -1
 
-    # Create symbol/constant lookup
-    atom_to_slot = {}
-    for i, sym in enumerate(symbols[:initial_slots]):
-        atom_to_slot[sym] = i
-    for i, const in enumerate(constants):
-        if len(symbols) + i < initial_slots:
-            atom_to_slot[const] = len(symbols) + i
-
-    # Phase 2: Simple post-order traversal to build operations
-    operations = []  # (operand_weights, is_linear_domain)
-    node_to_slot = atom_to_slot.copy()
-    next_slot = initial_slots
-
-    def evaluate_node(node):
-        """Post-order evaluation that builds operations."""
-        nonlocal next_slot
-
-        if node in node_to_slot:
-            return node_to_slot[node]
-
-        # Handle atomic values
-        if isinstance(node, sympy.Symbol):
-            return atom_to_slot.get(node, 0)
-        elif isinstance(node, (sympy.Integer, sympy.Float, sympy.Rational)):
-            return atom_to_slot.get(float(node), 0)
-
-        # Handle operations
-        elif isinstance(node, sympy.Add):
-            # Build operand weights (handle subtraction as negative weights)
-            weights = [0.0] * total_nodes
-            for arg in node.args:
-                # Extract coefficient and base term
-                if hasattr(arg, "as_coeff_Mul"):
-                    coeff, rest = arg.as_coeff_Mul()
-                    # Evaluate the base term (without coefficient)
-                    slot = evaluate_node(rest)
-                    if slot < total_nodes:
-                        weights[slot] += float(coeff)
-                else:
-                    # Simple term without coefficient
-                    slot = evaluate_node(arg)
-                    if slot < total_nodes:
-                        weights[slot] += 1.0
-
-            operations.append((weights, True))  # Linear domain for addition
-            node_to_slot[node] = next_slot
-            next_slot += 1
-            return node_to_slot[node]
-
-        elif isinstance(node, sympy.Mul):
-            # Process all operands first (post-order)
-            operand_slots = [evaluate_node(arg) for arg in node.args]
-
-            # Build operand weights (handle division as negative weights)
-            weights = [0.0] * total_nodes
-            for i, arg in enumerate(node.args):
-                slot = operand_slots[i]
-                if slot < total_nodes:
-                    # Check if this is division (negative exponent)
-                    if isinstance(arg, sympy.Pow) and arg.args[1] == -1:
-                        weights[slot] -= 1.0  # Division in log domain
-                    else:
-                        weights[slot] += 1.0  # Multiplication in log domain
-
-            operations.append((weights, False))  # Log domain for multiplication
-            node_to_slot[node] = next_slot
-            next_slot += 1
-            return node_to_slot[node]
-
-        elif isinstance(node, sympy.Pow) and node.args[1] == -1:
-            # Handle 1/x as reciprocal of x
-            return evaluate_node(node.args[0])
-
-        else:
-            # Fallback to first slot for unknown node types
-            return 0
-
-    # Evaluate the expression (this builds operations via post-order traversal)
-    final_slot = evaluate_node(expr)
-
-    # Phase 3: Build tensors directly
-    V_mag = torch.zeros(1, 1, total_nodes)
-    V_sign = torch.ones(1, 1, total_nodes)
-    O = torch.zeros(1, 1, intermediate_slots, total_nodes)
-    G = torch.zeros(1, 1, intermediate_slots)
-
-    # Fill initial values
-    for i, val in enumerate(initial_values):
-        if i < total_nodes:
-            V_mag[0, 0, i] = abs(val)
-            V_sign[0, 0, i] = 1.0 if val >= 0 else -1.0
-
-    # Fill operations
-    for i, (weights, is_linear) in enumerate(operations[:intermediate_slots]):
-        for j, weight in enumerate(weights):
-            if j < total_nodes and abs(weight) > 1e-8:
-                O[0, 0, i, j] = weight
-        G[0, 0, i] = 1.0 if is_linear else 0.0
-
-    # Fill remaining slots with identity operations
-    for i in range(len(operations), intermediate_slots):
-        source_slot = (
-            final_slot if i == 0 and len(operations) == 0 else (initial_slots + i - 1)
-        )
-        if source_slot < total_nodes:
-            O[0, 0, i, source_slot] = 1.0
-            G[0, 0, i] = 1.0  # Linear domain for identity
+    step_index = 0
+    try:
+        for node in postorder_traversal(expr):
+            # div and sub are represented as mul and add in sympy
+            is_div = is_division(node)
+            is_sub = is_subtraction(node)
+            is_add = not is_sub and isinstance(node, sympy.Add)
+            is_mul = not is_div and isinstance(node, sympy.Mul)
+            if is_add or is_sub:
+                G[0, 0, step_index] = 1  # Linear domain
+            if is_mul or is_div:
+                G[0, 0, step_index] = 0  # Log domain
+            if is_add or is_mul:
+                i1 = values.index(node.args[0])
+                i2 = values.index(node.args[1])
+                O[0, 0, step_index, i1] = 1
+                O[0, 0, step_index, i2] = 1
+                values.append(node)
+                step_index += 1
+            if is_div or is_sub:
+                a1, a2 = get_div_parts(node) if is_div else get_sub_parts(node)
+                i1 = values.index(a1)
+                i2 = values.index(a2)
+                O[0, 0, step_index, i1] = 1
+                O[0, 0, step_index, i2] = -1
+                values.append(node)
+                step_index += 1
+    except Exception as e:
+        print(f"Exception: {e}")
+        print(f"Error when parsing node {node} of type {type(node)}")
+        raise
 
     return V_mag, V_sign, O, G
 

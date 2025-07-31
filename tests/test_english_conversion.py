@@ -258,7 +258,7 @@ class TestGeneratedExpressions(TestExpressionEquivalence):
         # Import the expression generator
         import tiktoken
 
-        from data.dagset.streaming import generate_expression
+        from data.dagset.generate_expression import generate_expression
 
         tokenizer = tiktoken.get_encoding("gpt2")
 

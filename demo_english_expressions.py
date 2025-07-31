@@ -12,7 +12,7 @@ sys.path.append(str(Path(".").absolute()))
 
 import tiktoken
 
-from data.dagset.streaming import generate_expression
+from data.dagset.generate_expression import generate_expression
 from expression_to_english import english_to_expression, expression_to_english
 
 

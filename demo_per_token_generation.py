@@ -14,7 +14,8 @@ sys.path.insert(0, ".")
 
 import tiktoken
 
-from data.dagset.streaming import expressions_to_tensors, generate_expression
+from data.dagset.generate_expression import generate_expression
+from data.dagset.streaming import expressions_to_tensors
 
 
 def demo_expression_generation(depth=6, seed=None):
