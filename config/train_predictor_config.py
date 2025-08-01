@@ -26,7 +26,6 @@ max_dag_depth = 4  # Must match dag_depth in model config
 max_digits = 4
 max_decimal_places = 4
 
-
 # Model configuration
 gradient_accumulation_steps = 1
 batch_size = 256
