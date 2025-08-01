@@ -11,7 +11,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
-from predictor_utils import compute_dag_structure_loss, tokenize_texts
+from predictor_utils import compute_dag_loss, tokenize_texts
 from tensor_utils import digits_to_magnitude
 
 
@@ -35,17 +35,14 @@ def evaluate_dag_model(
         k: 0.0
         for k in (
             "total_loss",
-            "sign_loss",
-            "digit_loss",
-            "op_loss",
-            "value_loss",
+            "V_mag_loss",
+            "V_sign_loss",
+            "O_loss",
+            "G_loss",
             "exec_loss",
-            "stats_loss",
         )
     }
     total_metrics = {
-        "executed_mse": 0.0,
-        "initial_values_mse": 0.0,
         "valid_tokens": 0.0,
         "total_tokens": 0.0,
         "expression_valid_rate": 0.0,
@@ -65,59 +62,49 @@ def evaluate_dag_model(
                 break
 
             try:
-                # Move target tensors to device
+
                 for seq_targets in target_tensors:
                     for target_dict in seq_targets:
                         for key, tensor in target_dict.items():
                             if isinstance(tensor, torch.Tensor):
                                 target_dict[key] = tensor.to(device)
 
-                # Move valid mask to device
                 valid_mask = valid_mask.to(device)
 
                 # Inputs
                 input_tokens = tokenize_texts(texts, cfg.block_size, device)
 
-                # Model forward pass
+                # Model forward pass with DAG model
                 with ctx:
-                    _ = model(input_tokens)
 
-                # Get DAG predictor outputs
-                dag_predictor = model.dag_predictor
-                if dag_predictor is None:
-                    raise RuntimeError("Model has no DAG predictor (dag_depth=0)")
+                    hidden_states = model.forward_hidden(input_tokens)
 
-                # Get raw logits for all positions
-                pred_sign_logits = dag_predictor.last_sign_logits
-                pred_digit_logits = dag_predictor.last_digit_logits
-                pred_op_logits = dag_predictor.last_operation_logits
-                pred_statistics = dag_predictor.last_statistics
-                uncertainty_params = dag_predictor.uncertainty_params
+                    dag_predictor = model.dag_predictor
+                    if dag_predictor is None:
+                        raise RuntimeError("Model has no DAG predictor (dag_depth=0)")
 
-                if pred_digit_logits is None:
-                    raise RuntimeError("last_digit_logits not found for evaluation")
-                if pred_sign_logits is None:
-                    raise RuntimeError("last_sign_logits not found for evaluation")
-                if pred_op_logits is None:
-                    raise RuntimeError("last_operation_logits not found for evaluation")
+                    pred_V_mag, pred_V_sign, pred_O, pred_G = dag_predictor(
+                        hidden_states
+                    )
 
-                # Compute loss using new per-token loss function
-                losses = compute_dag_structure_loss(
-                    pred_sign_logits,
-                    pred_digit_logits,
-                    pred_op_logits,
-                    pred_statistics,
+                # Compute loss using DAG tensor loss function
+                dag_executor = getattr(model, "dag_executor", None)
+                losses = compute_dag_loss(
+                    pred_V_mag,
+                    pred_V_sign,
+                    pred_O,
+                    pred_G,
                     target_tensors,
                     valid_mask,
                     cfg,
-                    uncertainty_params,
+                    dag_executor=dag_executor,
                 )
 
                 # Accumulate losses
                 for key in total_losses.keys():
                     total_losses[key] += losses[key].item()
 
-                # Compute per-token metrics for legacy fields
+                # Compute per-token metrics
                 valid_tokens_count = valid_mask.sum().item()
 
                 # Calculate expression-level valid rate (excluding padding)
@@ -151,61 +138,8 @@ def evaluate_dag_model(
                         expression_valid_tokens / expression_total_tokens
                     )
 
-                # Compute additional evaluation metrics
-                # For simplicity, we'll compute MSE using valid positions only
-                if valid_tokens_count > 0:
-                    # Get valid positions
-                    valid_positions = torch.nonzero(
-                        valid_mask, as_tuple=False
-                    )  # (num_valid, 2)
-                    batch_indices = valid_positions[:, 0]  # (num_valid,)
-                    token_indices = valid_positions[:, 1]  # (num_valid,)
-
-                    # Extract valid targets
-                    valid_targets = []
-                    for batch_idx, token_idx in zip(batch_indices, token_indices):
-                        target_dict = target_tensors[batch_idx.item()][token_idx.item()]
-                        valid_targets.append(target_dict)
-
-                    # Extract valid predictions
-                    valid_sign_logits = pred_sign_logits[batch_indices, token_indices]
-                    valid_digit_logits = pred_digit_logits[batch_indices, token_indices]
-                    valid_statistics = pred_statistics["final"][
-                        batch_indices, token_indices
-                    ]
-
-                    # Convert digit logits to magnitudes for initial values MSE
-                    pred_initial_values = digits_to_magnitude(
-                        valid_digit_logits.softmax(dim=-1),
-                        cfg.max_digits,
-                        cfg.max_decimal_places,
-                        cfg.base,
-                    )  # (num_valid, N)
-
-                    # Get target initial values
-                    target_initial_values = torch.stack(
-                        [t["target_initial_values"] for t in valid_targets]
-                    )
-
-                    # Compute initial values MSE
-                    initial_values_mse = F.mse_loss(
-                        pred_initial_values, target_initial_values
-                    )
-                    total_metrics["initial_values_mse"] += initial_values_mse.item()
-
-                    # Compute execution MSE using final statistics
-                    target_final_exec = torch.tensor(
-                        [t["target_final_exec"] for t in valid_targets], device=device
-                    )
-                    pred_final_exec = valid_statistics[
-                        :, 0
-                    ]  # First statistic is final exec value
-                    executed_mse = F.mse_loss(pred_final_exec, target_final_exec)
-                    total_metrics["executed_mse"] += executed_mse.item()
-
                 num_batches += 1
 
-                # Detailed validation sample printing
                 if master_process and (i % 10 == 0 or i < 3):
                     sample_text = texts[0] if texts else "N/A"
                     sample_valid_rate = (
@@ -217,8 +151,7 @@ def evaluate_dag_model(
                         f'[val] batch {i}: "{sample_text[:50]}...", valid_rate={sample_valid_rate:.1%}'
                     )
 
-                    # Show detailed DAG structure for first sample in batch
-                    if valid_tokens_count > 0 and len(texts) > 0:
+                    if False and valid_tokens_count > 0 and len(texts) > 0:
                         # Reconstruct seed for this sample
                         sample_seed = (
                             seed + i * cfg.batch_size + 10000
@@ -241,7 +174,6 @@ def evaluate_dag_model(
                             target_dict = target_tensors[0][last_valid_pos]
 
                             # Target values
-                            target_signs = target_dict["target_initial_sgn"]  # (N,)
                             target_digits = target_dict[
                                 "target_initial_digits"
                             ]  # (N, D, base)

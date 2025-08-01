@@ -4,37 +4,355 @@ streaming.py
 On-the-fly DAG dataset generation for training.
 """
 
-import logging
-import math
-import random
 import sys
-import warnings
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
-from typing import Dict, Iterator, List, Tuple
+from typing import Iterator, Tuple
 
-import numpy as np
 import sympy
 import torch
 from num2words import num2words
-from sympy import im
+from sympy import im, postorder_traversal
+from sympy.core.numbers import Float as sympy_float
 from tiktoken import get_encoding
-
-from models.dag_model import execute_stack
-
-from .preprocess_invalid_expression import preprocess_invalid_expression
 
 # Add parent directories to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from models.dag_model import (
-    LOG_LIM,
-    OP_NAMES,
-    compute_multi_value_statistics,
-    compute_single_value_statistics,
-)
+
+# Custom SymPy operations for cleaner parsing
+class Div(sympy.Function):
+    """Custom division operation that can handle arbitrary arguments: Div(a, b, c) = a / b / c"""
+
+    @classmethod
+    def eval(cls, *args):
+        """Don't evaluate - keep as symbolic custom operation"""
+        if len(args) < 2:
+            raise ValueError("Div requires at least 2 arguments")
+        return None  # Return None to prevent evaluation
+
+    def evalf(self, *args, **kwargs):
+        """Evaluate numerically when needed"""
+        result = self.args[0].evalf(*args, **kwargs)
+        for arg in self.args[1:]:
+            result = result / arg.evalf(*args, **kwargs)
+        return result
+
+
+class Sub(sympy.Function):
+    """Custom subtraction operation that can handle arbitrary arguments: Sub(a, b, c) = a - b - c"""
+
+    @classmethod
+    def eval(cls, *args):
+        """Don't evaluate - keep as symbolic custom operation"""
+        if len(args) < 2:
+            raise ValueError("Sub requires at least 2 arguments")
+        return None  # Return None to prevent evaluation
+
+    def evalf(self, *args, **kwargs):
+        """Evaluate numerically when needed"""
+        result = self.args[0].evalf(*args, **kwargs)
+        for arg in self.args[1:]:
+            result = result - arg.evalf(*args, **kwargs)
+        return result
+
+
+class Neg(sympy.Function):
+    """Custom negation operation: Neg(x) = -x"""
+
+    @classmethod
+    def eval(cls, arg):
+        """Don't evaluate - keep as symbolic custom operation"""
+        return None  # Return None to prevent evaluation
+
+    def evalf(self, *args, **kwargs):
+        """Evaluate numerically when needed"""
+        return -self.args[0].evalf(*args, **kwargs)
+
+
+def normalize_expression(expr: sympy.Basic) -> sympy.Basic:
+    """
+    Normalize a SymPy expression by converting complex patterns into custom operations.
+
+    Transformations:
+    - Mul(a, Pow(b, -1), Pow(c, -1)) → Div(a, b, c)  # a * (1/b) * (1/c) → a / b / c
+    - Add(a, Mul(-1, b), Mul(-1, c)) → Sub(a, b, c)  # a + (-b) + (-c) → a - b - c
+    - Mul(-1, x) → Neg(x)  # -1 * x → -x
+    """
+
+    def transform_node(node):
+        if isinstance(node, sympy.Mul):
+            # First check if this is a negation: -1 * x
+            if len(node.args) == 2 and node.args[0] == -1:
+                # This is -1 * x, transform to Neg(x)
+                return Neg(transform_node(node.args[1]))
+
+            # Check if this is a division: a * (1/b) * (1/c) * ...
+            numerators = []
+            denominators = []
+
+            for arg in node.args:
+                if isinstance(arg, sympy.Pow) and arg.exp == -1:
+                    # This is 1/x, so x is a denominator
+                    denominators.append(transform_node(arg.base))
+                else:
+                    # Regular term, so it's a numerator
+                    numerators.append(transform_node(arg))
+
+            if denominators:  # Has reciprocals, so it's a division
+                if len(numerators) == 1:
+                    return Div(numerators[0], *denominators)
+                else:
+                    # Multiple numerators: (a*b) / c / d
+                    combined_numerator = sympy.Mul(*numerators, evaluate=False)
+                    return Div(combined_numerator, *denominators)
+            else:
+                # No reciprocals, just a regular multiplication
+                if len(node.args) == 1:
+                    return transform_node(node.args[0])
+                else:
+                    return sympy.Mul(
+                        *[transform_node(arg) for arg in node.args], evaluate=False
+                    )
+
+        elif isinstance(node, sympy.Add):
+            positive_terms = []
+            negative_terms = []
+
+            for arg in node.args:
+                transformed_arg = transform_node(arg)
+                if isinstance(transformed_arg, Neg):
+                    # This is a Neg operation, extract its argument
+                    negative_terms.append(transformed_arg.args[0])
+                elif (
+                    isinstance(arg, sympy.Mul)
+                    and len(arg.args) == 2
+                    and arg.args[0] == -1
+                ):
+                    # This is -1 * something, extract the something
+                    negative_terms.append(transform_node(arg.args[1]))
+                else:
+                    positive_terms.append(transformed_arg)
+
+            if negative_terms:  # Has negative terms, so it's a subtraction
+                if len(positive_terms) == 1:
+                    return Sub(positive_terms[0], *negative_terms)
+                else:
+                    # Multiple positive terms: (a+b) - c - d
+                    combined_positive = sympy.Add(*positive_terms, evaluate=False)
+                    return Sub(combined_positive, *negative_terms)
+            else:
+                # No negative terms, just a regular addition
+                if len(node.args) == 1:
+                    return transform_node(node.args[0])
+                else:
+                    return sympy.Add(
+                        *[transform_node(arg) for arg in node.args], evaluate=False
+                    )
+
+        elif isinstance(node, sympy.Pow):
+            # Convert Pow(x, -1) to Div(1, x)
+            if node.exp == -1:
+                return Div(sympy.Integer(1), transform_node(node.base))
+            else:
+                # Other powers are passed through (but will error in expression_to_tensors)
+                return sympy.Pow(transform_node(node.base), node.exp)
+
+        elif isinstance(node, (sympy.Symbol, sympy.Integer, sympy_float)):
+            # Leaf nodes are returned as-is
+            return node
+
+        else:
+            # Other node types (functions, etc.) - recursively transform arguments
+            if hasattr(node, "args") and node.args:
+                return node.func(*[transform_node(arg) for arg in node.args])
+            else:
+                return node
+
+    return transform_node(expr)
+
+
+def is_negation(node: sympy.Basic) -> bool:
+    """Check if a node represents -1 * value (SymPy artifact that should have been normalized)."""
+    if not isinstance(node, sympy.Mul) or len(node.args) != 2:
+        return False
+
+    first_arg, second_arg = node.args
+
+    # Only flag the specific pattern we try to normalize: -1 * x (first arg is -1)
+    return (first_arg == -1) and (
+        isinstance(second_arg, sympy_float) or isinstance(second_arg, sympy.Integer)
+    )
+
+
+def expression_to_tensors(
+    expr: sympy.Basic, dag_depth: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Convert a SymPy expression to DAG tensor representation.
+
+    Returns:
+        V_mag: (1, 1, dag_depth * 2) - magnitudes of all nodes (initial + intermediate)
+        V_sign: (1, 1, dag_depth * 2) - signs of all nodes
+        O: (1, 1, dag_depth, dag_depth * 2) - operand selection matrix
+        G: (1, 1, dag_depth) - domain selector (0=log, 1=linear)
+    """
+    # Step 1: Normalize the expression
+    normalized_expr = normalize_expression(expr)
+
+    # Initialize tensors with dag_depth * 2 architecture (matching newdag.py)
+    V_mag = torch.zeros(1, 1, dag_depth * 2)
+    V_sign = torch.ones(1, 1, dag_depth * 2)  # Initialize to all 1s
+    O = torch.zeros(1, 1, dag_depth, dag_depth * 2)
+    G = torch.ones(1, 1, dag_depth)  # Initialize to all 1s (linear domain)
+
+    # Track values list and step index
+    values = []
+    step_index = 0
+    node_replacements = {}  # For Neg of numbers
+
+    # PHASE 1: Collect all initial numeric values (including Neg of numbers)
+    for node in postorder_traversal(normalized_expr):
+        is_float = isinstance(node, sympy_float)
+        is_int = isinstance(node, sympy.Integer)
+
+        # Handle direct numbers
+        if is_float or is_int:
+            if step_index >= dag_depth:
+                raise ValueError(
+                    f"Expression has too many initial values. Needs dag_depth > {step_index}"
+                )
+
+            try:
+                val = float(node.evalf())
+                V_mag[0, 0, step_index] = abs(val)
+                V_sign[0, 0, step_index] = 1 if val >= 0 else -1
+                values.append(node)
+                step_index += 1
+            except (TypeError, ValueError):
+                raise ValueError(f"Cannot convert {node} to float")
+
+        # Handle Neg of numbers (like Neg(5) = -5)
+        elif isinstance(node, Neg):
+            arg = node.args[0]
+            if isinstance(arg, (sympy_float, sympy.Integer)):
+                if step_index >= dag_depth:
+                    raise ValueError(
+                        f"Expression has too many initial values. Needs dag_depth > {step_index}"
+                    )
+
+                try:
+                    val = float(arg.evalf())
+                    # Negate the value for Neg operation
+                    V_mag[0, 0, step_index] = abs(val)
+                    V_sign[0, 0, step_index] = -1 if val >= 0 else 1  # Flip sign
+
+                    # Create a replacement node for this negated value
+                    negated_node = (
+                        sympy_float(-val)
+                        if isinstance(arg, sympy_float)
+                        else sympy.Integer(-int(val))
+                    )
+                    values.append(negated_node)
+                    node_replacements[node] = negated_node
+                    step_index += 1
+                except (TypeError, ValueError):
+                    raise ValueError(f"Cannot convert Neg({arg}) to float")
+
+        # Error checks (moved to Phase 1)
+        elif is_negation(node):
+            raise ValueError(
+                f"Unexpected old-style negation after normalization: {node}. "
+                f"All Mul(-1, x) patterns should have been converted to Neg(x) during normalization. "
+                f"Normalization failed to catch this pattern."
+            )
+        elif isinstance(node, sympy.Pow):
+            raise ValueError(
+                f"Unexpected Pow node after normalization: {node}. "
+                f"All Pow(x, -1) should be converted to Div(1, x). "
+                f"Other Pow operations are not supported."
+            )
+
+    # Pad values list to dag_depth
+    while len(values) < dag_depth:
+        values.append("UNUSED")
+
+    # Reset step_index for operations
+    step_index = 0
+
+    # PHASE 2: Process operations in second postorder traversal
+    for node in postorder_traversal(normalized_expr):
+        # Skip leaf nodes (already processed in Phase 1)
+        is_float = isinstance(node, sympy_float)
+        is_int = isinstance(node, sympy.Integer)
+        if is_float or is_int:
+            continue
+
+        # Skip Neg operations for numbers (already processed in Phase 1)
+        if isinstance(node, Neg):
+            arg = node.args[0]
+            if isinstance(arg, (sympy_float, sympy.Integer)):
+                continue  # Already handled in Phase 1
+
+        if step_index >= dag_depth:
+            raise ValueError(
+                f"Expression requires more operations than dag_depth={dag_depth}"
+            )
+
+        is_neg = isinstance(node, Neg)
+        is_div = isinstance(node, Div)
+        is_sub = isinstance(node, Sub)
+        is_mul = isinstance(node, sympy.Mul)
+        is_add = isinstance(node, sympy.Add)
+
+        # Set domain: log for Div/Mul, linear for Add/Sub/Neg
+        if is_div or is_mul:
+            G[0, 0, step_index] = 0  # Log domain
+        elif is_add or is_sub or is_neg:
+            G[0, 0, step_index] = 1  # Linear domain
+
+        # Determine coefficients based on operation type
+        if is_neg:
+            first_coefficient = -1
+            # coefficient is unused for Neg (as it's unary)
+        elif is_div or is_sub:
+            first_coefficient = 1
+            coefficient = -1
+        elif is_add or is_mul:
+            first_coefficient = 1
+            coefficient = 1
+
+        # Process arguments and set operand matrix
+        if is_div or is_sub or is_add or is_mul or is_neg:
+            for i, arg in enumerate(node.args):
+                arg = node_replacements.get(arg, arg)  # Use replacement if exists
+                arg_idx = values.index(arg)  # Find index of this argument
+                _coefficient = first_coefficient if i == 0 else coefficient
+                O[0, 0, step_index, arg_idx] += _coefficient  # Accumulate coefficients
+
+            values.append(node)
+            step_index += 1
+        else:
+            raise ValueError(
+                f"Unexpected node type: {type(node)}"
+            )  # Defensive programming
+
+    # Fill remaining steps with identity operations (matching newdag.py)
+    if step_index > 0:
+        # Had operations - use the last operation result slot
+        # The executor stores operation results at dag_depth + step_number
+        last_result_slot = dag_depth + (step_index - 1)
+        for remaining_step in range(step_index, dag_depth):
+            O[0, 0, remaining_step, last_result_slot] = 1
+    else:
+        # No operations - use the first initial value
+        for remaining_step in range(0, dag_depth):
+            O[0, 0, remaining_step, 0] = 1
+
+    return V_mag, V_sign, O, G
+
 
 # Import expression generation functionality
 from .generate_expression import (
@@ -44,10 +362,6 @@ from .generate_expression import (
 # ============================================================================
 # GENERATION SYSTEM: Separation between Generation and State Operations
 # ============================================================================
-
-
-# STATE_OPs: Used for internal DAG tensor representation (what model predicts)
-STATE_OPS = ["add", "multiply", "identity"]
 
 # ============================================================================
 
@@ -63,16 +377,14 @@ class DAGExample:
     text: str
     structure_dict: dict[str, torch.Tensor]
     depth: int
-    max_digits: int
     max_decimal_places: int
-    base: int
     seed: int
 
     def __repr__(self):
         return self.__str__()
 
     def __str__(self):
-        return f"{self.__class__.__name__}(seed={self.seed}, text={self.text}, depth={self.depth}, base={self.base})"
+        return f"{self.__class__.__name__}(seed={self.seed}, text={self.text}, depth={self.depth})"
 
 
 @dataclass
@@ -94,221 +406,17 @@ class DAGValExample(DAGExample):
     full_expr: sympy.Basic | None = None  # The final complete expression
 
     def __str__(self):
-        signs_shape = self.structure_dict["target_initial_sgn"].shape
-        digits_shape = self.structure_dict["target_initial_digits"].shape
-        operations_shape = self.structure_dict["target_operation_probs"].shape
+        V_mag_shape = self.structure_dict["target_V_mag"].shape
+        V_sign_shape = self.structure_dict["target_V_sign"].shape
+        O_shape = self.structure_dict["target_O"].shape
+        G_shape = self.structure_dict["target_G"].shape
         final_value_exec = self.structure_dict["target_final_exec"]
-        return f"DAGValExample(seed={self.seed}, text={self.text}, depth={self.depth}, signs={signs_shape}, digits={digits_shape}, operations={operations_shape}, full_operations_named={self.full_operations_named}, final_value_sympy={self.final_value_sympy}, final_value_exec={final_value_exec}, full_expr={self.full_expr}, base={self.base})"
+        return f"DAGValExample(seed={self.seed}, text={self.text}, depth={self.depth}, V_mag={V_mag_shape}, V_sign={V_sign_shape}, O={O_shape}, G={G_shape}, full_operations_named={self.full_operations_named}, final_value_sympy={self.final_value_sympy}, final_value_exec={final_value_exec}, full_expr={self.full_expr})"
 
 
 # ============================================================================
 # EXTRACTION SYSTEM: Convert GENERATION_OPS to STATE_OPS
 # ============================================================================
-
-
-def extract_initial_values_and_operations(
-    expr: sympy.Basic,
-    depth: int,
-) -> tuple[list[float], list[str]]:
-    """Extract initial values and operations from a sympy expression."""
-
-    expanded_expr = sympy.expand(expr)
-
-    if not isinstance(
-        expanded_expr, (sympy.Number, sympy.Float, sympy.Integer)
-    ) and any(
-        isinstance(arg, sympy.Pow) and len(arg.args) >= 2 and arg.args[1] == -1
-        for arg in expanded_expr.args
-        if hasattr(expanded_expr, "args")
-    ):
-        try:
-            # Force evaluation only for division cases that need it
-            evaluated = float(expanded_expr)
-            expanded_expr = sympy.Float(evaluated)
-        except (TypeError, ValueError):
-            # Keep symbolic form if evaluation fails
-            pass
-
-    initial_values = []
-    operations = []
-
-    def add_numeric_value(value):
-        """Helper to safely add a numeric value."""
-        try:
-            initial_values.append(
-                float(value) if isinstance(value, str) else float(value)
-            )
-        except (ValueError, TypeError):
-            pass
-
-    def add_reciprocal(denominator):
-        """Helper to add reciprocal of a value."""
-        try:
-            denom_val = float(denominator)
-            if denom_val != 0:
-                # Use higher precision for reciprocals to avoid mathematical errors
-                reciprocal = 1.0 / denom_val
-                initial_values.append(
-                    reciprocal
-                )  # Don't round reciprocals aggressively
-            else:
-                initial_values.append(1e-6)
-        except:
-            initial_values.append(1.0)
-
-    def extract_all_values_and_ops(node):
-        """Recursively extract numeric values and operations from expressions."""
-        if isinstance(node, (sympy.Number, sympy.Symbol)):
-            add_numeric_value(node)
-
-        elif isinstance(node, sympy.Add):
-            # Process all addition/subtraction terms
-            for arg in node.args:
-                if (
-                    isinstance(arg, sympy.Mul)
-                    and len(arg.args) >= 1
-                    and arg.args[0] == -1
-                ):
-                    # Subtraction: -1 * something
-                    if len(arg.args) == 2:
-                        add_numeric_value(-float(arg.args[1]))
-                    else:
-                        extract_all_values_and_ops(arg)
-                else:
-                    extract_all_values_and_ops(arg)
-
-            # Add n-1 operations for n terms (correct operations count)
-            num_terms = len(node.args)
-            if num_terms > 1:
-                operations.extend(["add"] * (num_terms - 1))
-
-        elif isinstance(node, sympy.Mul):
-            # Check for division (has Pow(..., -1))
-            division_args = [
-                a
-                for a in node.args
-                if isinstance(a, sympy.Pow) and len(a.args) >= 2 and a.args[1] == -1
-            ]
-
-            if division_args:
-                # Process division: extract numerator and denominator
-                numerator_args = [arg for arg in node.args if arg not in division_args]
-
-                # Extract numerator values
-                for arg in numerator_args:
-                    extract_all_values_and_ops(arg)
-
-                # Extract denominator values
-                for arg in division_args:
-                    denominator = arg.args[0]
-                    # For complex denominators, extract all values and operations
-                    if hasattr(denominator, "args") and len(denominator.args) > 1:
-                        extract_all_values_and_ops(denominator)
-                    else:
-                        # Simple denominator - add reciprocal directly
-                        add_reciprocal(denominator)
-
-                # Add operations for numerator (if multiple terms)
-                if len(numerator_args) > 1:
-                    operations.extend(["multiply"] * (len(numerator_args) - 1))
-
-                # Add operation for division itself
-                operations.append("multiply")
-            else:
-                # Regular multiplication - skip -1 factors (handled by Add)
-                non_neg_one_args = [
-                    arg
-                    for arg in node.args
-                    if not (isinstance(arg, sympy.Number) and arg == -1)
-                ]
-
-                for arg in non_neg_one_args:
-                    extract_all_values_and_ops(arg)
-
-                # Add n-1 multiply operations for n terms (correct operations count)
-                num_terms = len(non_neg_one_args)
-                if num_terms > 1:
-                    operations.extend(["multiply"] * (num_terms - 1))
-
-        elif hasattr(node, "args"):
-            # Generic recursion for other types (Pow, etc.)
-            for arg in node.args:
-                extract_all_values_and_ops(arg)
-            if isinstance(node, sympy.Pow):
-                operations.append("multiply")
-
-    # Process the expanded expression (now associative!)
-    extract_all_values_and_ops(expanded_expr)
-
-    # CRITICAL: Check if expansion created more operations than max depth allows
-    meaningful_ops = [op for op in operations if op != "identity"]
-    if len(meaningful_ops) > depth:
-        raise ValueError(
-            f"Expansion depth exceeded maximum allowed depth in extract_initial_values_and_operations:\n"
-            f"  Original expression: {expr}\n"
-            f"  Expanded expression: {expanded_expr}\n"
-            f"  Meaningful operations: {len(meaningful_ops)} (requires depth {len(meaningful_ops)})\n"
-            f"  Maximum allowed depth: {depth}\n"
-            f"  Operations: {meaningful_ops}\n"
-            f"  \n"
-            f"  This expression is too complex for the current DAG depth limit.\n"
-            f"  Either increase the dataset depth limit or simplify the expression.\n"
-            f"  DO NOT silently truncate - this would cause incorrect mathematical results."
-        )
-
-    # Fallback: if no operations were detected, create minimal operations
-    if not operations:
-        if len(initial_values) <= 1:
-            # Single value requires one identity operation for DAG compatibility
-            operations = ["identity"]
-        else:
-            # Multiple values with no detected operations is an error - fail completely
-            raise ValueError(
-                f"No operations detected for multi-value expression: {expr}\n"
-                f"Values: {initial_values}\n"
-                f"This indicates an extraction bug that must be fixed."
-            )
-
-    # Ensure we have at least one initial value
-    if len(initial_values) < 1:
-        initial_values = [0.0]
-
-    # Balance values and operations - NO TRUNCATION, FAIL COMPLETELY IF MISMATCH
-    expected_values = len(operations) + 1
-    if len(initial_values) < expected_values:
-        initial_values.extend([1.0] * (expected_values - len(initial_values)))
-    elif len(initial_values) > expected_values:
-        # NEVER truncate - this causes silent data loss and bugs
-        # Instead, fail completely so we can identify and fix the root cause
-        meaningful_ops = [op for op in operations if op != "identity"]
-        meaningful_values = [v for v in initial_values if v != 1.0]
-        raise ValueError(
-            f"Value/operation count mismatch in extract_initial_values_and_operations:\n"
-            f"  Expression: {expr}\n"
-            f"  Expected {expected_values} values (operations + 1)\n"
-            f"  Got {len(initial_values)} values: {initial_values}\n"
-            f"  Operations ({len(operations)}): {operations}\n"
-            f"  Meaningful operations ({len(meaningful_ops)}): {meaningful_ops}\n"
-            f"  Meaningful values ({len(meaningful_values)}): {meaningful_values}\n"
-            f"  This indicates a bug in the extraction logic that must be fixed."
-        )
-
-    # Pad to required depth with identity operations
-    while len(operations) < depth:
-        operations.append("identity")
-    while len(initial_values) < depth + 1:
-        initial_values.append(1.0)
-
-    # Ensure exact depth
-    operations = operations[:depth]
-    initial_values = initial_values[: depth + 1]
-
-    # Verify all operations are from STATE_OPS
-    for i, op in enumerate(operations):
-        if op not in STATE_OPS:
-            operations[i] = "identity"  # Fallback for invalid ops
-
-    return initial_values, operations
 
 
 def expression_to_string(expr: sympy.Basic) -> str:
@@ -336,24 +444,16 @@ def expressions_to_tensors(
     expressions: list[sympy.Basic | str],
     *,
     depth: int,
-    max_digits: int,
-    max_decimal_places: int,
-    base: int = 10,
 ) -> tuple[list[dict[str, torch.Tensor]], list[bool]]:
-    """Convert a list of sympy expressions to structure tensors using STATE_OPS.
+    """Convert a list of sympy expressions to structure tensors for the new DAG system.
 
-    This converts GENERATION_OPS to STATE_OPS:
-    - Division → multiplication by reciprocals
-    - Subtraction → addition with negative values
-    - Returns tensors using only STATE_OPS: [add, multiply, identity]
+    This converts SymPy expressions to DAG tensor format:
+    - Uses V_mag, V_sign, O, G tensor representation
     - Invalid expressions get "zero DAG" representations
 
     Args:
         expressions: List of sympy expressions or "not valid" strings
         depth: Target depth for DAG operations
-        max_digits: Maximum number of digits for encoding
-        max_decimal_places: Maximum decimal places for encoding
-        base: Number base (default 10)
 
     Returns:
         Tuple of (tensor_list, valid_mask) where:
@@ -366,301 +466,48 @@ def expressions_to_tensors(
     for expr in expressions:
         if expr == "not valid":
             # Create zero DAG for invalid token position
-            zero_initial_values = [0.0] * (depth + 1)
-            zero_operations = ["identity"] * depth
-
-            zero_tensor_dict = plan_to_tensors(
-                zero_initial_values,
-                zero_operations,
-                max_digits=max_digits,
-                max_decimal_places=max_decimal_places,
-                base=base,
-            )
-            # Override final execution to be exactly zero
-            zero_tensor_dict["target_final_exec"] = 0.0
-
+            zero_tensor_dict = {
+                "target_V_mag": torch.zeros(depth * 2),
+                "target_V_sign": torch.ones(depth * 2),
+                "target_O": torch.zeros(depth, depth * 2),
+                "target_G": torch.ones(depth),
+                "target_final_exec": 0.0,
+            }
             tensor_results.append(zero_tensor_dict)
             valid_mask.append(False)
         else:
-            # Extract initial values and operations from the sympy expression
-            # This converts GENERATION_OPS to STATE_OPS
-            initial_values, operations = extract_initial_values_and_operations(
-                expr, depth, max_decimal_places
-            )
+            # Convert SymPy expression directly to DAG tensor format
+            try:
+                V_mag, V_sign, O, G = expression_to_tensors(expr, depth)
 
-            # Convert to tensors using production code directly
-            tensor_dict = plan_to_tensors(
-                initial_values,
-                operations,
-                max_digits=max_digits,
-                max_decimal_places=max_decimal_places,
-                base=base,
-            )
-            tensor_results.append(tensor_dict)
-            valid_mask.append(True)
+                # Compute the actual target execution value by evaluating the SymPy expression
+                try:
+                    target_final_exec_value = float(expr.evalf())
+                except:
+                    print(f"Evaluation failed for expression: {expr}")
+                    raise
+
+                # Convert to target format for training
+                # Remove batch and time dimensions (convert from (1,1,X) to (X))
+                target_dict = {
+                    "target_V_mag": V_mag.squeeze(0).squeeze(0),  # (total_nodes,)
+                    "target_V_sign": V_sign.squeeze(0).squeeze(0),  # (total_nodes,)
+                    "target_O": O.squeeze(0).squeeze(0),  # (dag_depth, total_nodes)
+                    "target_G": G.squeeze(0).squeeze(0),  # (dag_depth,)
+                    "target_final_exec": target_final_exec_value,  # Actual execution result
+                }
+                tensor_results.append(target_dict)
+                valid_mask.append(True)
+            except:
+                print(f"Conversion failed for expression: {expr}")
+                raise
 
     return tensor_results, valid_mask
 
 
-def float_to_digit_onehot(
-    value: float, max_digits: int, max_decimal_places: int, base: int = 10
-) -> torch.Tensor:
-    """Convert a float into a one-hot tensor of shape (D, base) where D = max_digits + max_decimal_places.
-
-    The number is first clipped to the largest representable value to avoid overflow. The integer part is
-    left-padded with zeros and the fractional part is right-padded with zeros so that their total length
-    equals *max_digits + max_decimal_places*.
-
-    Args:
-        value: The float value to convert
-        max_digits: Maximum number of integer digits
-        max_decimal_places: Maximum number of decimal places
-        base: Number base for digit representation (2-36 supported)
-    """
-    if base < 2 or base > 36:
-        raise ValueError(f"Base must be between 2 and 36, got {base}")
-
-    # Clip magnitude so that it fits in the available digits
-    limit = base**max_digits - base ** (-max_decimal_places)
-    abs_val = min(abs(value), limit)
-
-    if base == 10:
-        # For base 10, use string formatting to avoid floating point precision issues
-        # Format with enough decimal places and then extract digits
-        format_str = f"{{:.{max_decimal_places}f}}"
-        value_str = format_str.format(abs_val)
-
-        # Split into integer and decimal parts
-        if "." in value_str:
-            int_part_str, frac_part_str = value_str.split(".")
-        else:
-            int_part_str = value_str
-            frac_part_str = ""
-
-        # Pad integer part to max_digits (left pad with zeros)
-        int_part_str = int_part_str.zfill(max_digits)[-max_digits:]
-
-        # Pad fractional part to max_decimal_places (right pad with zeros)
-        frac_part_str = (frac_part_str + "0" * max_decimal_places)[:max_decimal_places]
-
-        # Combine and convert to digit list
-        all_digits_str = int_part_str + frac_part_str
-        all_digits = [int(d) for d in all_digits_str]
-    else:
-        # For non-base-10, use the original method but with rounding to mitigate precision issues
-        # Convert to the target base
-        # First convert integer part
-        int_part = int(abs_val)
-        frac_part = abs_val - int_part
-
-        # Convert integer part to target base
-        if int_part == 0:
-            int_digits = [0]
-        else:
-            int_digits = []
-            temp = int_part
-            while temp > 0:
-                int_digits.append(temp % base)
-                temp = temp // base
-            int_digits.reverse()  # Most significant digit first
-
-        # Pad or truncate integer part to exactly max_digits
-        if len(int_digits) > max_digits:
-            int_digits = int_digits[-max_digits:]  # Keep least significant digits
-        else:
-            int_digits = [0] * (
-                max_digits - len(int_digits)
-            ) + int_digits  # Pad with zeros
-
-        # Convert fractional part to target base with rounding
-        frac_digits = []
-        temp_frac = frac_part
-        for _ in range(max_decimal_places):
-            temp_frac *= base
-            # Add small epsilon and round to mitigate floating point precision issues
-            digit = (
-                round(temp_frac + 1e-10) if temp_frac < base - 0.5 else int(temp_frac)
-            )
-            digit = min(max(digit, 0), base - 1)  # Clamp to valid range
-            frac_digits.append(digit)
-            temp_frac -= digit
-
-        # Combine integer and fractional digits
-        all_digits = int_digits + frac_digits
-
-    D = max_digits + max_decimal_places
-    assert len(all_digits) == D, f"Expected {D} digits, got {len(all_digits)}"
-
-    # Create one-hot encoding
-    one_hot = torch.zeros(D, base)
-    for i, digit in enumerate(all_digits):
-        # Clamp digit to valid range (should not be needed but safety check)
-        digit = min(max(digit, 0), base - 1)
-        one_hot[i, digit] = 1.0
-
-    return one_hot
-
-
-# Updated to include digit arguments
-def plan_to_tensors(
-    initial_values: list[float],
-    operations: list[str],
-    *,
-    max_digits: int,
-    max_decimal_places: int,
-    base: int = 10,
-) -> dict[str, torch.Tensor]:
-    """Convert a DAG plan to structure tensors for training."""
-
-    depth = len(operations)
-    num_scratch_nodes = depth + 1
-
-    if len(initial_values) != num_scratch_nodes:
-        raise ValueError(
-            f"Initial values count mismatch: got {len(initial_values)} values but expected {num_scratch_nodes} "
-            f"for depth {depth}. This indicates a bug in expression generation."
-        )
-    if len(operations) != depth:
-        raise ValueError(
-            f"Operations count mismatch: got {len(operations)} operations but expected {depth} "
-            f"for depth {depth}. This indicates a bug in expression generation."
-        )
-
-    # Convert initial values to signs and digit one-hots
-    signs = torch.tensor([1.0 if v >= 0.0 else -1.0 for v in initial_values])
-    digits_onehots: list[torch.Tensor] = []
-    for v in initial_values:
-        one_hot = float_to_digit_onehot(v, max_digits, max_decimal_places, base)
-        digits_onehots.append(one_hot)
-
-    # (num_nodes, D, base)
-    digits_tensor = torch.stack(digits_onehots, dim=0)
-
-    # Convert operations to one-hot encoded tensors (length already validated)
-    # Use STATE_OPS for the simplified 3-operation system
-    operation_to_index = {op: i for i, op in enumerate(STATE_OPS)}
-    operations_one_hot = torch.zeros(depth, len(STATE_OPS))
-
-    for i, op in enumerate(operations):
-        op_idx = operation_to_index[op]
-        operations_one_hot[i, op_idx] = 1.0
-
-    # Execute the DAG to get the final value
-    with torch.no_grad():
-        # Use double precision during reference execution to minimize numerical errors
-        sign_tensor = signs.view(1, 1, -1).to(torch.float64)
-        digit_probs = digits_tensor.unsqueeze(0).unsqueeze(0).to(torch.float64)
-        op_probs = operations_one_hot.unsqueeze(0).unsqueeze(0).to(torch.float64)
-
-        final_sgn, final_log, intermediate_values = execute_stack(
-            sign_tensor,
-            digit_probs,
-            op_probs,
-            max_digits=max_digits,
-            max_decimal_places=max_decimal_places,
-            base=base,
-            ignore_clip=True,
-            return_intermediates=True,
-        )
-
-        final_value_exec = (final_sgn * torch.exp(final_log)).item()
-
-    initial_log = torch.zeros(num_scratch_nodes)
-
-    # Compute log magnitudes (natural log)
-    for i in range(num_scratch_nodes):
-        v = abs(initial_values[i]) if initial_values[i] != 0 else 1e-6
-        log_val = math.log(v)
-        # Clip to LOG_LIM for safety
-        log_val = max(min(log_val, LOG_LIM), -LOG_LIM)
-        initial_log[i] = log_val
-
-    # Create target tensors - since we validated dimensions, just convert directly
-    target_initial_values = torch.tensor(
-        initial_values[:num_scratch_nodes], dtype=torch.float32
-    )
-
-    # Compute statistics for auxiliary prediction
-    # Intermediate values already collected during execute_stack call above
-
-    # Compute statistics (let errors surface to identify unstable stats)
-    target_initial_stats = torch.tensor(
-        compute_multi_value_statistics(initial_values), dtype=torch.float32
-    )
-
-    target_intermediate_stats = (
-        torch.tensor(
-            compute_multi_value_statistics(intermediate_values), dtype=torch.float32
-        )
-        if intermediate_values
-        else torch.zeros(15, dtype=torch.float32)
-    )
-
-    target_final_stats = torch.tensor(
-        compute_single_value_statistics(final_value_exec), dtype=torch.float32
-    )
-
-    return {
-        "target_initial_sgn": signs,
-        "target_initial_log": initial_log,
-        "target_initial_digits": digits_tensor,
-        "target_operation_probs": operations_one_hot,
-        "target_final_exec": final_value_exec,
-        "target_initial_values": target_initial_values,
-        # Statistics targets - same for all tokens since they relate to the same expression
-        "target_initial_stats": target_initial_stats,
-        "target_intermediate_stats": target_intermediate_stats,
-        "target_final_stats": target_final_stats,
-    }
-
-
-def tensors_to_plan(
-    signs: torch.Tensor,
-    digits: torch.Tensor,
-    operations: torch.Tensor,
-    *,
-    max_digits: int,
-) -> tuple[list[float], list[str]]:
-    """Convert tensors back to a DAG plan.
-
-    Args:
-        signs: Tensor of signs (1.0 for positive, -1.0 for negative)
-        digits: One-hot encoded digits tensor (num_nodes, D, 10)
-        operations: One-hot encoded operations tensor (depth, num_ops)
-        max_digits: Maximum number of integer digits
-        max_decimal_places: Maximum number of decimal places
-
-    Returns:
-        Tuple of (initial_values, operations)
-    """
-    # Convert digit one-hots back to values
-    initial_values = []
-    for i in range(digits.shape[0]):
-        # Get the digit indices from one-hot encoding
-        digit_indices = torch.argmax(digits[i], dim=1)
-
-        # Convert to string representation
-        digit_str = "".join(str(d.item()) for d in digit_indices)
-
-        # Split into integer and decimal parts
-        int_part = digit_str[:max_digits]
-        dec_part = digit_str[max_digits:]
-
-        # Remove leading zeros from integer part, but keep at least one digit
-        int_part = str(int(int_part))
-
-        # Combine parts and convert to float
-        value = float(f"{int_part}.{dec_part}")
-
-        # Apply sign
-        value *= signs[i].item()
-        initial_values.append(value)
-
-    # Convert operation one-hots back to operation names
-    op_indices = torch.argmax(operations, dim=1)
-    operation_list = [OP_NAMES[idx.item()] for idx in op_indices]
-
-    return initial_values, operation_list
+# ============================================================================
+# DATA LOADING
+# ============================================================================
 
 
 def create_dag_structure_dataloaders(
@@ -670,7 +517,6 @@ def create_dag_structure_dataloaders(
     seed: int = 42,
     max_digits: int = 4,
     max_decimal_places: int = 6,
-    base: int = 10,
     block_size: int = 8,
 ) -> Tuple[Iterator, Iterator]:
     """Create per-token train/val DAG structure dataloaders.
@@ -686,8 +532,6 @@ def create_dag_structure_dataloaders(
 
     def generate_batch(batch_size: int, training_seed: int):
         """Generate a batch using the per-token format."""
-        from tiktoken import get_encoding
-
         tokenizer = get_encoding("gpt2")
 
         all_texts = []
@@ -708,8 +552,6 @@ def create_dag_structure_dataloaders(
             target_tensors, tensor_valid_mask = expressions_to_tensors(
                 expressions,
                 depth=max_depth,
-                max_digits=max_digits,
-                max_decimal_places=max_decimal_places,
             )
 
             # Get main expression (last one) as string
@@ -742,17 +584,14 @@ def create_dag_structure_dataloaders(
         # Pad target tensors to block_size as well
         padded_target_tensors = []
         for target_tensors in all_target_tensors:
-            # Create zero DAG for padding positions
-            zero_initial_values = [0.0] * (max_depth + 1)
-            zero_operations = ["identity"] * max_depth
-            zero_tensor_dict = plan_to_tensors(
-                zero_initial_values,
-                zero_operations,
-                max_digits=max_digits,
-                max_decimal_places=max_decimal_places,
-                base=base,
-            )
-            zero_tensor_dict["target_final_exec"] = 0.0
+            # Create zero DAG for padding positions using new tensor format
+            zero_tensor_dict = {
+                "target_V_mag": torch.zeros(max_depth * 2),
+                "target_V_sign": torch.ones(max_depth * 2),
+                "target_O": torch.zeros(max_depth, max_depth * 2),
+                "target_G": torch.ones(max_depth),
+                "target_final_exec": 0.0,
+            }
 
             # Truncate or pad to block_size
             if len(target_tensors) > block_size:

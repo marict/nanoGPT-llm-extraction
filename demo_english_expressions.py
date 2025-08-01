@@ -8,6 +8,8 @@ English descriptions of mathematical expressions.
 import sys
 from pathlib import Path
 
+from data.dagset.streaming import string_to_expression
+
 sys.path.append(str(Path(".").absolute()))
 
 import tiktoken
@@ -23,7 +25,6 @@ def generate_english_expression(
     max_digits: int,
     max_decimal_places: int,
     tokenizer,  # tiktoken.Encoding
-    base: int = 10,
     english_probability: float = 0.5,  # Probability of using English instead of math notation
     _enable_preprocessing: bool = True,
 ) -> tuple[list[str], list[str], list[bool]]:
@@ -38,7 +39,6 @@ def generate_english_expression(
         max_digits: Maximum number of digits for encoding
         max_decimal_places: Maximum decimal places for encoding
         tokenizer: tiktoken tokenizer for creating per-token substrings
-        base: Number base (default 10)
         english_probability: Probability of converting to English (0.0 = never, 1.0 = always)
         _enable_preprocessing: Whether to apply preprocessing
 
@@ -55,7 +55,6 @@ def generate_english_expression(
         max_digits=max_digits,
         max_decimal_places=max_decimal_places,
         tokenizer=tokenizer,
-        base=base,
         _enable_preprocessing=_enable_preprocessing,
     )
 
@@ -98,8 +97,6 @@ def generate_english_expression(
         if math_equivalent is not None:
             # Successfully converted back to math - try to parse as sympy
             try:
-                from data.dagset.streaming import string_to_expression
-
                 expr = string_to_expression(math_equivalent)
                 # Verify it's evaluable
                 float(expr)

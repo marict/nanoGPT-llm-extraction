@@ -3,8 +3,6 @@
 import pytest
 import torch
 
-from dag_logger import DAGLogger
-from data.dagset.streaming import plan_to_tensors, tensors_to_plan
 from models.dag_model import GPT, GPTConfig
 
 # Set random seeds for reproducible tests
@@ -135,73 +133,6 @@ def assert_valid_forward_pass(model, config, input_ids, target_ids=None):
     batch_size = input_ids.shape[0]
     assert logits.shape == (batch_size, expected_seq_len, config.vocab_size)
     assert torch.isfinite(logits).all()
-
-
-def assert_valid_node_values(model):
-    """Common assertions for node values validation."""
-    logger = DAGLogger()
-    node_values = logger.get_node_values_list(model)
-    assert isinstance(node_values, list)
-    assert len(node_values) > 0
-    for val in node_values:
-        assert isinstance(val, float)
-        assert torch.isfinite(torch.tensor(val))
-
-
-def assert_valid_logging(model, batch_x=None, batch_y=None):
-    """Optimized common assertions for logging functionality."""
-    logger = DAGLogger()
-
-    # If batch data provided, do a forward pass first to populate activations
-    if batch_x is not None and batch_y is not None:
-        model.train()
-        logits, loss = model(batch_x, batch_y)
-        loss.backward()  # Generate gradients for logging
-        model.zero_grad()  # Clean up
-
-    logger.compute_log_statistics(model)
-
-    # Test console logging works (but don't actually print to reduce noise)
-    try:
-        logger.format_console_logging(model)
-    except Exception as e:
-        pytest.fail(f"Console logging failed: {e}")
-
-    # Test wandb logging dict
-    wandb_dict = logger.get_wandb_logging_dict(model)
-    assert isinstance(wandb_dict, dict)
-
-    # Test extra values
-    extra_vals = logger.get_extra_vals(model)
-    assert isinstance(extra_vals, dict)
-
-    return logger, wandb_dict, extra_vals
-
-
-def setup_gradient_tracking_test(model, config):
-    """Optimized common setup for gradient tracking tests."""
-    model.train()
-    logger = DAGLogger()
-
-    batch_size = 1  # Reduced from 2
-    seq_len = min(config.block_size, 4)  # Cap sequence length for speed
-    input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
-    target_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
-
-    # Forward pass first to create operation probabilities
-    _, loss = model(input_ids, target_ids)
-
-    # Set up gradient tracking after forward pass
-    logger.setup_gradient_tracking(model)
-    logger.update_gradient_tracking(model)
-
-    # Backward pass to create gradients
-    loss.backward()
-
-    # Compute statistics to populate logger.logging_data
-    logger.compute_log_statistics(model)
-
-    return logger, loss, input_ids, target_ids
 
 
 class OptimizedMockModel(torch.nn.Module):

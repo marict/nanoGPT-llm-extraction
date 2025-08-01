@@ -8,8 +8,8 @@ by verifying that both GPT and PredictorOnlyModel provide consistent access.
 
 import pytest
 import torch
-
 from dag_logger import DAGLogger
+
 from models.dag_model import GPT, GPTConfig
 from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
 

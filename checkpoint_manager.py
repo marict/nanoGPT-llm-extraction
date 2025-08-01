@@ -24,7 +24,7 @@ except ModuleNotFoundError:
     _HAVE_ST = False
 
 # Import model classes for initialization
-from models.dag_model import GPT, OP_NAMES, GPTConfig
+from models.dag_model import GPT, GPTConfig
 from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
 
 # Optional runpod service for instance management
@@ -604,8 +604,6 @@ class CheckpointManager:
         # ------------------------------------------------------------------ #
         critical_keys = [
             "dag_depth",
-            "max_digits",
-            "max_decimal_places",
             "n_embd",
             "n_head",
             "n_layer",
@@ -640,23 +638,6 @@ class CheckpointManager:
                 "bias": (saved_cfg or {}).get("bias", cfg.bias),
                 "dag_depth": (saved_cfg or {}).get("dag_depth", cfg.dag_depth),
                 "block_size": (saved_cfg or {}).get("block_size", cfg.block_size),
-                # Propagate subset or default full list
-                "op_names": (saved_cfg or {}).get(
-                    "op_names", getattr(cfg, "op_names", OP_NAMES.copy())
-                ),
-                # Digit configuration
-                "max_digits": (saved_cfg or {}).get(
-                    "max_digits", getattr(cfg, "max_digits", 4)
-                ),
-                "max_decimal_places": (saved_cfg or {}).get(
-                    "max_decimal_places", getattr(cfg, "max_decimal_places", 6)
-                ),
-                "base": (saved_cfg or {}).get("base", getattr(cfg, "base", 10)),
-                # Uncertainty weighting configuration
-                "train_uncertainty_params": (saved_cfg or {}).get(
-                    "train_uncertainty_params",
-                    getattr(cfg, "train_uncertainty_params", True),
-                ),
             }
             model_config = GPTConfig(**model_cfg_dict)
             model = GPT(model_config)
@@ -671,23 +652,6 @@ class CheckpointManager:
                 "bias": (saved_cfg or {}).get("bias", cfg.bias),
                 "dag_depth": (saved_cfg or {}).get("dag_depth", cfg.dag_depth),
                 "block_size": (saved_cfg or {}).get("block_size", cfg.block_size),
-                # Propagate subset or default full list
-                "op_names": (saved_cfg or {}).get(
-                    "op_names", getattr(cfg, "op_names", OP_NAMES.copy())
-                ),
-                # Digit configuration
-                "max_digits": (saved_cfg or {}).get(
-                    "max_digits", getattr(cfg, "max_digits", 4)
-                ),
-                "max_decimal_places": (saved_cfg or {}).get(
-                    "max_decimal_places", getattr(cfg, "max_decimal_places", 6)
-                ),
-                "base": (saved_cfg or {}).get("base", getattr(cfg, "base", 10)),
-                # Uncertainty weighting configuration
-                "train_uncertainty_params": (saved_cfg or {}).get(
-                    "train_uncertainty_params",
-                    getattr(cfg, "train_uncertainty_params", True),
-                ),
             }
             model_config = PredictorOnlyConfig(**model_cfg_dict)
             model = PredictorOnlyModel(model_config)

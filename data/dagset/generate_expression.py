@@ -6,7 +6,6 @@ using SymPy with per-token tokenization approach.
 """
 
 import random
-from typing import Union
 
 import sympy
 
@@ -151,7 +150,6 @@ def generate_expression(
     max_digits: int,
     max_decimal_places: int,
     tokenizer,  # tiktoken.Encoding
-    base: int = 10,
     _enable_preprocessing: bool = True,
 ) -> tuple[list[sympy.Basic | str], list[str], list[bool]]:
     """Generate expressions using GENERATION_OPS with per-token approach.
@@ -165,10 +163,9 @@ def generate_expression(
     Args:
         depth: Target depth for DAG operations
         seed: Random seed for reproducibility
-        max_digits: Maximum number of digits for encoding
-        max_decimal_places: Maximum decimal places for encoding
+        max_digits: Maximum number of digits for number generation
+        max_decimal_places: Maximum decimal places for number generation
         tokenizer: tiktoken tokenizer for creating per-token substrings
-        base: Number base (default 10)
         _enable_preprocessing: Whether to apply preprocessing (default True, underscore indicates testing-only parameter)
 
     Returns:
@@ -204,7 +201,7 @@ def generate_expression(
             seed=seed + i,
             max_digits=max_digits,
             max_decimal_places=max_decimal_places,
-            base=base,
+            base=10,  # Always use base 10
             allow_zero=False,
             integer_no_decimal_probability=0.0,
         )

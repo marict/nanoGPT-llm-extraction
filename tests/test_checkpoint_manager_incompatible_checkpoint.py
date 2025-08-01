@@ -1,10 +1,8 @@
 import types
 
 import pytest
-import torch
 
 from checkpoint_manager import CheckpointLoadError, CheckpointManager
-from models.dag_model import OP_NAMES
 from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
 
 
@@ -16,10 +14,9 @@ def _make_cfg(**kwargs):
         "dropout": 0.0,
         "bias": False,
         "dag_depth": 4,
-        "block_size": 32,
         "max_digits": 2,
         "max_decimal_places": 2,
-        "op_names": OP_NAMES.copy(),
+        "block_size": 32,
     }
     defaults.update(kwargs)
     return types.SimpleNamespace(**defaults)
@@ -35,11 +32,9 @@ def test_initialize_dag_model_ignores_incompatible_checkpoint():
         "dropout": 0.0,
         "bias": False,
         "dag_depth": 4,
-        "block_size": 32,
         "max_digits": 2,
         "max_decimal_places": 2,
-        "op_names": OP_NAMES.copy(),
-        "train_uncertainty_params": True,
+        "block_size": 32,
     }
     saved_model_cfg = PredictorOnlyConfig(**saved_cfg_dict)
     saved_model = PredictorOnlyModel(saved_model_cfg)

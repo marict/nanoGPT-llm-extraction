@@ -25,8 +25,7 @@ class DAGTrainConfig(BaseConfig):
     # DAG dataset parameters
     max_dag_depth: int = 8
     max_digits: int = 4
-    max_decimal_places: int | None = None
-    base: int = 10  # Number base for digit prediction (10=decimal, 16=hex, etc.)
+    max_decimal_places: int = 6
 
     # Batching / sequence
     gradient_accumulation_steps: int = 4
@@ -68,11 +67,6 @@ class DAGTrainConfig(BaseConfig):
             "exec": False,
             "stats": False,
         }
-    )
-
-    # Uncertainty weighting configuration
-    train_uncertainty_params: bool = (
-        True  # If False, uncertainty params stay at initial values
     )
 
     n_layer: int = 12

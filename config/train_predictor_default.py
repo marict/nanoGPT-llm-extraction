@@ -32,7 +32,7 @@ dataset = "dagset"  # Use DAG dataset for predictor training
 max_dag_depth = 2  # Minimal depth
 max_digits = 2  # Minimal digits
 max_decimal_places = 1  # Minimal decimal places
-base = 10
+
 
 # Training hyperparameters - minimal
 gradient_accumulation_steps = 1

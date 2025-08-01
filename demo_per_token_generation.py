@@ -38,7 +38,6 @@ def demo_expression_generation(depth=6, seed=None):
         max_digits=3,
         max_decimal_places=4,
         tokenizer=tokenizer,
-        base=10,
         _enable_preprocessing=True,
     )
 
@@ -143,7 +142,7 @@ def demo_expression_generation(depth=6, seed=None):
 
     try:
         target_tensors, tensor_valid_mask = expressions_to_tensors(
-            expressions, depth=depth, max_digits=3, max_decimal_places=4, base=10
+            expressions, depth=depth
         )
 
         print(f"✅ Generated {len(target_tensors)} target tensor dictionaries")
@@ -230,7 +229,6 @@ def run_multiple_demos(count=3, depth=6, seed=None):
             max_digits=3,
             max_decimal_places=4,
             tokenizer=tokenizer,
-            base=10,
             _enable_preprocessing=True,
         )
 

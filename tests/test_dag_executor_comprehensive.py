@@ -21,6 +21,68 @@ from data.dagset.streaming import expression_to_tensors
 from models.dag_model import DAGExecutor
 
 
+def test_dag_executor_simple():
+    """
+    Simple test with a few basic expressions to verify DAG executor works correctly.
+    This test ensures no major regressions before running the comprehensive test.
+    """
+    from tiktoken import get_encoding
+
+    tokenizer = get_encoding("gpt2")
+    depth = 4
+    executor = DAGExecutor(dag_depth=depth)
+
+    # Test with some simple expressions
+    simple_expressions = [
+        sympy.parse_expr("2.5 + 3.7"),  # Simple addition
+        sympy.parse_expr("4.0 * 1.5"),  # Simple multiplication
+        sympy.parse_expr("10.0 - 3.0"),  # Simple subtraction
+        sympy.parse_expr("8.0 / 2.0"),  # Simple division
+    ]
+
+    failures = []
+    for expr in simple_expressions:
+        try:
+            # Convert expression to tensors
+            V_mag, V_sign, O, G = expression_to_tensors(expr, dag_depth=depth)
+
+            # Execute DAG
+            dag_result = executor.forward(V_mag, V_sign, O, G)
+            dag_value = dag_result[0, 0].item()
+
+            # Compare with SymPy
+            sympy_value = float(expr.evalf())
+
+            error = abs(sympy_value - dag_value)
+            relative_error = error / max(abs(sympy_value), 1e-8)
+
+            print(f"Expression: {expr}")
+            print(f"  SymPy: {sympy_value}")
+            print(f"  DAG:   {dag_value}")
+            print(f"  Error: {error:.6f}")
+
+            if error > 1e-3 and relative_error > 1e-3:
+                failures.append(
+                    {
+                        "expr": str(expr),
+                        "sympy_value": sympy_value,
+                        "dag_value": dag_value,
+                        "error": error,
+                    }
+                )
+
+        except Exception as e:
+            failures.append({"expr": str(expr), "error": f"Exception: {e}"})
+            print(f"Expression: {expr} - Exception: {e}")
+
+    if failures:
+        pytest.fail(
+            f"Simple DAG executor test failed on {len(failures)} expressions: {failures}"
+        )
+
+    print("✅ Simple DAG executor test passed!")
+
+
 def test_dag_executor_comprehensive():
     """
     Comprehensive test that validates DAG execution against SymPy evaluation.

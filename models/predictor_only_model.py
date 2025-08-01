@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 import torch
 
 from .base_model import BaseGPTModel
-from .dag_model import OP_NAMES, DAGPlanPredictor
+from .dag_model import DAGPlanPredictor
 
 
 @dataclass
@@ -28,18 +28,9 @@ class PredictorOnlyConfig:
     dag_depth: int = 4
     block_size: int = 512
 
-    # Digit configuration for initial value prediction
-    max_digits: int = 4  # Integer digits
-    max_decimal_places: int = 6  # Fractional digits
-    base: int = 10  # Number base for digit prediction (10=decimal, 16=hex, etc.)
-
-    # Allowed operation names for DAG execution/prediction. Defaults to the full set.
-    op_names: list[str] = field(default_factory=lambda: OP_NAMES.copy())
-
-    # Uncertainty weighting configuration
-    train_uncertainty_params: bool = (
-        True  # If False, uncertainty params stay at initial values
-    )
+    # Number generation parameters for data generation
+    max_digits: int = 4
+    max_decimal_places: int = 6
 
 
 class PredictorOnlyModel(BaseGPTModel):

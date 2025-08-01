@@ -13,9 +13,9 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 import tiktoken
 import torch
+from dag_logger import DAGLogger
 
 import run_math_eval
-from dag_logger import DAGLogger
 from models.dag_model import GPT, GPTConfig
 
 

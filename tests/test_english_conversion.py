@@ -270,7 +270,6 @@ class TestGeneratedExpressions(TestExpressionEquivalence):
                 max_digits=4,
                 max_decimal_places=4,
                 tokenizer=tokenizer,
-                base=10,
             )
 
             # Test the final expression if it's valid

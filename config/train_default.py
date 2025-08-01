@@ -26,7 +26,7 @@ clear_previous_checkpoints = True
 max_dag_depth = 2  # Minimal depth
 max_digits = 2  # Minimal digits
 max_decimal_places = 1  # Minimal decimal places
-base = 10
+
 
 n_layer = 1
 n_head = 1

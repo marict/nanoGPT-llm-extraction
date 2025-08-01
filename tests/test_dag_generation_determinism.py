@@ -14,7 +14,6 @@ def test_dag_generation_determinism(depth: int, seed: int):
         seed=seed,
         max_digits=4,
         max_decimal_places=6,
-        base=10,
     )
 
     # Generate two identical dataloaders
