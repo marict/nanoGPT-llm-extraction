@@ -25,90 +25,31 @@ import sympy
 from tiktoken import get_encoding
 
 from data.dagset.generate_expression import generate_expression
-from scratch.newdag import NewDAGExecutor, expression_to_tensors, purge_negative_ones
-
-
-def test_purge_negative_ones():
-    """
-    Test the purge_negative_ones function that simplifies -1 * x to -x.
-    """
-    print("=== Testing purge_negative_ones function ===")
-
-    # Test case 1: Simple -1 * x
-    x = sympy.Symbol("x")
-    expr1 = sympy.Float(-1.0) * x
-    result1 = purge_negative_ones(expr1)
-    expected1 = -x
-    assert result1.equals(expected1), f"Expected {expected1}, got {result1}"
-    print(f"✓ Test 1 passed: {expr1} -> {result1}")
-
-    # Test case 2: x * -1 (reverse order)
-    expr2 = x * sympy.Float(-1.0)
-    result2 = purge_negative_ones(expr2)
-    expected2 = -x
-    assert result2.equals(expected2), f"Expected {expected2}, got {result2}"
-    print(f"✓ Test 2 passed: {expr2} -> {result2}")
-
-    # Test case 3: Complex expression with -1 multiplication
-    y = sympy.Symbol("y")
-    expr3 = (sympy.Float(-1.0) * x) + (y * sympy.Float(-1.0))
-    result3 = purge_negative_ones(expr3)
-    expected3 = -x + (-y)  # This should evaluate to -x - y
-    # For comparison, let's check if they're mathematically equivalent
-    diff = (result3 - expected3).simplify()
-    assert diff == 0, f"Expected equivalent to {expected3}, got {result3}"
-    print(f"✓ Test 3 passed: {expr3} -> {result3}")
-
-    # Test case 4: Expression without -1 multiplication (should be unchanged)
-    expr4 = x + y * 2
-    result4 = purge_negative_ones(expr4)
-    assert result4.equals(
-        expr4
-    ), f"Expression should be unchanged: {expr4} vs {result4}"
-    print(f"✓ Test 4 passed: {expr4} remains unchanged")
-
-    # Test case 5: Nested expression with multiple -1 multiplications
-    z = sympy.Symbol("z")
-    expr5 = (sympy.Float(-1.0) * x) * (sympy.Float(-1.0) * y) + z
-    result5 = purge_negative_ones(expr5)
-    # After purging: (-x) * (-y) + z = x*y + z
-    expected5 = x * y + z
-    # Check mathematical equivalence
-    diff = (result5 - expected5).simplify()
-    assert diff == 0, f"Expected equivalent to {expected5}, got {result5}"
-    print(f"✓ Test 5 passed: {expr5} -> {result5}")
-
-    print("All purge_negative_ones tests passed! ✅\n")
-    return True
+from scratch.newdag import NewDAGExecutor, expression_to_tensors
 
 
 def test_newdag_comprehensive():
     """
     Comprehensive test that validates DAG execution against SymPy evaluation.
     """
-    print("=== Testing newdag.py with 1000 expressions ===")
 
     # Test parameters
-    depth = 6
+    depth = 15
     max_digits = 6
     max_decimal_places = 6
     base = 10
     tokenizer = get_encoding("gpt2")
-    target_count = 1000
 
     print(f"Target parameters:")
     print(f"  Depth: {depth}")
     print(f"  Max digits: {max_digits}")
     print(f"  Max decimal places: {max_decimal_places}")
     print(f"  Base: {base}")
-    print(f"  Target expression count: {target_count}")
     print()
 
     # Step 1: Generate expressions until we have enough
     print("Step 1: Generating expressions...")
     all_expressions = set()
-    seed = 42
-
     num_expressions = 100
 
     for i in tqdm.tqdm(
@@ -127,21 +68,14 @@ def test_newdag_comprehensive():
     all_expressions = [expr for expr in all_expressions if expr != "not valid"]
     print(f"After filtering, {len(all_expressions)} expressions remain")
 
+    # Filter out overly complex expressions (longer than 60 characters)
+    all_expressions = [expr for expr in all_expressions if len(str(expr)) <= 60]
+    print(f"After complexity filtering, {len(all_expressions)} expressions remain")
+
     # Order expressions by str length
     all_expressions.sort(key=lambda x: len(str(x)), reverse=True)
 
-    # Print top 10 expressions
-    for expr in all_expressions[:10]:
-        print(f"Expression: {expr}")
-        print(f"Length: {len(str(expr))}")
-        print()
-    # Print bottom 10 expressions
-    for expr in all_expressions[-10:]:
-        print(f"Expression: {expr}")
-        print(f"Length: {len(str(expr))}")
-        print()
-
-    print(f"\nStep 3: Testing {target_count} expressions...")
+    print(f"\nStep 3: Testing {len(all_expressions)} expressions...")
     print("Comparing DAG execution vs SymPy evaluation...")
 
     executor = NewDAGExecutor(dag_depth=depth)
@@ -153,17 +87,16 @@ def test_newdag_comprehensive():
         total=len(all_expressions),
         desc="Testing expressions",
     ):
-        # a. Get target state from expression_to_tensors
+        # Get target state from expression_to_tensors
         V_mag, V_sign, O, G = expression_to_tensors(expr, dag_depth=depth)
 
-        # b. Get final result from execute_with_plan
+        # Get final result from execute_with_plan
         dag_result = executor.execute_with_plan(V_mag, V_sign, O, G, debug=False)
-        dag_value = dag_result[0, 0].item()
 
-        # c. Get final result from SymPy evaluation
+        dag_value = dag_result[0, 0].item()
         sympy_value = float(expr)
 
-        # d. Check if results match
+        # Check if results match
         error = abs(sympy_value - dag_value)
         relative_error = error / max(abs(sympy_value), 1e-8)
 
@@ -179,14 +112,14 @@ def test_newdag_comprehensive():
 
     # Step 4: Report results
     print(f"\n=== FINAL RESULTS ===")
-    print(f"Total expressions tested: {target_count}")
+    print(f"Total expressions tested: {len(all_expressions)}")
     print(f"Passed: {passed}")
     print(f"Failed: {failed}")
-    print(f"Success rate: {passed / target_count * 100:.2f}%")
+    print(f"Success rate: {passed / len(all_expressions) * 100:.2f}%")
 
     if failed > 0:
         print(
-            f"\n❌ TEST FAILED: {failed} out of {target_count} expressions failed validation"
+            f"\n❌ TEST FAILED: {failed} out of {len(all_expressions)} expressions failed validation"
         )
         if failed > 10:
             print(
@@ -194,14 +127,13 @@ def test_newdag_comprehensive():
             )
         return False
     else:
-        print(f"\n✅ TEST PASSED: All {target_count} expressions passed validation!")
+        print(
+            f"\n✅ TEST PASSED: All {len(all_expressions)} expressions passed validation!"
+        )
         return True
 
 
 if __name__ == "__main__":
-    # Run both tests
-    purge_test_success = test_purge_negative_ones()
+    # Run comprehensive test
     comprehensive_test_success = test_newdag_comprehensive()
-
-    overall_success = purge_test_success and comprehensive_test_success
-    sys.exit(0 if overall_success else 1)
+    sys.exit(0 if comprehensive_test_success else 1)

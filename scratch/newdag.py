@@ -22,6 +22,175 @@ LOG_LIM = 23.026  # Bound on ln-magnitudes (≈ 10.0 * ln(10))
 MIN_CLAMP = 1e-6
 
 
+# Custom SymPy operations for cleaner parsing
+class Div(sympy.Function):
+    """Custom division operation that can handle arbitrary arguments: Div(a, b, c) = a / b / c"""
+
+    @classmethod
+    def eval(cls, *args):
+        """Don't evaluate - keep as symbolic custom operation"""
+        if len(args) < 2:
+            raise ValueError("Div requires at least 2 arguments")
+        # Return None to prevent evaluation and keep as Div(a, b, c)
+        return None
+
+    def _latex(self, printer):
+        args_latex = [printer._print(arg) for arg in self.args]
+        return " / ".join(args_latex)
+
+    def evalf(self, *args, **kwargs):
+        """Evaluate numerically when needed"""
+        result = self.args[0].evalf(*args, **kwargs)
+        for arg in self.args[1:]:
+            result = result / arg.evalf(*args, **kwargs)
+        return result
+
+
+class Sub(sympy.Function):
+    """Custom subtraction operation that can handle arbitrary arguments: Sub(a, b, c) = a - b - c"""
+
+    @classmethod
+    def eval(cls, *args):
+        """Don't evaluate - keep as symbolic custom operation"""
+        if len(args) < 2:
+            raise ValueError("Sub requires at least 2 arguments")
+        # Return None to prevent evaluation and keep as Sub(a, b, c)
+        return None
+
+    def _latex(self, printer):
+        args_latex = [printer._print(arg) for arg in self.args]
+        return " - ".join(args_latex)
+
+    def evalf(self, *args, **kwargs):
+        """Evaluate numerically when needed"""
+        result = self.args[0].evalf(*args, **kwargs)
+        for arg in self.args[1:]:
+            result = result - arg.evalf(*args, **kwargs)
+        return result
+
+
+class Neg(sympy.Function):
+    """Custom negation operation: Neg(x) = -x"""
+
+    @classmethod
+    def eval(cls, arg):
+        """Don't evaluate - keep as symbolic custom operation"""
+        # Return None to prevent evaluation and keep as Neg(x)
+        return None
+
+    def _latex(self, printer):
+        return f"-{printer._print(self.args[0])}"
+
+    def evalf(self, *args, **kwargs):
+        """Evaluate numerically when needed"""
+        return -self.args[0].evalf(*args, **kwargs)
+
+
+def normalize_expression(expr: sympy.Basic) -> sympy.Basic:
+    """
+    Convert complex SymPy representations to our custom Div/Sub/Neg operations.
+
+    Transforms:
+    - Mul(a, Pow(b, -1), Pow(c, -1)) → Div(a, b, c)  # a * (1/b) * (1/c) → a / b / c
+    - Add(a, Mul(-1, b), Mul(-1, c)) → Sub(a, b, c)  # a + (-b) + (-c) → a - b - c
+    - Mul(-1, x) → Neg(x)  # -1 * x → -x
+    """
+
+    def transform_node(node):
+        if isinstance(node, sympy.Mul):
+            # First check if this is a negation: -1 * x
+            if len(node.args) == 2 and node.args[0] == -1:
+                # This is -1 * x, transform to Neg(x)
+                return Neg(transform_node(node.args[1]))
+
+            # Check if this is a division: a * (1/b) * (1/c) * ...
+            numerators = []
+            denominators = []
+
+            for arg in node.args:
+                if isinstance(arg, sympy.Pow) and arg.exp == -1:
+                    # This is 1/x, so x is a denominator
+                    denominators.append(transform_node(arg.base))
+                else:
+                    # Regular term, so it's a numerator
+                    numerators.append(transform_node(arg))
+
+            if denominators:  # Has reciprocals, so it's a division
+                if len(numerators) == 1:
+                    return Div(numerators[0], *denominators)
+                else:
+                    # Multiple numerators: (a*b) / c / d
+                    combined_numerator = sympy.Mul(*numerators, evaluate=False)
+                    return Div(combined_numerator, *denominators)
+            else:
+                # Regular multiplication
+                if len(numerators) == 1:
+                    return numerators[0]
+                else:
+                    return sympy.Mul(*numerators, evaluate=False)
+
+        elif isinstance(node, sympy.Add):
+            # Check if this is a subtraction: a + (-b) + (-c) + ...
+            positive_terms = []
+            negative_terms = []
+
+            for arg in node.args:
+                transformed_arg = transform_node(arg)
+                if isinstance(transformed_arg, Neg):
+                    # This is Neg(x), so x is being subtracted
+                    negative_terms.append(transformed_arg.args[0])
+                elif (
+                    isinstance(arg, sympy.Mul)
+                    and len(arg.args) >= 2
+                    and arg.args[0] == -1
+                ):
+                    # This is -1*x (fallback for cases not caught by negation transform)
+                    if len(arg.args) == 2:
+                        negative_terms.append(transform_node(arg.args[1]))
+                    else:
+                        # -1 * (multiple terms)
+                        remaining = sympy.Mul(*arg.args[1:], evaluate=False)
+                        negative_terms.append(transform_node(remaining))
+                else:
+                    # Regular positive term
+                    positive_terms.append(transformed_arg)
+
+            if negative_terms:  # Has negative terms, so it's a subtraction
+                if len(positive_terms) == 1:
+                    return Sub(positive_terms[0], *negative_terms)
+                else:
+                    # Multiple positive terms: (a+b) - c - d
+                    combined_positive = sympy.Add(*positive_terms, evaluate=False)
+                    return Sub(combined_positive, *negative_terms)
+            else:
+                # Regular addition
+                if len(positive_terms) == 1:
+                    return positive_terms[0]
+                else:
+                    return sympy.Add(*positive_terms, evaluate=False)
+
+        elif isinstance(node, sympy.Pow):
+            # Handle reciprocals: x**-1 -> Div(1, x)
+            if node.exp == -1:
+                # This is 1/x, convert to Div(1, x)
+                return Div(sympy.Integer(1), transform_node(node.base))
+            else:
+                # For other powers, transform the base and keep as Pow
+                # Note: After normalization, we should not see any Pow nodes in tensor conversion
+                return sympy.Pow(transform_node(node.base), node.exp)
+
+        elif hasattr(node, "args") and node.args:
+            # Transform arguments for other node types
+            new_args = [transform_node(arg) for arg in node.args]
+            return node.func(*new_args, evaluate=False)
+
+        else:
+            # Leaf node (number, symbol, etc.)
+            return node
+
+    return transform_node(expr)
+
+
 def _clip_log(log_t: torch.Tensor) -> torch.Tensor:
     """Symmetric clipping for log magnitudes to prevent numerical instabilities."""
     needs_clipping = torch.abs(log_t) > (0.9 * LOG_LIM)
@@ -367,15 +536,16 @@ def purge_negative_ones(expr: sympy.Basic) -> sympy.Basic:
                 second_is_neg_one = _is_negative_one(second_arg)
 
                 if first_is_neg_one:
-                    # -1 * x = -x
-                    return -second_arg
+                    # -1 * x = -x, recursively transform the result
+                    return transform_neg_one_mul(-second_arg)
                 elif second_is_neg_one:
-                    # x * -1 = -x
-                    return -first_arg
+                    # x * -1 = -x, recursively transform the result
+                    return transform_neg_one_mul(-first_arg)
 
         # For non-multiplication expressions, recurse into children
         if hasattr(expr_part, "args") and expr_part.args:
             new_args = [transform_neg_one_mul(arg) for arg in expr_part.args]
+            # Use evaluate=False to preserve structure, but allow manual simplification
             return expr_part.func(*new_args, evaluate=False)
 
         return expr_part
@@ -388,16 +558,70 @@ def purge_negative_ones(expr: sympy.Basic) -> sympy.Basic:
             return abs(val - (-1.0)) < 1e-10
         return False
 
-    return transform_neg_one_mul(expr)
+    # Apply transformation repeatedly until no more changes occur
+    result = expr
+    for _ in range(10):  # Prevent infinite loops
+        new_result = transform_neg_one_mul(result)
+        if str(new_result) == str(result):  # Use string comparison to avoid evaluation
+            break
+        result = new_result
+
+    return result
+
+
+def _is_negative_one_simple(arg):
+    """Simple check if an argument represents -1."""
+    if arg.is_number and arg.is_real:
+        val = float(arg.evalf())
+        return abs(val - (-1.0)) < 1e-10
+    return False
+
+
+def is_negation(node: sympy.Basic) -> bool:
+    """Check if a node represents -1 * value (negation of a numeric value)."""
+    if not isinstance(node, sympy.Mul) or len(node.args) != 2:
+        return False
+
+    first_arg, second_arg = node.args
+
+    # Check for -1 * value or value * -1 patterns where value is numeric
+    return (
+        _is_negative_one_simple(first_arg)
+        and (
+            isinstance(second_arg, sympy_float) or isinstance(second_arg, sympy.Integer)
+        )
+    ) or (
+        _is_negative_one_simple(second_arg)
+        and (isinstance(first_arg, sympy_float) or isinstance(first_arg, sympy.Integer))
+    )
+
+
+def get_negation_value(node: sympy.Mul) -> sympy.Basic:
+    """Get the negated value from a -1 * value multiplication."""
+    if not is_negation(node):
+        raise ValueError(f"Node {node} is not a negation")
+
+    first_arg, second_arg = node.args
+
+    if _is_negative_one_simple(first_arg):
+        original_value = second_arg  # -1 * value
+    else:
+        original_value = first_arg  # value * -1
+
+    return sympy.Float(-float(original_value.evalf()))
 
 
 def is_division(node: sympy.Basic) -> bool:
-    return (
-        isinstance(node, sympy.Mul)
-        and len(node.args) == 2
-        and isinstance(node.args[1], sympy.Pow)
-        and node.args[1].exp == -1
+    """Check if a Mul node represents division (has reciprocal terms)."""
+    if not isinstance(node, sympy.Mul):
+        return False
+
+    # Count reciprocal terms (Pow with exp=-1)
+    reciprocal_count = sum(
+        1 for arg in node.args if isinstance(arg, sympy.Pow) and arg.exp == -1
     )
+
+    return reciprocal_count > 0 and len(node.args) >= 2
 
 
 def get_div_parts(node: sympy.Mul):
@@ -409,12 +633,18 @@ def get_div_parts(node: sympy.Mul):
 
 
 def is_subtraction(node: sympy.Basic) -> bool:
-    return (
-        isinstance(node, sympy.Add)
-        and len(node.args) == 2
-        and isinstance(node.args[1], sympy.Mul)
-        and node.args[1].args[0] == -1  # -1 * b
+    """Check if an Add node represents subtraction (has negated terms)."""
+    if not isinstance(node, sympy.Add):
+        return False
+
+    # Count negated terms (Mul with first arg = -1)
+    negated_count = sum(
+        1
+        for arg in node.args
+        if isinstance(arg, sympy.Mul) and len(arg.args) >= 2 and arg.args[0] == -1
     )
+
+    return negated_count > 0 and len(node.args) >= 2
 
 
 def get_sub_parts(node: sympy.Add):
@@ -429,10 +659,10 @@ def expression_to_tensors(
     expr: sympy.Basic, dag_depth: int
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Convert a sympy expression to NewDAG tensor format with proper SymPy parsing.
+    Convert a sympy expression to NewDAG tensor format with custom Div/Sub operations.
 
-    This function properly parses SymPy expressions and converts them to the
-    tensor format expected by NewDAGExecutor.
+    This function first normalizes SymPy expressions to use custom Div/Sub operations,
+    then converts them to the NewDAG tensor format for execution with fixed slot allocation.
 
     Args:
         expr: Sympy expression to convert
@@ -441,62 +671,184 @@ def expression_to_tensors(
     Returns:
         V_mag, V_sign, O, G: Tensors for DAG execution
     """
-    # TODO: Implement principled conversion logic
+
+    # Step 1: Normalize the expression to use our custom operations
+    normalized_expr = normalize_expression(expr)
+
+    # Step 2: Process the normalized expression
     # First initialize a blank predictor state of dag_depth
     V_mag = torch.zeros(1, 1, dag_depth * 2)
     V_sign = torch.ones(1, 1, dag_depth * 2)
     O = torch.zeros(1, 1, dag_depth, dag_depth * 2)
-    G = torch.zeros(1, 1, dag_depth)
-
-    # Simplify negative one multiplications first
-    expr = purge_negative_ones(expr)
+    G = torch.ones(
+        1, 1, dag_depth
+    )  # Initialize as ones (linear domain for identity ops)
 
     values = []
-    # First collect the numbers in the expression
-    for node in postorder_traversal(expr):
-        if isinstance(node, sympy_float):
-            values.append(node)
-
-        print(f"Node type: {type(node)}")
-        print(f"Node: {node}")
-        print()
-
-    for i, value in enumerate(values):
-        V_mag[0, 0, i] = float(value.evalf())
-        V_sign[0, 0, i] = 1 if float(value.evalf()) > 0 else -1
-
+    node_replacements = (
+        {}
+    )  # Maps original -1*value nodes to their negated value replacements
     step_index = 0
+    initial_value_count = 0
+
     try:
-        for node in postorder_traversal(expr):
-            # div and sub are represented as mul and add in sympy
-            is_div = is_division(node)
-            is_sub = is_subtraction(node)
-            is_add = not is_sub and isinstance(node, sympy.Add)
-            is_mul = not is_div and isinstance(node, sympy.Mul)
-            if is_add or is_sub:
-                G[0, 0, step_index] = 1  # Linear domain
-            if is_mul or is_div:
+        # PHASE 1: Collect all initial values (numbers) in first postorder traversal
+        for node in postorder_traversal(normalized_expr):
+            # Handle leaf nodes (numbers) - including standalone -1
+            if isinstance(node, sympy_float) or isinstance(node, sympy.Integer):
+                values.append(node)
+                # Populate V_mag and V_sign for numbers
+                val = float(node.evalf())
+                V_mag[0, 0, initial_value_count] = abs(val)
+                V_sign[0, 0, initial_value_count] = 1 if val > 0 else -1
+                initial_value_count += 1
+                continue
+
+            # Handle our custom Neg operations for numbers only
+            if isinstance(node, Neg):
+                # Get the argument and create its negated value
+                arg = node.args[0]
+                if isinstance(arg, (sympy_float, sympy.Integer)):
+                    # For numbers, create the negated number directly
+                    negated_val = sympy_float(-float(arg.evalf()))
+                    values.append(negated_val)
+                    node_replacements[node] = negated_val
+                    # Populate V_mag and V_sign for the negated value
+                    val = float(negated_val.evalf())
+                    V_mag[0, 0, initial_value_count] = abs(val)
+                    V_sign[0, 0, initial_value_count] = 1 if val > 0 else -1
+                    initial_value_count += 1
+
+        # Pad values list to dag_depth before processing operations
+        while len(values) < dag_depth:
+            values.append("UNUSED")
+
+        # PHASE 2: Process operations in second postorder traversal
+        for node in postorder_traversal(normalized_expr):
+            # Skip leaf nodes (already processed in Phase 1)
+            if isinstance(node, sympy_float) or isinstance(node, sympy.Integer):
+                continue
+
+            # Skip Neg operations for numbers (already processed in Phase 1)
+            if isinstance(node, Neg):
+                arg = node.args[0]
+                if isinstance(arg, (sympy_float, sympy.Integer)):
+                    continue  # Already handled in Phase 1
+
+            # Error if we see old-style negations after normalization
+            if is_negation(node):
+                raise ValueError(
+                    f"Unexpected old-style negation after normalization: {node}. "
+                    f"All Mul(-1, x) patterns should have been converted to Neg(x) during normalization. "
+                    f"Normalization failed to catch this pattern."
+                )
+
+            # Error if we see any Pow nodes after normalization
+            if isinstance(node, sympy.Pow):
+                raise ValueError(
+                    f"Unexpected Pow node after normalization: {node}. "
+                    f"All Pow(x, -1) should have been converted to Div(1, x) during normalization. "
+                    f"Other powers are not supported in DAG representation."
+                )
+
+            # Handle our custom operations and standard SymPy operations
+            if isinstance(node, Div):
+                # Custom division operation: Div(a, b, c) = a / b / c
+                # Coefficients: [+1, -1, -1, ...] in log domain
+
                 G[0, 0, step_index] = 0  # Log domain
-            if is_add or is_mul:
-                i1 = values.index(node.args[0])
-                i2 = values.index(node.args[1])
-                O[0, 0, step_index, i1] = 1
-                O[0, 0, step_index, i2] = 1
+
+                for i, arg in enumerate(node.args):
+                    arg = node_replacements.get(arg, arg)
+                    arg_idx = values.index(arg)
+                    coefficient = 1 if i == 0 else -1  # First arg +1, rest -1
+                    O[0, 0, step_index, arg_idx] += coefficient
+
                 values.append(node)
                 step_index += 1
-            if is_div or is_sub:
-                a1, a2 = get_div_parts(node) if is_div else get_sub_parts(node)
-                i1 = values.index(a1)
-                i2 = values.index(a2)
-                O[0, 0, step_index, i1] = 1
-                O[0, 0, step_index, i2] = -1
+                continue
+
+            elif isinstance(node, Sub):
+                # Custom subtraction operation: Sub(a, b, c) = a - b - c
+                # Coefficients: [+1, -1, -1, ...] in linear domain
+
+                G[0, 0, step_index] = 1  # Linear domain
+
+                for i, arg in enumerate(node.args):
+                    arg = node_replacements.get(arg, arg)
+                    arg_idx = values.index(arg)
+                    coefficient = 1 if i == 0 else -1  # First arg +1, rest -1
+                    O[0, 0, step_index, arg_idx] += coefficient
+
                 values.append(node)
                 step_index += 1
+                continue
+
+            elif isinstance(node, Neg):
+                # Custom negation operation: Neg(x) = -x
+                # For non-number arguments (complex expressions), handle as operation
+
+                G[0, 0, step_index] = 1  # Linear domain (multiply by -1)
+
+                arg = node_replacements.get(node.args[0], node.args[0])
+                arg_idx = values.index(arg)
+                O[0, 0, step_index, arg_idx] += -1  # Coefficient -1 for negation
+
+                values.append(node)
+                step_index += 1
+                continue
+
+            elif isinstance(node, sympy.Add):
+                # Standard addition: all terms get +1 coefficient
+
+                G[0, 0, step_index] = 1  # Linear domain
+
+                for arg in node.args:
+                    arg = node_replacements.get(arg, arg)
+                    i = values.index(arg)
+                    O[0, 0, step_index, i] += 1
+
+                values.append(node)
+                step_index += 1
+                continue
+
+            elif isinstance(node, sympy.Mul):
+                # Standard multiplication: all terms get +1 coefficient
+                # Skip -1 * value multiplications (already handled as negated values)
+                if is_negation(node):
+                    continue
+
+                G[0, 0, step_index] = 0  # Log domain
+
+                for arg in node.args:
+                    arg = node_replacements.get(arg, arg)
+                    i = values.index(arg)
+                    O[0, 0, step_index, i] += 1
+
+                values.append(node)
+                step_index += 1
+                continue
+
+            # Handle any other node types that we haven't explicitly covered
+            else:
+                raise ValueError(f"Unexpected node type: {type(node)}")
+
     except Exception as e:
         print(f"Exception: {e}")
         print(f"Error when parsing node {node} of type {type(node)}")
         raise
 
+    # Fill remaining steps with identity operations
+    if step_index > 0:
+        # Had operations - use the last operation result slot
+        # The executor stores operation results at dag_depth + step_number
+        last_result_slot = dag_depth + (step_index - 1)
+        for remaining_step in range(step_index, dag_depth):
+            O[0, 0, remaining_step, last_result_slot] = 1
+    else:
+        # No operations - use the first initial value
+        for remaining_step in range(0, dag_depth):
+            O[0, 0, remaining_step, 0] = 1
     return V_mag, V_sign, O, G
 
 
