@@ -194,18 +194,21 @@ def expression_to_tensors(
     Convert a SymPy expression to DAG tensor representation.
 
     Returns:
-        V_mag: (1, 1, dag_depth * 2) - magnitudes of all nodes (initial + intermediate)
-        V_sign: (1, 1, dag_depth * 2) - signs of all nodes
-        O: (1, 1, dag_depth, dag_depth * 2) - operand selection matrix
+        V_mag: (1, 1, total_nodes) - magnitudes of all nodes (initial + intermediate)
+        V_sign: (1, 1, total_nodes) - signs of all nodes
+        O: (1, 1, dag_depth, total_nodes) - operand selection matrix
         G: (1, 1, dag_depth) - domain selector (0=log, 1=linear)
     """
     # Step 1: Normalize the expression
     normalized_expr = normalize_expression(expr)
 
-    # Initialize tensors with dag_depth * 2 architecture (50/50 split)
-    V_mag = torch.zeros(1, 1, dag_depth * 2)
-    V_sign = torch.ones(1, 1, dag_depth * 2)  # Initialize to all 1s
-    O = torch.zeros(1, 1, dag_depth, dag_depth * 2)
+    num_initial_nodes = dag_depth + 1
+    num_intermediate_nodes = dag_depth
+    total_nodes = num_initial_nodes + num_intermediate_nodes
+
+    V_mag = torch.zeros(1, 1, total_nodes)
+    V_sign = torch.ones(1, 1, total_nodes)  # Initialize to all 1s
+    O = torch.zeros(1, 1, dag_depth, total_nodes)
     G = torch.ones(1, 1, dag_depth)  # Initialize to all 1s (linear domain)
 
     # Track values list and step index
@@ -220,9 +223,9 @@ def expression_to_tensors(
 
         # Handle direct numbers
         if is_float or is_int:
-            if step_index >= dag_depth:
+            if step_index >= num_initial_nodes:
                 raise ValueError(
-                    f"Expression has too many initial values. Needs dag_depth > {step_index}"
+                    f"Expression has too many initial values. Needs dag_depth >= {step_index - 1} (allowing {num_initial_nodes} initial values)"
                 )
 
             try:
@@ -238,9 +241,9 @@ def expression_to_tensors(
         elif isinstance(node, Neg):
             arg = node.args[0]
             if isinstance(arg, (sympy_float, sympy.Integer)):
-                if step_index >= dag_depth:
+                if step_index >= num_initial_nodes:
                     raise ValueError(
-                        f"Expression has too many initial values. Needs dag_depth > {step_index}"
+                        f"Expression has too many initial values. Needs dag_depth >= {step_index - 1} (allowing {num_initial_nodes} initial values)"
                     )
 
                 try:
@@ -275,8 +278,8 @@ def expression_to_tensors(
                 f"Other Pow operations are not supported."
             )
 
-    # Pad values list to dag_depth
-    while len(values) < dag_depth:
+    # Pad values list to num_initial_nodes
+    while len(values) < num_initial_nodes:
         values.append("UNUSED")
 
     # Reset step_index for operations
@@ -298,7 +301,7 @@ def expression_to_tensors(
 
         if step_index >= dag_depth:
             raise ValueError(
-                f"Expression requires more operations than dag_depth={dag_depth}"
+                f"Expression requires more operations than dag_depth={dag_depth}, num operations: {step_index}"
             )
 
         is_neg = isinstance(node, Neg)
@@ -342,8 +345,8 @@ def expression_to_tensors(
             # Fill remaining steps with identity operations
     if step_index > 0:
         # Had operations - use the last operation result slot
-        # The executor stores operation results at dag_depth + step_number
-        last_result_slot = dag_depth + (step_index - 1)
+        # The executor stores operation results at num_initial_nodes + step_number
+        last_result_slot = num_initial_nodes + (step_index - 1)
         for remaining_step in range(step_index, dag_depth):
             O[0, 0, remaining_step, last_result_slot] = 1
     else:
@@ -460,11 +463,12 @@ def expressions_to_tensors(
 
     for expr in expressions:
         if expr == "not valid":
-            # Create zero DAG for invalid token position
+            # Create zero DAG for invalid token position with new architecture
+            total_nodes = (depth + 1) + depth
             zero_tensor_dict = {
-                "target_V_mag": torch.zeros(depth * 2),
-                "target_V_sign": torch.ones(depth * 2),
-                "target_O": torch.zeros(depth, depth * 2),
+                "target_V_mag": torch.zeros(total_nodes),
+                "target_V_sign": torch.ones(total_nodes),
+                "target_O": torch.zeros(depth, total_nodes),
                 "target_G": torch.ones(depth),
                 "target_final_exec": 0.0,
             }
@@ -535,7 +539,7 @@ def create_dag_structure_dataloaders(
 
         for i in range(batch_size):
             # Generate expressions
-            expressions, substrings, valid_mask_list = generate_expression(
+            expressions, substrings, _ = generate_expression(
                 depth=max_depth,
                 seed=training_seed + i,
                 max_digits=max_digits,
@@ -580,10 +584,11 @@ def create_dag_structure_dataloaders(
         padded_target_tensors = []
         for target_tensors in all_target_tensors:
             # Create zero DAG for padding positions using new tensor format
+            total_nodes = (max_depth + 1) + max_depth
             zero_tensor_dict = {
-                "target_V_mag": torch.zeros(max_depth * 2),
-                "target_V_sign": torch.ones(max_depth * 2),
-                "target_O": torch.zeros(max_depth, max_depth * 2),
+                "target_V_mag": torch.zeros(total_nodes),
+                "target_V_sign": torch.ones(total_nodes),
+                "target_O": torch.zeros(max_depth, total_nodes),
                 "target_G": torch.ones(max_depth),
                 "target_final_exec": 0.0,
             }

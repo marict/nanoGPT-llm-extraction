@@ -25,27 +25,27 @@ LOG_LIM = (
 
 
 class DAGExecutor(nn.Module):
-    """New tensor-based DAG execution engine with 50/50 node split architecture."""
+    """New tensor-based DAG execution engine with (dag_depth + 1) + dag_depth node architecture."""
 
     def __init__(self, dag_depth: int):
         super().__init__()
         self.dag_depth = dag_depth
-        self.total_nodes = dag_depth * 2
-        self.initial_slots = dag_depth
-        self.intermediate_slots = dag_depth
+        self.num_initial_nodes = dag_depth + 1
+        self.num_intermediate_nodes = dag_depth
+        self.total_nodes = self.num_initial_nodes + self.num_intermediate_nodes
 
     def forward(self, V_mag, V_sign, O, G):
         """
-                Execute DAG operations using tensor representation with 50/50 node split.
+        Execute DAG operations using tensor representation with (dag_depth + 1) + dag_depth node architecture.
 
         Args:
-                    V_mag: (1, 1, total_nodes) - magnitudes of all nodes (initial + intermediate)
-                    V_sign: (1, 1, total_nodes) - signs of all nodes
-                    O: (1, 1, dag_depth, total_nodes) - operand selection matrix
-                    G: (1, 1, dag_depth) - domain selector (0=log, 1=linear)
+            V_mag: (1, 1, total_nodes) - magnitudes of all nodes (initial + intermediate)
+            V_sign: (1, 1, total_nodes) - signs of all nodes
+            O: (1, 1, dag_depth, total_nodes) - operand selection matrix
+            G: (1, 1, dag_depth) - domain selector (0=log, 1=linear)
 
         Returns:
-                    torch.Tensor: final result (scalar)
+            torch.Tensor: final result (scalar)
         """
         _, _, total_nodes = V_mag.shape
 
@@ -60,14 +60,14 @@ class DAGExecutor(nn.Module):
         working_V_sign = V_sign.clone().to(compute_dtype)
 
         # Execute each intermediate computation step
-        for step in range(self.intermediate_slots):
+        for step in range(self.num_intermediate_nodes):
             # Get operand selector and domain gate for this step
             O_step = O[:, :, step, :].to(compute_dtype)  # (B, T, total_nodes)
             G_step = G[:, :, step].unsqueeze(-1).to(compute_dtype)  # (B, T, 1)
 
             # Apply triangular mask to prevent using future intermediate results
             valid_positions = (
-                self.initial_slots + step
+                self.num_initial_nodes + step
             )  # How many positions are available
 
             # Create causal mask
@@ -109,7 +109,7 @@ class DAGExecutor(nn.Module):
             V_mag_new = G_step * linear_mag + (1 - G_step) * log_mag_result
 
             # Write result to the predetermined intermediate slot
-            intermediate_idx = self.initial_slots + step
+            intermediate_idx = self.num_initial_nodes + step
             # Use scatter to avoid in-place operations that break gradients
             indices = torch.tensor(
                 [intermediate_idx], device=working_V_mag.device
@@ -130,17 +130,18 @@ class DAGExecutor(nn.Module):
 
 
 class DAGPlanPredictor(nn.Module):
-    """Predictor for tensor-based DAG execution with 50/50 node split architecture."""
+    """Predictor for tensor-based DAG execution with (dag_depth + 1) + dag_depth node architecture."""
 
     def __init__(self, config):
         super().__init__()
         self.dag_depth = config.dag_depth
-        self.total_nodes = (
-            config.dag_depth * 2
-        )  # 50/50 split: initial + intermediate nodes
+        num_initial_nodes = config.dag_depth + 1
+        num_intermediate_nodes = config.dag_depth
+
+        self.total_nodes = num_initial_nodes + num_intermediate_nodes
         self.n_embd = config.n_embd
 
-        # Predict tensor components with correct 50/50 architecture
+        # Predict tensor components with (dag_depth + 1) + dag_depth architecture
         # V_mag: magnitudes for all nodes (initial + intermediate)
         self.V_mag_predictor = nn.Linear(config.n_embd, self.total_nodes)
 
@@ -178,7 +179,7 @@ class DAGPlanPredictor(nn.Module):
         """
         B, T = hidden_state.shape[:2]
 
-        # Predict each component with correct 50/50 architecture
+        # Predict each component with (dag_depth + 1) + dag_depth architecture
         V_mag = torch.abs(self.V_mag_predictor(hidden_state))  # (B, T, total_nodes)
         V_sign = torch.tanh(self.V_sign_predictor(hidden_state))  # (B, T, total_nodes)
 

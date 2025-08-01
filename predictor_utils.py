@@ -203,18 +203,20 @@ def compute_dag_loss(
 
     # Compute losses
 
-    # Determine dag_depth from tensor shapes (total_nodes = dag_depth * 2)
+    # Determine node counts from tensor shapes (total_nodes = (dag_depth + 1) + dag_depth)
     total_nodes = pred_V_mag_valid.shape[-1]
-    dag_depth = total_nodes // 2  # Initial nodes only
+    dag_depth = (total_nodes - 1) // 2
+    num_initial_nodes = dag_depth + 1
 
     # Magnitude loss - only on initial nodes (use robust loss for wide range of values)
     V_mag_loss = _compute_value_loss(
-        pred_V_mag_valid[:, :dag_depth], target_V_mag[:, :dag_depth]
+        pred_V_mag_valid[:, :num_initial_nodes], target_V_mag[:, :num_initial_nodes]
     )
 
     # Sign loss - only on initial nodes (L2 on tanh-activated predictions)
     V_sign_loss = F.mse_loss(
-        torch.tanh(pred_V_sign_valid[:, :dag_depth]), target_V_sign[:, :dag_depth]
+        torch.tanh(pred_V_sign_valid[:, :num_initial_nodes]),
+        target_V_sign[:, :num_initial_nodes],
     )
 
     # Operand selector loss (L2)
@@ -254,9 +256,7 @@ def compute_dag_loss(
             )
             raise
 
-    # Total loss with balanced weighting to prevent exec loss domination
-    # Scale down exec loss to be comparable to other components
-    exec_loss_weight = 0.01  # Scale down exec loss contribution
+    exec_loss_weight = 0.01
     total_loss = (
         V_mag_loss + V_sign_loss + O_loss + G_loss + (exec_loss * exec_loss_weight)
     )
@@ -267,7 +267,7 @@ def compute_dag_loss(
         "V_sign_loss": V_sign_loss,
         "O_loss": O_loss,
         "G_loss": G_loss,
-        "exec_loss": exec_loss,
+        "exec_loss": exec_loss * exec_loss_weight,
     }
 
 

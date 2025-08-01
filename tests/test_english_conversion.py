@@ -264,7 +264,7 @@ class TestGeneratedExpressions(TestExpressionEquivalence):
 
         # Generate several expressions and test them
         for seed in range(10):
-            expressions, substrings, valid_mask = generate_expression(
+            expressions, substrings, _ = generate_expression(
                 depth=4,
                 seed=seed + 1000,  # Use different seeds than other tests
                 max_digits=4,
