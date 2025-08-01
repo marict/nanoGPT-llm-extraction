@@ -12,7 +12,6 @@ This test:
 
 import pytest
 import sympy
-import torch
 import tqdm
 from tiktoken import get_encoding
 
