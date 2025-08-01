@@ -18,7 +18,7 @@ from sympy import postorder_traversal
 from sympy.core.numbers import Float as sympy_float
 
 # Stability constants from dag_model.py
-LOG_LIM = 23.026  # Bound on ln-magnitudes (≈ 10.0 * ln(10))
+LOG_LIM = 50.0  # Bound on ln-magnitudes (increased to handle larger expressions)
 MIN_CLAMP = 1e-6
 
 
@@ -439,33 +439,31 @@ class NewDAGExecutor(nn.Module):
             )
 
             # Convert to double precision
-            working_V_mag_hp = working_V_mag.to(target_dtype)
-            working_V_sign_hp = working_V_sign.to(target_dtype)
-            O_step_hp = O_step.to(target_dtype)
-            G_step_hp = G_step.to(target_dtype)
+            working_V_mag = working_V_mag.to(target_dtype)
+            working_V_sign = working_V_sign.to(target_dtype)
+            O_step = O_step.to(target_dtype)
+            G_step = G_step.to(target_dtype)
 
-            signed_values = working_V_sign_hp * working_V_mag_hp
-            log_mag_hp = torch.log(torch.clamp(working_V_mag_hp, min=1e-12))
-            mixed = log_mag_hp * (1 - G_step_hp) + signed_values * G_step_hp
-            R_mag = torch.sum(O_step_hp * mixed, dim=-1, keepdim=True)
-
+            signed_values = working_V_sign * working_V_mag
+            log_mag = torch.log(torch.clamp(working_V_mag, min=1e-12))
+            mixed = log_mag * (1 - G_step) + signed_values * G_step
+            R_mag = torch.sum(O_step * mixed, dim=-1, keepdim=True)
             linear_sign = torch.tanh(R_mag / 0.0001)  # Direct tanh for better precision
 
             # Log domain sign: product of selected signs
-            sign_weights = working_V_sign_hp * (
-                torch.abs(O_step_hp) + 1
-            )  # +1 for unselected
+            # Multiply by 2 and add 1 so pos: 3, neg: -1, others: 1 (not contributing to the product, but don't zero it out)
+            sign_weights = (working_V_sign * torch.abs(O_step)) * 2 + 1
             sign_product = torch.prod(sign_weights, dim=-1, keepdim=True)
             log_sign = torch.tanh(sign_product / 0.0001)
 
-            V_sign_new = G_step_hp * linear_sign + (1 - G_step_hp) * log_sign
+            V_sign_new = G_step * linear_sign + (1 - G_step) * log_sign
 
             # For magnitude: linear domain uses abs(R_mag), log domain uses exp(R_mag)
             linear_mag = torch.abs(R_mag)
             log_mag_result = torch.exp(
-                torch.clamp(R_mag, max=23.026)
+                torch.clamp(R_mag, max=LOG_LIM)
             )  # Use LOG_LIM for safety
-            V_mag_new = G_step_hp * linear_mag + (1 - G_step_hp) * log_mag_result
+            V_mag_new = G_step * linear_mag + (1 - G_step) * log_mag_result
 
             # Convert back to original precision
             V_sign_new = V_sign_new.to(working_V_mag.dtype)
@@ -519,56 +517,6 @@ class NewDAGExecutor(nn.Module):
         return self.execute_with_plan(V_mag, V_sign, O, G, debug=debug)
 
 
-def purge_negative_ones(expr: sympy.Basic) -> sympy.Basic:
-    """
-    Simplify multiplication by -1 in a sympy expression.
-    """
-
-    def transform_neg_one_mul(expr_part):
-        """Transform multiplications involving -1."""
-        if isinstance(expr_part, sympy.Mul):
-            # For DAG operations, we expect exactly 2 arguments
-            if len(expr_part.args) == 2:
-                first_arg, second_arg = expr_part.args
-
-                # Check if either argument is -1
-                first_is_neg_one = _is_negative_one(first_arg)
-                second_is_neg_one = _is_negative_one(second_arg)
-
-                if first_is_neg_one:
-                    # -1 * x = -x, recursively transform the result
-                    return transform_neg_one_mul(-second_arg)
-                elif second_is_neg_one:
-                    # x * -1 = -x, recursively transform the result
-                    return transform_neg_one_mul(-first_arg)
-
-        # For non-multiplication expressions, recurse into children
-        if hasattr(expr_part, "args") and expr_part.args:
-            new_args = [transform_neg_one_mul(arg) for arg in expr_part.args]
-            # Use evaluate=False to preserve structure, but allow manual simplification
-            return expr_part.func(*new_args, evaluate=False)
-
-        return expr_part
-
-    def _is_negative_one(arg):
-        """Check if an argument represents -1."""
-        # Check for any numeric -1 (catches Float(-1.0), NegativeOne, Integer(-1), etc.)
-        if arg.is_number and arg.is_real:
-            val = float(arg.evalf())
-            return abs(val - (-1.0)) < 1e-10
-        return False
-
-    # Apply transformation repeatedly until no more changes occur
-    result = expr
-    for _ in range(10):  # Prevent infinite loops
-        new_result = transform_neg_one_mul(result)
-        if str(new_result) == str(result):  # Use string comparison to avoid evaluation
-            break
-        result = new_result
-
-    return result
-
-
 def _is_negative_one_simple(arg):
     """Simple check if an argument represents -1."""
     if arg.is_number and arg.is_real:
@@ -578,21 +526,13 @@ def _is_negative_one_simple(arg):
 
 
 def is_negation(node: sympy.Basic) -> bool:
-    """Check if a node represents -1 * value (negation of a numeric value)."""
+    """Check if a node represents -1 * value (SymPy artifact that should have been normalized)."""
     if not isinstance(node, sympy.Mul) or len(node.args) != 2:
         return False
 
     first_arg, second_arg = node.args
-
-    # Check for -1 * value or value * -1 patterns where value is numeric
-    return (
-        _is_negative_one_simple(first_arg)
-        and (
-            isinstance(second_arg, sympy_float) or isinstance(second_arg, sympy.Integer)
-        )
-    ) or (
-        _is_negative_one_simple(second_arg)
-        and (isinstance(first_arg, sympy_float) or isinstance(first_arg, sympy.Integer))
+    return (first_arg == -1) and (
+        isinstance(second_arg, sympy_float) or isinstance(second_arg, sympy.Integer)
     )
 
 
@@ -711,7 +651,7 @@ def expression_to_tensors(
                     f"Other powers are not supported in DAG representation."
                 )
 
-            # Handle leaf nodes (numbers) - including standalone -1
+            # Handle leaf nodes (numbers)
             if isinstance(node, sympy_float) or isinstance(node, sympy.Integer):
                 values.append(node)
                 # Populate V_mag and V_sign for numbers

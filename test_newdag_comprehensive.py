@@ -3,8 +3,8 @@
 Comprehensive test for newdag.py that validates DAG execution against SymPy evaluation.
 
 This test:
-1. Generates expressions using streaming.py with depth=6, max_digits=6, max_decimal_places=6
-2. Combines and flattens results until we have about 1000 expressions
+1. Generates expressions using generate_expression with depth=15, max_digits=6, max_decimal_places=6
+2. Combines and flattens results until we have about 2000 expressions
 3. Removes invalid expressions
 4. For each expression, compares:
    - DAG execution result (expression_to_tensors -> execute_with_plan)
@@ -57,7 +57,7 @@ def test_newdag_comprehensive():
     ):
         expressions, _, _ = generate_expression(
             depth=depth,
-            seed=i,
+            seed=i + 54325432543,
             max_digits=max_digits,
             tokenizer=tokenizer,
             max_decimal_places=max_decimal_places,
@@ -82,6 +82,7 @@ def test_newdag_comprehensive():
     passed = 0
     failed = 0
     tolerance = 1e-3
+
     for i, expr in tqdm.tqdm(
         enumerate(all_expressions),
         total=len(all_expressions),
