@@ -18,7 +18,7 @@ import pytest
 
 sys.path.append(str(Path(__file__).parent.parent.absolute()))
 
-from data.dagset.streaming import string_to_expression
+from data.dagset.generate_expression import string_to_expression
 from expression_to_english import english_to_expression, expression_to_english
 
 
@@ -317,7 +317,7 @@ class TestRoundTripStability:
 
                 # Evaluate and track numerical stability
                 try:
-                    from data.dagset.streaming import string_to_expression
+                    from data.dagset.generate_expression import string_to_expression
 
                     expr_obj = string_to_expression(converted)
                     value = float(expr_obj)

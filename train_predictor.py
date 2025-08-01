@@ -383,7 +383,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         pred_G,
                         target_tensors,
                         valid_mask,
-                        cfg,
                         dag_executor=dag_executor,
                     )
                     loss = losses["total_loss"] / cfg.gradient_accumulation_steps

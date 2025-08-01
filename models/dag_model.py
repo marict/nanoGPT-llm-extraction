@@ -61,15 +61,21 @@ class DAGExecutor(nn.Module):
         """
         _, _, total_nodes = V_mag.shape
 
-        # Work with a copy to avoid modifying the input
-        working_V_mag = V_mag.clone()
-        working_V_sign = V_sign.clone()
+        # Store original dtype for final result
+        original_dtype = V_mag.dtype
+
+        # Cast to float64 for precise computation (except on MPS)
+        compute_dtype = torch.float64 if V_mag.device.type != "mps" else torch.float32
+
+        # Work with a copy to avoid modifying the input and cast to high precision
+        working_V_mag = V_mag.clone().to(compute_dtype)
+        working_V_sign = V_sign.clone().to(compute_dtype)
 
         # Execute each intermediate computation step
         for step in range(self.intermediate_slots):
             # Get operand selector and domain gate for this step
-            O_step = O[:, :, step, :]  # (B, T, total_nodes)
-            G_step = G[:, :, step].unsqueeze(-1)  # (B, T, 1)
+            O_step = O[:, :, step, :].to(compute_dtype)  # (B, T, total_nodes)
+            G_step = G[:, :, step].unsqueeze(-1).to(compute_dtype)  # (B, T, 1)
 
             # Apply triangular mask to prevent using future intermediate results
             valid_positions = (
@@ -124,7 +130,9 @@ class DAGExecutor(nn.Module):
         final_mag = working_V_mag[:, :, final_idx]  # (B, T)
         final_sign = working_V_sign[:, :, final_idx]  # (B, T)
         final_value = final_sign * final_mag  # (B, T)
-        return final_value
+
+        # Cast back to original dtype for gradient compatibility
+        return final_value.to(original_dtype)
 
 
 class DAGPlanPredictor(nn.Module):

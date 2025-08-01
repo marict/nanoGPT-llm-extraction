@@ -12,7 +12,81 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 from predictor_utils import compute_dag_loss, tokenize_texts
-from tensor_utils import digits_to_magnitude
+
+
+def dag_tensors_to_english(V_mag, V_sign, O, G, dag_depth=None):
+    """
+    Convert DAG tensors to readable English representation using argmax.
+
+    Args:
+        V_mag: (total_nodes,) magnitude values
+        V_sign: (total_nodes,) sign values
+        O: (dag_depth, total_nodes) operand selectors
+        G: (dag_depth,) domain gates
+        dag_depth: Number of operation steps (default: use O.shape[0])
+
+    Returns:
+        str: Human-readable representation of the DAG
+    """
+    if dag_depth is None:
+        dag_depth = O.shape[0]
+
+    total_nodes = V_mag.shape[0]
+    initial_slots = total_nodes // 2  # Half for initial values, half for intermediate
+
+    # Format initial values
+    initial_values = []
+    for i in range(initial_slots):
+        mag = V_mag[i].item()
+        sign = V_sign[i].item()
+        value = sign * mag
+        initial_values.append(f"{value:.3f}")
+
+    result = f"Initial Values: [{', '.join(initial_values)}]\n"
+
+    # Format operations
+    operations = []
+    for step in range(dag_depth):
+        # Get operand selection (argmax over operands)
+        operand_probs = O[step]  # (total_nodes,)
+
+        # Find which operands are selected (non-zero after argmax)
+        # For simplicity, take top 2 operands as this is typical for binary operations
+        _, top_indices = torch.topk(operand_probs, k=min(2, total_nodes))
+
+        # Domain gate (sigmoid for interpretation)
+        domain = torch.sigmoid(G[step]).item()
+        domain_str = "linear" if domain > 0.5 else "log"
+
+        # Result slot
+        result_slot = initial_slots + step
+        result_mag = V_mag[result_slot].item() if result_slot < total_nodes else 0.0
+        result_sign = V_sign[result_slot].item() if result_slot < total_nodes else 1.0
+        result_value = result_sign * result_mag
+
+        # Format operands
+        operand_strs = []
+        for idx in top_indices:
+            idx_val = idx.item()
+            if idx_val < total_nodes:
+                op_mag = V_mag[idx_val].item()
+                op_sign = V_sign[idx_val].item()
+                op_value = op_sign * op_mag
+                operand_strs.append(f"slot{idx_val}({op_value:.3f})")
+
+        op_str = f"Step {step}: {' ○ '.join(operand_strs)} → slot{result_slot}({result_value:.3f}) [{domain_str}]"
+        operations.append(op_str)
+
+    result += "Operations:\n" + "\n".join(f"  {op}" for op in operations)
+
+    # Final result (last slot)
+    final_slot = total_nodes - 1
+    final_mag = V_mag[final_slot].item()
+    final_sign = V_sign[final_slot].item()
+    final_value = final_sign * final_mag
+    result += f"\nFinal Result: {final_value:.6f}"
+
+    return result
 
 
 def evaluate_dag_model(
@@ -96,7 +170,6 @@ def evaluate_dag_model(
                     pred_G,
                     target_tensors,
                     valid_mask,
-                    cfg,
                     dag_executor=dag_executor,
                 )
 
@@ -151,7 +224,12 @@ def evaluate_dag_model(
                         f'[val] batch {i}: "{sample_text[:50]}...", valid_rate={sample_valid_rate:.1%}'
                     )
 
-                    if False and valid_tokens_count > 0 and len(texts) > 0:
+                    # Display example every 10 batches or first 3 batches
+                    if (
+                        (i % 10 == 0 or i < 3)
+                        and valid_tokens_count > 0
+                        and len(texts) > 0
+                    ):
                         # Reconstruct seed for this sample
                         sample_seed = (
                             seed + i * cfg.batch_size + 10000
@@ -160,7 +238,7 @@ def evaluate_dag_model(
                         print(
                             f"\n=== DETAILED VALIDATION SAMPLE (seed={sample_seed}) ==="
                         )
-                        print(f"Full expression: '{texts[0]}'")
+                        print(f"Expression Text: '{texts[0]}'")
 
                         # Get the last valid token position for this sample (complete expression)
                         sample_mask = valid_mask[0]  # (T,)
@@ -173,93 +251,85 @@ def evaluate_dag_model(
                             # Get target and prediction for the final/complete expression
                             target_dict = target_tensors[0][last_valid_pos]
 
-                            # Target values
-                            target_digits = target_dict[
-                                "target_initial_digits"
-                            ]  # (N, D, base)
-                            target_ops = target_dict[
-                                "target_operation_probs"
-                            ]  # (depth, n_ops)
+                            # Target DAG tensors
+                            target_V_mag = target_dict["target_V_mag"]  # (total_nodes,)
+                            target_V_sign = target_dict[
+                                "target_V_sign"
+                            ]  # (total_nodes,)
+                            target_O = target_dict[
+                                "target_O"
+                            ]  # (dag_depth, total_nodes)
+                            target_G = target_dict["target_G"]  # (dag_depth,)
                             target_final_exec = target_dict["target_final_exec"]
 
-                            # Convert target digits to initial values
-                            target_initial_values = []
-                            for n in range(target_signs.shape[0]):
-                                sign = target_signs[n].item()
-                                digit_probs = target_digits[n]  # (D, base)
-                                magnitude = digits_to_magnitude(
-                                    digit_probs,
-                                    cfg.max_digits,
-                                    cfg.max_decimal_places,
-                                    cfg.base,
-                                )
-                                value = sign * magnitude
-                                target_initial_values.append(value)
-
-                            # Target operations
-                            target_op_names = []
-                            for d in range(target_ops.shape[0]):
-                                op_probs = target_ops[d]  # (n_ops,)
-                                op_idx = torch.argmax(op_probs).item()
-                                op_names = ["add", "multiply", "identity"]  # STATE_OPS
-                                target_op_names.append(op_names[op_idx])
-
-                            # Predicted values (from the forward pass)
-                            pred_signs_logit = pred_sign_logits[
+                            # Predicted DAG tensors (from the forward pass)
+                            pred_V_mag_sample = pred_V_mag[
                                 0, last_valid_pos
-                            ]  # (N,)
-                            pred_digits_logit = pred_digit_logits[
+                            ]  # (total_nodes,)
+                            pred_V_sign_sample = pred_V_sign[
                                 0, last_valid_pos
-                            ]  # (N, D, base)
-                            pred_ops_logit = pred_op_logits[
+                            ]  # (total_nodes,)
+                            pred_O_sample = pred_O[
                                 0, last_valid_pos
-                            ]  # (depth, n_ops)
+                            ]  # (dag_depth, total_nodes)
+                            pred_G_sample = pred_G[0, last_valid_pos]  # (dag_depth,)
 
-                            # Convert predictions
-                            pred_signs = torch.tanh(pred_signs_logit)
-                            pred_digit_probs = torch.softmax(pred_digits_logit, dim=-1)
-                            pred_op_probs = torch.softmax(pred_ops_logit, dim=-1)
-
-                            # Convert predicted digits to initial values
-                            pred_initial_values = []
-                            for n in range(pred_signs.shape[0]):
-                                sign = pred_signs[n].item()
-                                digit_probs = pred_digit_probs[n]  # (D, base)
-                                magnitude = digits_to_magnitude(
-                                    digit_probs,
-                                    cfg.max_digits,
-                                    cfg.max_decimal_places,
-                                    cfg.base,
-                                )
-                                value = sign * magnitude
-                                pred_initial_values.append(value)
-
-                            # Predicted operations
-                            pred_op_names = []
-                            for d in range(pred_op_probs.shape[0]):
-                                op_probs = pred_op_probs[d]  # (n_ops,)
-                                op_idx = torch.argmax(op_probs).item()
-                                op_names = ["add", "multiply", "identity"]  # STATE_OPS
-                                pred_op_names.append(op_names[op_idx])
-
-                            # Predicted final execution (from statistics)
-                            pred_final_exec = pred_statistics["final"][
-                                0, last_valid_pos, 0
-                            ].item()  # First statistic is final exec
-
-                            print(
-                                f"Target initial values: {[f'{v:.3f}' for v in target_initial_values]}"
+                            # Convert to English representations
+                            target_english = dag_tensors_to_english(
+                                target_V_mag, target_V_sign, target_O, target_G
                             )
-                            print(
-                                f"Pred   initial values: {[f'{v:.3f}' for v in pred_initial_values]}"
+                            pred_english = dag_tensors_to_english(
+                                pred_V_mag_sample,
+                                pred_V_sign_sample,
+                                pred_O_sample,
+                                pred_G_sample,
                             )
-                            print(f"Target operations:     {target_op_names}")
-                            print(f"Pred   operations:     {pred_op_names}")
-                            print(f"Target final exec:     {target_final_exec:.6f}")
-                            print(f"Pred   final exec:     {pred_final_exec:.6f}")
-                            print(
-                                f"Exec error:            {abs(target_final_exec - pred_final_exec):.6f}"
-                            )
+
+                            # Execute predicted DAG if executor is available
+                            pred_final_exec = 0.0
+                            if dag_executor is not None:
+                                try:
+                                    # Add batch and time dimensions for executor
+                                    pred_V_mag_exec = pred_V_mag_sample.unsqueeze(
+                                        0
+                                    ).unsqueeze(
+                                        0
+                                    )  # (1, 1, total_nodes)
+                                    pred_V_sign_exec = pred_V_sign_sample.unsqueeze(
+                                        0
+                                    ).unsqueeze(
+                                        0
+                                    )  # (1, 1, total_nodes)
+                                    pred_O_exec = pred_O_sample.unsqueeze(0).unsqueeze(
+                                        0
+                                    )  # (1, 1, dag_depth, total_nodes)
+                                    pred_G_exec = pred_G_sample.unsqueeze(0).unsqueeze(
+                                        0
+                                    )  # (1, 1, dag_depth)
+
+                                    pred_final_exec = dag_executor(
+                                        pred_V_mag_exec,
+                                        pred_V_sign_exec,
+                                        pred_O_exec,
+                                        pred_G_exec,
+                                    )[0, 0].item()
+                                except Exception as e:
+                                    pred_final_exec = float("nan")
+                                    print(f"  Warning: DAG execution failed: {e}")
+
+                            print("\n--- TARGET DAG ---")
+                            print(target_english)
+                            print(f"Target Final Execution: {target_final_exec:.6f}")
+
+                            print("\n--- PREDICTED DAG ---")
+                            print(pred_english)
+                            print(f"Predicted Final Execution: {pred_final_exec:.6f}")
+
+                            if not torch.isnan(torch.tensor(pred_final_exec)):
+                                exec_error = abs(target_final_exec - pred_final_exec)
+                                print(f"Execution Error: {exec_error:.6f}")
+                            else:
+                                print("Execution Error: NaN (execution failed)")
 
                         print("=" * 60 + "\n")
 

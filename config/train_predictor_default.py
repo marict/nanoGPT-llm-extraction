@@ -47,8 +47,6 @@ dropout = 0.0
 bias = False  # Simpler for speed
 dag_depth = 2  # Match max_dag_depth for consistency
 
-# Uncertainty weighting configuration
-train_uncertainty_params = False
 
 # Optimization - minimal
 learning_rate = 1e-3

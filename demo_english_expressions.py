@@ -8,7 +8,7 @@ English descriptions of mathematical expressions.
 import sys
 from pathlib import Path
 
-from data.dagset.streaming import string_to_expression
+from data.dagset.generate_expression import string_to_expression
 
 sys.path.append(str(Path(".").absolute()))
 

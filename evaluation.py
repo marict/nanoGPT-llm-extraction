@@ -13,7 +13,6 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 import tiktoken
 import torch
-from dag_logger import DAGLogger
 
 import run_math_eval
 from models.dag_model import GPT, GPTConfig
@@ -237,9 +236,8 @@ def comprehensive_evaluate(
         and getattr(model.config, "dag_depth", 0) > 0
     ):
         try:
-            dag_logger = DAGLogger()
-            dag_logger.setup_gradient_tracking(model)
-            extra_vals = dag_logger.get_extra_vals(model)
+            # dag_logger removed - no longer used in new DAG system
+            extra_vals = {}
             results.update(extra_vals)
         except Exception as e:
             print(f"Warning: DAG logging failed: {e}")

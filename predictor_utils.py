@@ -12,6 +12,111 @@ import torch.nn.functional as F
 from tiktoken import get_encoding
 
 
+def _compute_value_loss(
+    pred_values: torch.Tensor, target_values: torch.Tensor
+) -> torch.Tensor:
+    """
+    Compute robust loss for magnitude values that can span wide ranges.
+
+    Uses a combination of relative error and absolute error to handle both small and large values.
+    This prevents exploding gradients from very large magnitude differences.
+    """
+    # Avoid division by zero
+    epsilon = 1e-8
+
+    # Compute relative error for non-zero targets
+    target_abs = torch.abs(target_values) + epsilon
+    relative_error = torch.abs(pred_values - target_values) / target_abs
+
+    # Compute absolute error (for very small values where relative error is unreliable)
+    absolute_error = torch.abs(pred_values - target_values)
+
+    # Use Huber-like loss: relative error for large values, absolute for small
+    # Choose between relative and absolute based on target magnitude
+    use_relative = target_abs > 1.0
+    loss_per_element = torch.where(use_relative, relative_error, absolute_error)
+
+    # Apply smooth L1 (Huber) loss to make it more robust to outliers
+    huber_delta = 1.0
+    loss_per_element = torch.where(
+        loss_per_element < huber_delta,
+        0.5 * loss_per_element.pow(2),
+        huber_delta * (loss_per_element - 0.5 * huber_delta),
+    )
+
+    return loss_per_element.mean()
+
+
+def _compute_exec_loss(
+    pred_exec: torch.Tensor, target_exec: torch.Tensor
+) -> torch.Tensor:
+    """
+    Compute robust execution loss that handles the wide range of possible execution results.
+
+    Uses log-space loss for very large/small values and regular loss for moderate values.
+    This prevents training instability from extreme execution results.
+    """
+    # Handle edge cases
+    if torch.any(torch.isnan(pred_exec)) or torch.any(torch.isinf(pred_exec)):
+        # Heavily penalize NaN/Inf predictions
+        return torch.tensor(100.0, device=pred_exec.device, requires_grad=True)
+
+    # Separate small, moderate, and large values for different loss treatments
+    target_abs = torch.abs(target_exec)
+
+    # Define thresholds
+    small_threshold = 1e-6
+    large_threshold = 1e6
+
+    # For very small values (near zero), use absolute difference
+    small_mask = target_abs < small_threshold
+
+    # For very large values, use log-space loss to prevent explosion
+    large_mask = target_abs > large_threshold
+
+    # For moderate values, use relative error
+    moderate_mask = ~(small_mask | large_mask)
+
+    total_loss = torch.tensor(0.0, device=pred_exec.device)
+
+    if small_mask.any():
+        small_loss = F.mse_loss(pred_exec[small_mask], target_exec[small_mask])
+        total_loss = total_loss + small_loss
+
+    if moderate_mask.any():
+        # Relative error for moderate values
+        epsilon = 1e-8
+        target_moderate = target_exec[moderate_mask]
+        pred_moderate = pred_exec[moderate_mask]
+        relative_error = torch.abs(pred_moderate - target_moderate) / (
+            torch.abs(target_moderate) + epsilon
+        )
+        moderate_loss = relative_error.mean()
+        total_loss = total_loss + moderate_loss
+
+    if large_mask.any():
+        # Log-space loss for large values (with sign preservation)
+        target_large = target_exec[large_mask]
+        pred_large = pred_exec[large_mask]
+
+        # Preserve signs
+        target_sign = torch.sign(target_large)
+        pred_sign = torch.sign(pred_large)
+
+        # Work in log space for magnitudes
+        target_log = torch.log(torch.abs(target_large) + 1e-12)
+        pred_log = torch.log(torch.abs(pred_large) + 1e-12)
+
+        # Combined loss: log magnitude difference + sign difference
+        magnitude_loss = F.mse_loss(pred_log, target_log)
+        sign_loss = F.mse_loss(pred_sign, target_sign)
+
+        large_loss = magnitude_loss + sign_loss
+        total_loss = total_loss + large_loss
+
+    return total_loss
+
+
 def compute_dag_loss(
     pred_V_mag: torch.Tensor,  # (B, T, total_nodes) predicted magnitudes
     pred_V_sign: torch.Tensor,  # (B, T, total_nodes) predicted signs
@@ -98,8 +203,8 @@ def compute_dag_loss(
 
     # Compute losses
 
-    # Magnitude loss (L2)
-    V_mag_loss = F.mse_loss(pred_V_mag_valid, target_V_mag)
+    # Magnitude loss - use robust loss for wide range of values
+    V_mag_loss = _compute_value_loss(pred_V_mag_valid, target_V_mag)
 
     # Sign loss (L2 on tanh-activated predictions)
     V_sign_loss = F.mse_loss(torch.tanh(pred_V_sign_valid), target_V_sign)
@@ -133,8 +238,8 @@ def compute_dag_loss(
             )  # (num_valid, 1)
             pred_final_exec = pred_final_exec.squeeze(1)  # (num_valid,)
 
-            # Compute execution loss
-            exec_loss = F.mse_loss(pred_final_exec, target_final_exec)
+            # Compute robust execution loss
+            exec_loss = _compute_exec_loss(pred_final_exec, target_final_exec)
         except Exception:
             print(
                 f"Execution failed for batch {batch_indices[0].item()}, token {token_indices[0].item()}"

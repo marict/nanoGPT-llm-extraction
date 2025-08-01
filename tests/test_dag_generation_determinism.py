@@ -31,13 +31,20 @@ def test_dag_generation_determinism(depth: int, seed: int):
     assert torch.equal(valid_mask1, valid_mask2)
 
     # Check that target tensors are identical (for valid positions)
+    # target_tensors is now a nested list: [batch][time][dict]
     assert len(target_tensors1) == len(target_tensors2)
-    for i, (target1, target2) in enumerate(zip(target_tensors1, target_tensors2)):
-        for key in target1.keys():
-            assert key in target2, f"Missing key {key} in target {i}"
-            if isinstance(target1[key], torch.Tensor):
-                assert torch.equal(
-                    target1[key], target2[key]
-                ), f"Mismatch in {key} for target {i}"
-            else:
-                assert target1[key] == target2[key], f"Mismatch in {key} for target {i}"
+    for batch_idx, (batch1, batch2) in enumerate(zip(target_tensors1, target_tensors2)):
+        assert len(batch1) == len(batch2), f"Batch {batch_idx} length mismatch"
+        for time_idx, (target1, target2) in enumerate(zip(batch1, batch2)):
+            for key in target1.keys():
+                assert (
+                    key in target2
+                ), f"Missing key {key} in batch {batch_idx}, time {time_idx}"
+                if isinstance(target1[key], torch.Tensor):
+                    assert torch.equal(
+                        target1[key], target2[key]
+                    ), f"Mismatch in {key} for batch {batch_idx}, time {time_idx}"
+                else:
+                    assert (
+                        target1[key] == target2[key]
+                    ), f"Mismatch in {key} for batch {batch_idx}, time {time_idx}"

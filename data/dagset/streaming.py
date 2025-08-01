@@ -202,7 +202,7 @@ def expression_to_tensors(
     # Step 1: Normalize the expression
     normalized_expr = normalize_expression(expr)
 
-    # Initialize tensors with dag_depth * 2 architecture (matching newdag.py)
+    # Initialize tensors with dag_depth * 2 architecture (50/50 split)
     V_mag = torch.zeros(1, 1, dag_depth * 2)
     V_sign = torch.ones(1, 1, dag_depth * 2)  # Initialize to all 1s
     O = torch.zeros(1, 1, dag_depth, dag_depth * 2)
@@ -339,7 +339,7 @@ def expression_to_tensors(
                 f"Unexpected node type: {type(node)}"
             )  # Defensive programming
 
-    # Fill remaining steps with identity operations (matching newdag.py)
+            # Fill remaining steps with identity operations
     if step_index > 0:
         # Had operations - use the last operation result slot
         # The executor stores operation results at dag_depth + step_number
@@ -412,11 +412,6 @@ class DAGValExample(DAGExample):
         G_shape = self.structure_dict["target_G"].shape
         final_value_exec = self.structure_dict["target_final_exec"]
         return f"DAGValExample(seed={self.seed}, text={self.text}, depth={self.depth}, V_mag={V_mag_shape}, V_sign={V_sign_shape}, O={O_shape}, G={G_shape}, full_operations_named={self.full_operations_named}, final_value_sympy={self.final_value_sympy}, final_value_exec={final_value_exec}, full_expr={self.full_expr})"
-
-
-# ============================================================================
-# EXTRACTION SYSTEM: Convert GENERATION_OPS to STATE_OPS
-# ============================================================================
 
 
 def expression_to_string(expr: sympy.Basic) -> str:

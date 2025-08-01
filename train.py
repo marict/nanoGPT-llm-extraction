@@ -20,7 +20,6 @@ from typing import Dict, List, Tuple
 import numpy as np
 import tiktoken
 import torch
-from dag_logger import DAGLogger
 from torch.distributed import destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -507,7 +506,6 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
         print(f"[{time.time() - setup_start:.2f}s] Entering training loop")
 
         # Initialize DAG logger for models that support it
-        dag_logger = DAGLogger()
 
         # Track consecutive errors to prevent infinite retry loops
         consecutive_errors = 0
@@ -594,11 +592,6 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
 
                     # Compute logging statistics and collect non-gradient extra values
                     eval_extra = {}
-                    dag_logger.compute_log_statistics(raw_model)
-                    eval_extra.update(dag_logger.get_extra_vals(raw_model))
-                    dag_logger.format_console_logging(
-                        raw_model, decode_fn=decode, input_ids=prompt_ids
-                    )
 
                     # Run math evaluation if enabled
                     math_scores = {}
@@ -639,11 +632,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                             base_log_dict[f"math_eval/{task}"] = score
 
                         # Get comprehensive logging dict
-                        log_dict = (
-                            dag_logger.get_wandb_logging_dict(raw_model, base_log_dict)
-                            if dag_logger
-                            else base_log_dict
-                        )
+                        log_dict = base_log_dict
 
                         # Note: Gradient logging happens during training steps, not evaluation
                         # Evaluation logs non-gradient metrics only
@@ -720,21 +709,14 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                             # Log one last time
                             # Prepare logging dict
                             base_dict = {"iter": iter_num, **extra_vals}
-                            log_dict = (
-                                dag_logger.get_wandb_logging_dict(raw_model, base_dict)
-                                if dag_logger
-                                else base_dict
-                            )
+                            log_dict = base_dict
+
                             wandb.log(log_dict, step=iter_num, commit=True)
 
                             raise RuntimeError(
                                 f"Non-finite loss detected (value={loss.item()}) at iteration {iter_num}. Aborting training."
                             )
                         loss = loss / cfg.gradient_accumulation_steps
-
-                    # Set up gradient tracking AFTER forward pass but BEFORE backward pass
-                    if micro_step == 0:  # Only set up once
-                        dag_logger.setup_gradient_tracking(raw_model)
 
                     X, Y = get_batch("train")
                     scaler.scale(loss).backward()
@@ -757,10 +739,9 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                                 break
 
                 # Compute logging statistics (populates non-gradient metrics)
-                dag_logger.compute_log_statistics(raw_model)
 
                 # Get extra values after backward pass (includes gradients captured by hooks)
-                extra_vals = dag_logger.get_extra_vals(raw_model)
+                extra_vals = {}
 
                 if cfg.grad_clip:
                     scaler.unscale_(optimizer)
@@ -801,11 +782,8 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                     try:
                         # Prepare logging dict
                         base_dict = {"iter": iter_num, **extra_vals}
-                        log_dict = (
-                            dag_logger.get_wandb_logging_dict(raw_model, base_dict)
-                            if dag_logger
-                            else base_dict
-                        )
+                        log_dict = base_dict
+
                         wandb.log(log_dict, step=iter_num, commit=True)
                     except Exception as e:
                         print(
@@ -821,10 +799,6 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                 # Memory cleanup every iteration to prevent leaks
                 if hasattr(raw_model, "clear_model_cache"):
                     raw_model.clear_model_cache()
-
-                # Clean up DAG logger memory periodically (every 50 iterations)
-                if iter_num % 50 == 0:
-                    dag_logger.cleanup_for_next_iteration()
 
                 # Explicit garbage collection every 200 iterations
                 if iter_num % 200 == 0:
