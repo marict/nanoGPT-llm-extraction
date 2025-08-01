@@ -694,6 +694,23 @@ def expression_to_tensors(
     try:
         # PHASE 1: Collect all initial values (numbers) in first postorder traversal
         for node in postorder_traversal(normalized_expr):
+
+            # Error if we see old-style negations after normalization
+            if is_negation(node):
+                raise ValueError(
+                    f"Unexpected old-style negation after normalization: {node}. "
+                    f"All Mul(-1, x) patterns should have been converted to Neg(x) during normalization. "
+                    f"Normalization failed to catch this pattern."
+                )
+
+            # Error if we see any Pow nodes after normalization
+            if isinstance(node, sympy.Pow):
+                raise ValueError(
+                    f"Unexpected Pow node after normalization: {node}. "
+                    f"All Pow(x, -1) should have been converted to Div(1, x) during normalization. "
+                    f"Other powers are not supported in DAG representation."
+                )
+
             # Handle leaf nodes (numbers) - including standalone -1
             if isinstance(node, sympy_float) or isinstance(node, sympy.Integer):
                 values.append(node)
@@ -725,8 +742,17 @@ def expression_to_tensors(
 
         # PHASE 2: Process operations in second postorder traversal
         for node in postorder_traversal(normalized_expr):
+
+            is_neg = isinstance(node, Neg)
+            is_div = isinstance(node, Div)
+            is_sub = isinstance(node, Sub)
+            is_mul = isinstance(node, sympy.Mul)
+            is_add = isinstance(node, sympy.Add)
+            is_int = isinstance(node, sympy.Integer)
+            is_float = isinstance(node, sympy_float)
+
             # Skip leaf nodes (already processed in Phase 1)
-            if isinstance(node, sympy_float) or isinstance(node, sympy.Integer):
+            if is_float or is_int:
                 continue
 
             # Skip Neg operations for numbers (already processed in Phase 1)
@@ -735,101 +761,30 @@ def expression_to_tensors(
                 if isinstance(arg, (sympy_float, sympy.Integer)):
                     continue  # Already handled in Phase 1
 
-            # Error if we see old-style negations after normalization
-            if is_negation(node):
-                raise ValueError(
-                    f"Unexpected old-style negation after normalization: {node}. "
-                    f"All Mul(-1, x) patterns should have been converted to Neg(x) during normalization. "
-                    f"Normalization failed to catch this pattern."
-                )
-
-            # Error if we see any Pow nodes after normalization
-            if isinstance(node, sympy.Pow):
-                raise ValueError(
-                    f"Unexpected Pow node after normalization: {node}. "
-                    f"All Pow(x, -1) should have been converted to Div(1, x) during normalization. "
-                    f"Other powers are not supported in DAG representation."
-                )
-
-            # Handle our custom operations and standard SymPy operations
-            if isinstance(node, Div):
-                # Custom division operation: Div(a, b, c) = a / b / c
-                # Coefficients: [+1, -1, -1, ...] in log domain
-
+            if is_div or is_mul:
                 G[0, 0, step_index] = 0  # Log domain
+            elif is_add or is_sub or is_neg:
+                G[0, 0, step_index] = 1  # Linear domain
 
+            coefficient = "ERROR"
+            if is_neg:
+                first_coefficient = -1
+                # Coefficient is unused for Neg
+            if is_div or is_sub:
+                first_coefficient = 1
+                coefficient = -1
+            if is_add or is_mul:
+                first_coefficient = 1
+                coefficient = 1
+
+            if is_div or is_sub or is_add or is_mul or is_neg:
                 for i, arg in enumerate(node.args):
                     arg = node_replacements.get(arg, arg)
                     arg_idx = values.index(arg)
-                    coefficient = 1 if i == 0 else -1  # First arg +1, rest -1
-                    O[0, 0, step_index, arg_idx] += coefficient
-
+                    _coefficient = first_coefficient if i == 0 else coefficient
+                    O[0, 0, step_index, arg_idx] += _coefficient
                 values.append(node)
                 step_index += 1
-                continue
-
-            elif isinstance(node, Sub):
-                # Custom subtraction operation: Sub(a, b, c) = a - b - c
-                # Coefficients: [+1, -1, -1, ...] in linear domain
-
-                G[0, 0, step_index] = 1  # Linear domain
-
-                for i, arg in enumerate(node.args):
-                    arg = node_replacements.get(arg, arg)
-                    arg_idx = values.index(arg)
-                    coefficient = 1 if i == 0 else -1  # First arg +1, rest -1
-                    O[0, 0, step_index, arg_idx] += coefficient
-
-                values.append(node)
-                step_index += 1
-                continue
-
-            elif isinstance(node, Neg):
-                # Custom negation operation: Neg(x) = -x
-                # For non-number arguments (complex expressions), handle as operation
-
-                G[0, 0, step_index] = 1  # Linear domain (multiply by -1)
-
-                arg = node_replacements.get(node.args[0], node.args[0])
-                arg_idx = values.index(arg)
-                O[0, 0, step_index, arg_idx] += -1  # Coefficient -1 for negation
-
-                values.append(node)
-                step_index += 1
-                continue
-
-            elif isinstance(node, sympy.Add):
-                # Standard addition: all terms get +1 coefficient
-
-                G[0, 0, step_index] = 1  # Linear domain
-
-                for arg in node.args:
-                    arg = node_replacements.get(arg, arg)
-                    i = values.index(arg)
-                    O[0, 0, step_index, i] += 1
-
-                values.append(node)
-                step_index += 1
-                continue
-
-            elif isinstance(node, sympy.Mul):
-                # Standard multiplication: all terms get +1 coefficient
-                # Skip -1 * value multiplications (already handled as negated values)
-                if is_negation(node):
-                    continue
-
-                G[0, 0, step_index] = 0  # Log domain
-
-                for arg in node.args:
-                    arg = node_replacements.get(arg, arg)
-                    i = values.index(arg)
-                    O[0, 0, step_index, i] += 1
-
-                values.append(node)
-                step_index += 1
-                continue
-
-            # Handle any other node types that we haven't explicitly covered
             else:
                 raise ValueError(f"Unexpected node type: {type(node)}")
 
