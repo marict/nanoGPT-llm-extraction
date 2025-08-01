@@ -217,13 +217,14 @@ def test_exec_loss_in_total_loss(test_dag_config, dag_executor, device):
         dag_executor=dag_executor,
     )
 
-    # Verify that total loss includes all component losses
+    # Verify that total loss includes all component losses with exec loss weighting
+    exec_loss_weight = 0.01  # Must match the weight in predictor_utils.py
     expected_total = (
         losses["V_mag_loss"]
         + losses["V_sign_loss"]
         + losses["O_loss"]
         + losses["G_loss"]
-        + losses["exec_loss"]
+        + (losses["exec_loss"] * exec_loss_weight)
     )
 
     actual_total = losses["total_loss"]
@@ -234,10 +235,11 @@ def test_exec_loss_in_total_loss(test_dag_config, dag_executor, device):
         f"Expected: {expected_total.item():.6f}, Got: {actual_total.item():.6f}"
     )
 
-    # Verify exec loss contributes meaningfully to total loss
-    exec_contribution = losses["exec_loss"] / losses["total_loss"]
-    assert exec_contribution.item() > 0.01, (
-        f"Exec loss should contribute meaningfully to total loss. "
+    # Verify exec loss contributes meaningfully to total loss (accounting for weighting)
+    weighted_exec_loss = losses["exec_loss"] * exec_loss_weight
+    exec_contribution = weighted_exec_loss / losses["total_loss"]
+    assert exec_contribution.item() > 0.001, (  # Lower threshold due to 0.01 weighting
+        f"Weighted exec loss should contribute meaningfully to total loss. "
         f"Contribution: {exec_contribution.item():.4f}"
     )
 

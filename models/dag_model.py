@@ -10,13 +10,11 @@ https://github.com/openai/gpt-2/blob/master/src/model.py
 https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 """
 
-import os
 from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 from rff.layers import PositionalEncoding
-from torch.nn import functional as F
 
 from .base_model import BaseGPTModel
 
@@ -24,12 +22,6 @@ from .base_model import BaseGPTModel
 LOG_LIM = (
     100.0  # Bound on ln-magnitudes (increased to handle extreme large expressions)
 )
-MIN_CLAMP = 1e-6
-
-# Debug utility
-ENABLE_DEBUG_NAN_CHECKS = os.getenv("DAGGPT_DEBUG_NANS", "0") == "1"
-if ENABLE_DEBUG_NAN_CHECKS:
-    print("dag_model: DEBUG_NAN_CHECKS is enabled")
 
 
 class DAGExecutor(nn.Module):
@@ -42,22 +34,18 @@ class DAGExecutor(nn.Module):
         self.initial_slots = dag_depth
         self.intermediate_slots = dag_depth
 
-    def execute_with_plan(self, V_mag, V_sign, O, G):
-        """Execute DAG with given tensors."""
-        return self.forward(V_mag, V_sign, O, G)
-
     def forward(self, V_mag, V_sign, O, G):
         """
-            Execute DAG operations using tensor representation with 50/50 node split.
+                Execute DAG operations using tensor representation with 50/50 node split.
 
         Args:
-                V_mag: (1, 1, total_nodes) - magnitudes of all nodes (initial + intermediate)
-                V_sign: (1, 1, total_nodes) - signs of all nodes
-                O: (1, 1, dag_depth, total_nodes) - operand selection matrix
-                G: (1, 1, dag_depth) - domain selector (0=log, 1=linear)
+                    V_mag: (1, 1, total_nodes) - magnitudes of all nodes (initial + intermediate)
+                    V_sign: (1, 1, total_nodes) - signs of all nodes
+                    O: (1, 1, dag_depth, total_nodes) - operand selection matrix
+                    G: (1, 1, dag_depth) - domain selector (0=log, 1=linear)
 
         Returns:
-                torch.Tensor: final result (scalar)
+                    torch.Tensor: final result (scalar)
         """
         _, _, total_nodes = V_mag.shape
 
@@ -109,9 +97,15 @@ class DAGExecutor(nn.Module):
 
             V_sign_new = G_step * linear_sign + (1 - G_step) * log_sign
 
-            # For magnitude: linear domain uses abs(R_mag), log domain uses exp(R_mag)
+            # For magnitude: use safer clamping to prevent exp overflow
             linear_mag = torch.abs(R_mag)
-            log_mag_result = torch.exp(torch.clamp(R_mag, max=LOG_LIM))
+
+            # For log domain, clamp R_mag before exp to prevent overflow
+            R_mag_clamped = torch.clamp(
+                R_mag, min=-LOG_LIM, max=LOG_LIM
+            )  # Use LOG_LIM for proper range
+            log_mag_result = torch.exp(R_mag_clamped)
+
             V_mag_new = G_step * linear_mag + (1 - G_step) * log_mag_result
 
             # Write result to the predetermined intermediate slot
@@ -173,7 +167,7 @@ class DAGPlanPredictor(nn.Module):
         """
             Predict DAG tensors from causal hidden states (T separate DAGs).
 
-            Args:
+        Args:
                 hidden_state: (B, T, n_embd) - causal hidden states from transformer
 
         Returns:
@@ -259,17 +253,15 @@ class GPT(BaseGPTModel):
             self.dag_predictor = None
             self.dag_executor = None
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx):
         """
         Forward pass with DAG computation.
 
         Args:
             idx: (B, T) input token indices
-            targets: (B, T) target values for loss computation (optional)
 
         Returns:
-            If targets is None: (B, T) DAG predictions
-            If targets is provided: (loss, (B, T) DAG predictions)
+            (B, T) DAG execution results
         """
         # Get causal hidden states from transformer backbone
         hidden_states = self.forward_hidden(idx)  # (B, T, n_embd)
@@ -279,7 +271,7 @@ class GPT(BaseGPTModel):
             V_mag, V_sign, O, G = self.dag_predictor(hidden_states)  # (B, T, ...)
 
             # Execute DAG for each token position
-            B, T = hidden_states.shape[:2]
+            _, T = hidden_states.shape[:2]
             dag_outputs = []
 
             for t in range(T):
@@ -289,20 +281,11 @@ class GPT(BaseGPTModel):
                 O_t = O[:, t : t + 1, :, :]  # (B, 1, dag_depth, total_nodes)
                 G_t = G[:, t : t + 1, :]  # (B, 1, dag_depth)
 
-                result_t = self.dag_executor.execute_with_plan(
-                    V_mag_t, V_sign_t, O_t, G_t
-                )  # (B, 1)
+                result_t = self.dag_executor(V_mag_t, V_sign_t, O_t, G_t)  # (B, 1)
                 dag_outputs.append(result_t)
 
             # Concatenate results
-            predictions = torch.cat(dag_outputs, dim=1)  # (B, T)
-
-            if targets is not None:
-                # Compute loss
-                loss = F.mse_loss(predictions, targets)
-                return loss, predictions
-            else:
-                return predictions
+            return torch.cat(dag_outputs, dim=1)  # (B, T)
         else:
             # No DAG - this shouldn't happen in practice
             raise ValueError("DAG depth is 0, cannot perform DAG computation")

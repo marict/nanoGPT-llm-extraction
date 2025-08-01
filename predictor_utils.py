@@ -203,11 +203,19 @@ def compute_dag_loss(
 
     # Compute losses
 
-    # Magnitude loss - use robust loss for wide range of values
-    V_mag_loss = _compute_value_loss(pred_V_mag_valid, target_V_mag)
+    # Determine dag_depth from tensor shapes (total_nodes = dag_depth * 2)
+    total_nodes = pred_V_mag_valid.shape[-1]
+    dag_depth = total_nodes // 2  # Initial nodes only
 
-    # Sign loss (L2 on tanh-activated predictions)
-    V_sign_loss = F.mse_loss(torch.tanh(pred_V_sign_valid), target_V_sign)
+    # Magnitude loss - only on initial nodes (use robust loss for wide range of values)
+    V_mag_loss = _compute_value_loss(
+        pred_V_mag_valid[:, :dag_depth], target_V_mag[:, :dag_depth]
+    )
+
+    # Sign loss - only on initial nodes (L2 on tanh-activated predictions)
+    V_sign_loss = F.mse_loss(
+        torch.tanh(pred_V_sign_valid[:, :dag_depth]), target_V_sign[:, :dag_depth]
+    )
 
     # Operand selector loss (L2)
     O_loss = F.mse_loss(pred_O_valid, target_O)
@@ -246,8 +254,12 @@ def compute_dag_loss(
             )
             raise
 
-    # Total loss (simple sum for now)
-    total_loss = V_mag_loss + V_sign_loss + O_loss + G_loss + exec_loss
+    # Total loss with balanced weighting to prevent exec loss domination
+    # Scale down exec loss to be comparable to other components
+    exec_loss_weight = 0.01  # Scale down exec loss contribution
+    total_loss = (
+        V_mag_loss + V_sign_loss + O_loss + G_loss + (exec_loss * exec_loss_weight)
+    )
 
     return {
         "total_loss": total_loss,
@@ -261,7 +273,6 @@ def compute_dag_loss(
 
 __all__ = [
     "tokenize_texts",
-    "compute_dag_structure_loss",
     "compute_dag_loss",
 ]
 
@@ -288,29 +299,3 @@ def tokenize_texts(texts: List[str], sequence_length: int, device: str) -> torch
             ids += [0] * (sequence_length - len(ids))
         tokens[i] = torch.tensor(ids, dtype=torch.long)
     return tokens
-
-
-# --------------------------------------------------------------------------- #
-# Loss computation helpers
-# --------------------------------------------------------------------------- #
-
-
-def _compute_sign_loss(
-    pred_sign_logits: torch.Tensor,
-    target_sgn: torch.Tensor,
-) -> torch.Tensor:
-    """Compute binary cross-entropy loss for sign prediction using logits.
-
-    Args:
-        pred_sign_logits: Raw sign logits (B,T,N)
-        target_sgn: Target signs (B,T,N) in {-1,1}
-    """
-    # Convert target signs {-1,1} to binary targets {0,1}
-    binary_targets = ((target_sgn > 0).float()).view(-1)
-    pred_sign_logits_flat = pred_sign_logits.view(-1).to(torch.float32)
-
-    # Use binary cross entropy directly
-    sign_loss = F.binary_cross_entropy_with_logits(
-        pred_sign_logits_flat, binary_targets, reduction="mean"
-    )
-    return sign_loss
