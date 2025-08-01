@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 import torch
 
 from .base_model import BaseGPTModel
-from .dag_model import DAGPlanPredictor
+from .dag_model import DAGExecutor, DAGPlanPredictor
 
 
 @dataclass
@@ -50,8 +50,11 @@ class PredictorOnlyModel(BaseGPTModel):
         # Call base class constructor which handles transformer creation and weight init
         super().__init__(config)
 
-        # DAG predictor
+        # DAG predictor and executor
         self.dag_predictor = DAGPlanPredictor(config)
+        self.dag_executor = (
+            DAGExecutor(config.dag_depth) if config.dag_depth > 0 else None
+        )
 
     def forward(self, input_ids: torch.Tensor):
         """
