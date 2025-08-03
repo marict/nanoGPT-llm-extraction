@@ -249,7 +249,7 @@ def evaluate_dag_model(
 
                 num_batches += 1
 
-                if master_process and (i % 10 == 0 or i < 3):
+                if master_process:
                     sample_text = texts[0] if texts else "N/A"
                     sample_valid_rate = (
                         valid_mask[0].float().mean().item()
@@ -260,12 +260,8 @@ def evaluate_dag_model(
                         f'[val] batch {i}: "{sample_text[:50]}...", valid_rate={sample_valid_rate:.1%}'
                     )
 
-                    # Display example every 10 batches or first 3 batches
-                    if (
-                        (i % 10 == 0 or i < 3)
-                        and valid_tokens_count > 0
-                        and len(texts) > 0
-                    ):
+                    # Display detailed validation for every batch during validation sessions
+                    if valid_tokens_count > 0 and len(texts) > 0:
                         # Reconstruct seed for this sample
                         sample_seed = (
                             seed + i * cfg.batch_size + 10000

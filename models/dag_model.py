@@ -216,7 +216,7 @@ class DAGExecutor(nn.Module):
             V_sign_new = G_step * linear_sign + (1 - G_step) * log_sign
 
             # For magnitude: use safer clamping to prevent exp overflow
-            linear_mag = torch.abs(R_mag)
+            linear_mag = torch.clamp(torch.abs(R_mag), max=1e6)
 
             # For log domain, clamp R_mag before exp to prevent overflow
             R_mag_clamped = torch.clamp(
@@ -225,6 +225,11 @@ class DAGExecutor(nn.Module):
             log_mag_result = torch.exp(R_mag_clamped)
 
             V_mag_new = G_step * linear_mag + (1 - G_step) * log_mag_result
+
+            # Clamp intermediate results to prevent value accumulation across DAG steps
+            # This prevents runaway growth that can lead to NaN/Inf in later steps
+            V_mag_new = torch.clamp(V_mag_new, min=1e-12, max=1e6)
+            V_sign_new = torch.clamp(V_sign_new, min=-1.0, max=1.0)
 
             # Write result to the predetermined intermediate slot
             intermediate_idx = self.num_initial_nodes + step
@@ -242,6 +247,12 @@ class DAGExecutor(nn.Module):
         final_mag = working_V_mag[:, :, final_idx]  # (B, T)
         final_sign = working_V_sign[:, :, final_idx]  # (B, T)
         final_value = final_sign * final_mag  # (B, T)
+
+        # Final safety check: replace any NaN/Inf with zero to prevent training crashes
+        # This provides a fallback for any edge cases that slip through the clamping
+        final_value = torch.where(
+            torch.isfinite(final_value), final_value, torch.zeros_like(final_value)
+        )
 
         # Cast back to original dtype
         return final_value.to(original_dtype)
