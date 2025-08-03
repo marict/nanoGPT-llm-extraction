@@ -22,69 +22,38 @@ sys.path.append(str(Path(__file__).parent.parent))
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 
-# Custom SymPy operations for cleaner parsing
-class Div(sympy.Function):
-    """Custom division operation that can handle arbitrary arguments: Div(a, b, c) = a / b / c"""
+# Custom SymPy operations we use to track the DAG structure
+# Since for these operations we only need to change the
+# selector coefficients and do not need to add a +-1 initial
+# value and extra operation.
+class Neg(sympy.Function):
+    """Custom negation operation: Neg(x) = -x"""
 
     @classmethod
-    def eval(cls, *args):
-        """Don't evaluate - keep as symbolic custom operation"""
-        if len(args) < 2:
-            raise ValueError("Div requires at least 2 arguments")
-        return None  # Return None to prevent evaluation
-
-    def evalf(self, *args, **kwargs):
-        """Evaluate numerically when needed"""
-        result = self.args[0].evalf(*args, **kwargs)
-        for arg in self.args[1:]:
-            result = result / arg.evalf(*args, **kwargs)
-        return result
+    def eval(cls, arg):
+        # Don't evaluate automatically - keep as Neg object
+        return None
 
 
-class Sub(sympy.Function):
-    """Custom subtraction operation that can handle arbitrary arguments: Sub(a, b, c) = a - b - c"""
+class Recip(sympy.Function):
+    """Custom reciprocal operation: Recip(x) = 1 / x"""
 
     @classmethod
-    def eval(cls, *args):
-        """Don't evaluate - keep as symbolic custom operation"""
-        if len(args) < 2:
-            raise ValueError("Sub requires at least 2 arguments")
-        return None  # Return None to prevent evaluation
-
-    def evalf(self, *args, **kwargs):
-        """Evaluate numerically when needed"""
-        result = self.args[0].evalf(*args, **kwargs)
-        for arg in self.args[1:]:
-            result = result - arg.evalf(*args, **kwargs)
-        return result
+    def eval(cls, arg):
+        # Don't evaluate automatically - keep as Recip object
+        return None
 
 
 def isNum(node: sympy.Basic):
     return isinstance(node, sympy.Integer) or isinstance(node, sympy.Float)
 
 
-def isUnnormalizedDivision(node: sympy.Basic):
-    return (
-        isinstance(node, sympy.Mul)
-        and len(node.args) == 2
-        and isinstance(node.args[1], sympy.Pow)
-        and node.args[1].exp == -1
-    )
-
-
-# a + (-1 * b) -> a - b
-def isUnnormalizedSubtraction(node: sympy.Basic):
-    return (
-        isinstance(node, sympy.Add)
-        and len(node.args) == 2
-        and isinstance(node.args[1], sympy.Mul)
-        and node.args[1].args[0] == -1
-    )
-
-
-# -1 * x -> -x
 def isUnnormalizedNegation(node: sympy.Basic):
     return isinstance(node, sympy.Mul) and len(node.args) == 2 and node.args[0] == -1
+
+
+def isUnnormalizedDivision(node: sympy.Basic):
+    return isinstance(node, sympy.Pow) and node.exp == -1
 
 
 def normalize_expression(expr: sympy.Basic) -> sympy.Basic:
@@ -93,33 +62,26 @@ def normalize_expression(expr: sympy.Basic) -> sympy.Basic:
     """
 
     def transform_node(node):
-        # a * b^(-1) -> a / b
-        if isUnnormalizedDivision(node):
-            return Div(
-                transform_node(node.args[0]),
-                transform_node(node.args[1].base),
-                evaluate=False,
-            )
-
-        # a + (-1 * b) -> a - b
-        if isUnnormalizedSubtraction(node):
-            return Sub(
-                transform_node(node.args[0]),
-                transform_node(node.args[1].args[1]),
-                evaluate=False,
-            )
-
-        # -1 * x -> -x
+        # -1 * x -> Neg(x)
         if isUnnormalizedNegation(node):
-            return -transform_node(node.args[1])
+            return Neg(transform_node(node.args[1]))
+
+        # b^-1 -> Recip(b)
+        if isUnnormalizedDivision(node):
+            return Recip(transform_node(node.base))
 
         # Leaf nodes are returned as-is
         if isNum(node) or isinstance(node, sympy.Symbol):
             return node
 
         # Only Mul and Add operations should exist.
-        if not isinstance(node, sympy.Mul) and not isinstance(node, sympy.Add):
-            raise ValueError(f"Unexpected node: {node}")
+        if (
+            not isinstance(node, sympy.Mul)
+            and not isinstance(node, sympy.Add)
+            and not isinstance(node, Neg)
+            and not isinstance(node, Recip)
+        ):
+            raise ValueError(f"Unexpected node: {node}, type: {type(node)}")
 
         # Transform all arguments
         _type = type(node)
@@ -176,68 +138,41 @@ def float_to_digit_onehot(
             f"for {max_digits} digits and {max_decimal_places} decimal places in base {base}"
         )
 
-    if base == 10:
-        # Use string formatting to avoid floating point precision issues for base 10
-        format_str = f"{{:.{max_decimal_places}f}}"
-        value_str = format_str.format(abs_val)
+    # Convert to the target base using mathematical approach (works for all bases)
+    # First convert integer part
+    int_part = int(abs_val)
+    frac_part = abs_val - int_part
 
-        # Split into integer and decimal parts
-        if "." in value_str:
-            int_part_str, frac_part_str = value_str.split(".")
-        else:
-            int_part_str = value_str
-            frac_part_str = ""
-
-        # Pad integer part to max_digits (left pad with zeros)
-        int_part_str = int_part_str.zfill(max_digits)[-max_digits:]
-
-        # Pad fractional part to max_decimal_places (right pad with zeros)
-        frac_part_str = (frac_part_str + "0" * max_decimal_places)[:max_decimal_places]
-
-        # Combine and convert to digit list
-        all_digits_str = int_part_str + frac_part_str
-        all_digits = [int(d) for d in all_digits_str]
+    # Convert integer part to target base
+    if int_part == 0:
+        int_digits = [0]
     else:
-        # For non-base-10, use the original method but with rounding to mitigate precision issues
-        # Convert to the target base
-        # First convert integer part
-        int_part = int(abs_val)
-        frac_part = abs_val - int_part
+        int_digits = []
+        temp = int_part
+        while temp > 0:
+            int_digits.append(temp % base)
+            temp = temp // base
+        int_digits.reverse()  # Most significant digit first
 
-        # Convert integer part to target base
-        if int_part == 0:
-            int_digits = [0]
-        else:
-            int_digits = []
-            temp = int_part
-            while temp > 0:
-                int_digits.append(temp % base)
-                temp = temp // base
-            int_digits.reverse()  # Most significant digit first
+    # Pad or truncate integer part to exactly max_digits
+    if len(int_digits) > max_digits:
+        int_digits = int_digits[-max_digits:]  # Keep least significant digits
+    else:
+        int_digits = [0] * (max_digits - len(int_digits)) + int_digits  # Pad with zeros
 
-        # Pad or truncate integer part to exactly max_digits
-        if len(int_digits) > max_digits:
-            int_digits = int_digits[-max_digits:]  # Keep least significant digits
-        else:
-            int_digits = [0] * (
-                max_digits - len(int_digits)
-            ) + int_digits  # Pad with zeros
+    # Convert fractional part to target base with rounding
+    frac_digits = []
+    temp_frac = frac_part
+    for _ in range(max_decimal_places):
+        temp_frac *= base
+        # Add small epsilon and round to mitigate floating point precision issues
+        digit = round(temp_frac + 1e-10) if temp_frac < base - 0.5 else int(temp_frac)
+        digit = min(max(digit, 0), base - 1)  # Clamp to valid range
+        frac_digits.append(digit)
+        temp_frac -= digit
 
-        # Convert fractional part to target base with rounding
-        frac_digits = []
-        temp_frac = frac_part
-        for _ in range(max_decimal_places):
-            temp_frac *= base
-            # Add small epsilon and round to mitigate floating point precision issues
-            digit = (
-                round(temp_frac + 1e-10) if temp_frac < base - 0.5 else int(temp_frac)
-            )
-            digit = min(max(digit, 0), base - 1)  # Clamp to valid range
-            frac_digits.append(digit)
-            temp_frac -= digit
-
-        # Combine integer and fractional digits
-        all_digits = int_digits + frac_digits
+    # Combine integer and fractional digits
+    all_digits = int_digits + frac_digits
 
     D = max_digits + max_decimal_places
     if len(all_digits) != D:
@@ -395,7 +330,6 @@ def expression_to_tensors(
     # Step 1: Normalize the expression
     normalized_expr = normalize_expression(expr)
 
-    # import pdb; pdb.set_trace()
     num_initial_nodes = dag_depth + 1
     num_intermediate_nodes = dag_depth
     total_nodes = num_initial_nodes + num_intermediate_nodes
@@ -408,7 +342,6 @@ def expression_to_tensors(
     # Track values list and step index
     values = []
     step_index = 0
-    node_replacements = {}  # For Neg of numbers
 
     # PHASE 1: Collect all initial numeric values (including Neg of numbers)
     for node in postorder_traversal(normalized_expr):
@@ -436,19 +369,13 @@ def expression_to_tensors(
         elif isUnnormalizedNegation(node):
             raise ValueError(
                 f"Unexpected old-style negation after normalization: {node}. "
-                f"All Mul(-1, x) patterns should have been converted to -x during normalization. "
+                f"All Mul(-1, x) patterns should have been converted to Neg(x) during normalization. "
                 f"Normalization failed to catch this pattern."
             )
         elif isUnnormalizedDivision(node):
             raise ValueError(
                 f"Unexpected old-style division after normalization: {node}. "
                 f"All Mul(a, Pow(b, -1)) patterns should have been converted to Div(a, b) during normalization. "
-                f"Normalization failed to catch this pattern."
-            )
-        elif isUnnormalizedSubtraction(node):
-            raise ValueError(
-                f"Unexpected old-style subtraction after normalization: {node}. "
-                f"All Add(a, Mul(-1, b)) patterns should have been converted to Sub(a, b) during normalization. "
                 f"Normalization failed to catch this pattern."
             )
         elif isinstance(node, sympy.Pow):
@@ -471,7 +398,9 @@ def expression_to_tensors(
         is_float = isinstance(node, sympy_float)
         is_int = isinstance(node, sympy.Integer)
         is_rational = isinstance(node, sympy.Rational)
-        if is_float or is_int or is_rational:
+        is_neg = isinstance(node, Neg)
+        is_recip = isinstance(node, Recip)
+        if is_float or is_int or is_rational or is_neg or is_recip:
             continue
 
         if step_index >= dag_depth:
@@ -479,37 +408,38 @@ def expression_to_tensors(
                 f"Expression requires more operations than dag_depth={dag_depth}, num operations: {step_index}"
             )
 
-        is_div = isinstance(node, Div)
-        is_sub = isinstance(node, Sub)
         is_mul = isinstance(node, sympy.Mul)
         is_add = isinstance(node, sympy.Add)
 
-        # Set domain: log for Div/Mul, linear for Add/Sub/Neg
-        if is_div or is_mul:
+        # Set domain
+        if is_mul:
             G[0, 0, step_index] = 0  # Log domain
-        elif is_add or is_sub:
+        elif is_add:
             G[0, 0, step_index] = 1  # Linear domain
-        elif is_div or is_sub:
-            first_coefficient = 1
-            coefficient = -1
-        elif is_add or is_mul:
-            first_coefficient = 1
-            coefficient = 1
 
-        # Process arguments and set operand matrix
-        if is_div or is_sub or is_add or is_mul:
-            for i, arg in enumerate(node.args):
-                arg = node_replacements.get(arg, arg)  # Use replacement if exists
-                arg_idx = values.index(arg)  # Find index of this argument
-                _coefficient = first_coefficient if i == 0 else coefficient
-                O[0, 0, step_index, arg_idx] += _coefficient  # Accumulate coefficients
+        # Process arguments and extract operands with coefficients
+        operands = []
+        coefficients = []
 
-            values.append(node)
-            step_index += 1
-        else:
-            raise ValueError(f"Unexpected node type: {type(node)}")
+        for arg in node.args:
+            if isinstance(arg, Neg):
+                operands.append(arg.args[0])  # Extract x from Neg(x)
+                coefficients.append(-1)
+            elif isinstance(arg, Recip):
+                operands.append(arg.args[0])  # Extract x from Recip(x)
+                coefficients.append(-1)
+            else:
+                operands.append(arg)
+                coefficients.append(1)
 
-            # Fill remaining steps with identity operations
+        # Map operands to values array with coefficients
+        for operand, coeff in zip(operands, coefficients):
+            operand_idx = values.index(operand)  # Find index of this operand
+            O[0, 0, step_index, operand_idx] += coeff  # Accumulate coefficients
+
+        values.append(node)
+        step_index += 1
+
     if step_index > 0:
         # Had operations - use the last operation result slot
         # The executor stores operation results at num_initial_nodes + step_number

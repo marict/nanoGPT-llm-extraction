@@ -151,8 +151,6 @@ def test_dag_executor_comprehensive():
         desc="Testing expressions",
     ):
         try:
-            if i != 1841:
-                continue
             # Get target state directly in digit tensor format
             target_tensors, valid_mask = expressions_to_tensors(
                 [expr],

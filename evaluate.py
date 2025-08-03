@@ -11,6 +11,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
+from data.dagset.streaming import digit_onehot_to_float
 from predictor_utils import compute_dag_loss, tokenize_texts
 
 
@@ -32,7 +33,6 @@ def dag_tensors_to_english(
     Returns:
         str: Human-readable representation of the DAG
     """
-    from data.dagset.streaming import digit_onehot_to_float
 
     num_initial_nodes = digit_logits.shape[0]
     total_nodes = V_sign.shape[0]
