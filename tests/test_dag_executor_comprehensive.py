@@ -209,11 +209,7 @@ def test_dag_executor_comprehensive():
                 "relative_error": None,
             }
             failures.append(failure_info)
-
-            if failed <= 10:
-                print(f"  FAIL #{failed}: expr={expr}")
-                print(f"    Index: {i}")
-                print(f"    Exception: {e}")
+            print(failure_info)
 
     # Step 3: Report results and assert success
     print(f"\n=== FINAL RESULTS ===")

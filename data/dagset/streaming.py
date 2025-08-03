@@ -350,7 +350,6 @@ def expression_to_tensors(
 
     # PHASE 1: Collect all initial numeric values
     for node in postorder_traversal(normalized_expr):
-
         # Handle direct numbers
         if isNum(node):
             if step_index >= num_initial_nodes:
@@ -366,7 +365,6 @@ def expression_to_tensors(
                 step_index += 1
             except (TypeError, ValueError):
                 raise ValueError(f"Cannot convert {node} to float")
-
         # Error checks
         elif isUnnormalizedNegation(node):
             raise ValueError(
@@ -394,15 +392,18 @@ def expression_to_tensors(
     # Reset step_index for operations
     step_index = 0
 
+    # Neg and Recip are encoded in the coefficient, so they should be considered no-ops.
+    # However, when they appear as operands of other operations, we need to map them
+    # to their actual values that exist in the values list.
+    operand_map = {}  # Maps operands to their actual values for lookup
+
     # PHASE 2: Process operations in second postorder traversal
     for node in postorder_traversal(normalized_expr):
-        # Skip leaf nodes (already processed in Phase 1)
-        is_float = isinstance(node, sympy_float)
-        is_int = isinstance(node, sympy.Integer)
-        is_rational = isinstance(node, sympy.Rational)
         is_neg = isinstance(node, Neg)
         is_recip = isinstance(node, Recip)
-        if is_float or is_int or is_rational or is_neg or is_recip:
+
+        # Skip leaf nodes (already processed in Phase 1)
+        if isNum(node) or is_neg or is_recip:
             continue
 
         if step_index >= dag_depth:
@@ -424,16 +425,38 @@ def expression_to_tensors(
         coefficients = []
 
         for arg in node.args:
+            # This prevents us from getting "not in list" errors by mapping Neg/Recip
+            # operands to their inner values that actually exist in the values list
             if isinstance(arg, Neg) or isinstance(arg, Recip):
                 coefficients.append(-1)
+                # Recursively resolve nested Neg/Recip to find the actual value
+                inner = arg.args[0]
+                while isinstance(inner, (Neg, Recip)):
+                    inner = inner.args[0]
+                operand_map[arg] = (
+                    inner  # Map to ultimate inner operand (e.g., Neg(Neg(5)) -> 5)
+                )
             else:
                 coefficients.append(1)
+                operand_map[arg] = arg  # Map to self
             operands.append(arg)
 
-        # Map operands to values array with coefficients
-        for operand, coeff in zip(operands, coefficients):
-            operand_idx = values.index(operand)  # Find index of this operand
-            O[0, 0, step_index, operand_idx] += coeff  # Accumulate coefficients
+        try:
+            # Map operands to values array with coefficients
+            for operand, coeff in zip(operands, coefficients):
+                operand_idx = values.index(
+                    operand_map[operand]
+                )  # Find index of this operand
+                O[0, 0, step_index, operand_idx] += coeff  # Accumulate coefficients
+        except Exception:
+            print(f"Error when processing {node}")
+            print(f"operand_map: {operand_map}")
+            print(f"operands: {operands}")
+            print(f"coefficients: {coefficients}")
+            print(f"values: {values}")
+            print(f"step_index: {step_index}")
+            print(f"dag_depth: {dag_depth}")
+            raise
 
         values.append(node)
         step_index += 1
@@ -474,14 +497,9 @@ def tensor_to_expression(
     Returns:
         SymPy expression representing the DAG computation
     """
-    import sympy
-
-    from .streaming import digit_onehot_to_float
-
     # Get tensor dimensions
     num_initial_nodes = digit_logits.shape[0]
     dag_depth = O.shape[0]
-    total_nodes = O.shape[1]
 
     # Convert digit logits to actual values for initial nodes
     initial_values = []
