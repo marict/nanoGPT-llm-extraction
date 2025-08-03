@@ -757,38 +757,34 @@ def expressions_to_tensors(
     tensor_results = []
     valid_mask = []
     for expr in expressions:
-        if expr == "not valid":
-            # Create zero DAG for invalid token position with new architecture
-            num_initial_nodes = depth + 1
-            total_nodes = (depth + 1) + depth
-            D = max_digits + max_decimal_places
+        try:
+            if expr == "not valid":
+                # Create zero DAG for invalid token position with new architecture
+                num_initial_nodes = depth + 1
+                total_nodes = (depth + 1) + depth
+                D = max_digits + max_decimal_places
 
-            # Create zero digit targets (proper one-hot for digit 0)
-            base = 10  # Default base
-            zero_digits = torch.zeros(num_initial_nodes, D, base)
-            # Set all digit positions to represent 0 (valid one-hot)
-            zero_digits[:, :, 0] = 1.0
+                # Create zero digit targets (proper one-hot for digit 0)
+                base = 10  # Default base
+                zero_digits = torch.zeros(num_initial_nodes, D, base)
+                # Set all digit positions to represent 0 (valid one-hot)
+                zero_digits[:, :, 0] = 1.0
 
-            zero_tensor_dict = {
-                "target_digits": zero_digits,
-                "target_V_sign": torch.ones(total_nodes),
-                "target_O": torch.zeros(depth, total_nodes),
-                "target_G": torch.ones(depth),
-                "target_final_exec": 0.0,
-            }
-            tensor_results.append(zero_tensor_dict)
-            valid_mask.append(False)
-        else:
-            # Convert SymPy expression directly to DAG tensor format
-            try:
+                zero_tensor_dict = {
+                    "target_digits": zero_digits,
+                    "target_V_sign": torch.ones(total_nodes),
+                    "target_O": torch.zeros(depth, total_nodes),
+                    "target_G": torch.ones(depth),
+                    "target_final_exec": 0.0,
+                }
+                tensor_results.append(zero_tensor_dict)
+                valid_mask.append(False)
+            else:
+                # Convert SymPy expression directly to DAG tensor format
                 V_mag, V_sign, O, G = expression_to_tensors(expr, depth)
 
                 # Compute the actual target execution value by evaluating the SymPy expression
-                try:
-                    target_final_exec_value = float(expr.evalf())
-                except:
-                    print(f"Evaluation failed for expression: {expr}")
-                    raise
+                target_final_exec_value = float(expr.evalf())
 
                 # Convert V_mag values to digit targets for initial nodes only
                 num_initial_nodes = depth + 1
@@ -824,9 +820,12 @@ def expressions_to_tensors(
                 }
                 tensor_results.append(target_dict)
                 valid_mask.append(True)
-            except:
-                print(f"Conversion failed for expression: {expr}")
-                raise
+        except:
+            string_expr = str(expr)
+            print(f"Conversion failed for expression: {string_expr}")
+            print()
+            print(f"Other format: {sympy.sympify(string_expr)}")
+            raise
 
     return tensor_results, valid_mask
 
