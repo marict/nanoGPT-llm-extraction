@@ -11,6 +11,9 @@ import torch
 import torch.nn.functional as F
 from tiktoken import get_encoding
 
+from data.dagset.streaming import tensor_to_expression
+from models.dag_model import DAGExecutor
+
 
 def _compute_value_loss(
     pred_values: torch.Tensor, target_values: torch.Tensor
@@ -128,6 +131,72 @@ def _compute_exec_loss(
     return exec_loss
 
 
+def _log_problematic_dag_executions(
+    pred_final_exec: torch.Tensor,
+    batch_indices: torch.Tensor,
+    token_indices: torch.Tensor,
+    target_final_exec: torch.Tensor,
+    pred_digit_logits_exec: torch.Tensor,
+    pred_V_sign_exec: torch.Tensor,
+    pred_O_exec: torch.Tensor,
+    pred_G_exec: torch.Tensor,
+    cfg=None,
+) -> None:
+    """Log detailed information about DAG executions that produced NaN/Inf values."""
+    if not (
+        torch.any(torch.isnan(pred_final_exec))
+        or torch.any(torch.isinf(pred_final_exec))
+    ):
+        return  # No problematic values
+
+    nan_mask = torch.isnan(pred_final_exec)
+    inf_mask = torch.isinf(pred_final_exec)
+    problematic_mask = nan_mask | inf_mask
+
+    for i in torch.where(problematic_mask)[0]:
+        batch_idx = batch_indices[i].item()
+        token_idx = token_indices[i].item()
+        result_val = pred_final_exec[i].item()
+        target_val = target_final_exec[i].item()
+
+        # Extract tensor components for this problematic case
+        single_digit_logits = pred_digit_logits_exec[
+            i, 0
+        ]  # (num_initial_nodes, D, base)
+        single_V_sign = pred_V_sign_exec[i, 0]  # (total_nodes,)
+        single_O = pred_O_exec[i, 0]  # (dag_depth, total_nodes)
+        single_G = pred_G_exec[i, 0]  # (dag_depth,)
+
+        # Try to convert back to expression
+        try:
+            # Get max_digits and max_decimal_places from config if available
+            max_digits = getattr(cfg, "max_digits", 4)
+            max_decimal_places = getattr(cfg, "max_decimal_places", 4)
+
+            problematic_expr = tensor_to_expression(
+                single_digit_logits,
+                single_V_sign,
+                single_O,
+                single_G,
+                max_digits=max_digits,
+                max_decimal_places=max_decimal_places,
+            )
+            expr_str = str(problematic_expr)
+        except Exception as e:
+            expr_str = f"[Could not convert to expression: {e}]"
+
+        print(
+            f"WARNING: DAG execution produced {'NaN' if nan_mask[i] else 'Inf'} value"
+        )
+        print(f"  Location: batch {batch_idx}, token {token_idx}")
+        print(f"  Problematic expression: {expr_str}")
+        print(f"  Execution result: {result_val}")
+        print(f"  Target value: {target_val}")
+        print(
+            f"  Digit logits range: [{pred_digit_logits_exec[i].min().item():.2f}, {pred_digit_logits_exec[i].max().item():.2f}]"
+        )
+
+
 def compute_dag_loss(
     pred_digit_logits: torch.Tensor,  # (B, T, num_initial_nodes, D, base) predicted digit logits
     pred_V_sign: torch.Tensor,  # (B, T, total_nodes) predicted signs
@@ -222,9 +291,6 @@ def compute_dag_loss(
     # Digit loss - stable bounded loss for magnitudes
     digit_loss = _compute_digit_loss(pred_digit_logits_valid, target_digits)
 
-    # V_mag loss - convert digits to magnitudes and compute L2 loss
-    from models.dag_model import DAGExecutor
-
     # Convert predicted digit logits to V_mag values using shared method
     # Add batch and time dimensions for DAGExecutor interface: (num_valid, N, D, base) -> (num_valid, 1, N, D, base)
     pred_digit_logits_expanded = pred_digit_logits_valid.unsqueeze(1)
@@ -291,6 +357,19 @@ def compute_dag_loss(
                 pred_digit_logits_exec, pred_V_sign_exec, pred_O_exec, pred_G_exec
             )  # (num_valid, 1)
             pred_final_exec = pred_final_exec.squeeze(1)  # (num_valid,)
+
+            # Check for NaN/Inf in execution results and log problematic cases
+            _log_problematic_dag_executions(
+                pred_final_exec,
+                batch_indices,
+                token_indices,
+                target_final_exec,
+                pred_digit_logits_exec,
+                pred_V_sign_exec,
+                pred_O_exec,
+                pred_G_exec,
+                cfg,
+            )
 
             # Compute robust execution loss
             exec_loss = _compute_exec_loss(pred_final_exec, target_final_exec)
