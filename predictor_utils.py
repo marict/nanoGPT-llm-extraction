@@ -258,9 +258,9 @@ def compute_dag_loss(
     # Compute V_mag loss using robust value loss
     V_mag_loss = _compute_value_loss(pred_V_mag_from_digits, target_V_mag_from_digits)
 
-    # Sign loss - only on initial nodes (L2 on tanh-activated predictions)
+    # Sign loss - only on initial nodes (model already outputs tanh-activated values)
     V_sign_loss = F.mse_loss(
-        torch.tanh(pred_V_sign_valid[:, :num_initial_nodes]),
+        pred_V_sign_valid[:, :num_initial_nodes],
         target_V_sign[:, :num_initial_nodes],
     )
 
