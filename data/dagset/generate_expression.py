@@ -42,7 +42,7 @@ def generate_uniform_digit_number(
     if base < 2 or base > 36:
         raise ValueError(f"Base must be between 2 and 36, got {base}")
 
-    rng = random.Random(seed or random.randint(0, 10000))
+    rng = random.Random(seed if seed is not None else random.randint(0, 10000))
 
     # Determine if we're generating a positive or negative number
     sign = 1 if rng.random() < 0.5 else -1
