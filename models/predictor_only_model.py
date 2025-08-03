@@ -30,7 +30,7 @@ class PredictorOnlyConfig:
 
     # Number generation parameters for data generation
     max_digits: int = 4
-    max_decimal_places: int = 6
+    max_decimal_places: int = 4
 
 
 class PredictorOnlyModel(BaseGPTModel):
@@ -53,7 +53,9 @@ class PredictorOnlyModel(BaseGPTModel):
         # DAG predictor and executor
         self.dag_predictor = DAGPlanPredictor(config)
         self.dag_executor = (
-            DAGExecutor(config.dag_depth) if config.dag_depth > 0 else None
+            DAGExecutor(config.dag_depth, config.max_digits, config.max_decimal_places)
+            if config.dag_depth > 0
+            else None
         )
 
     def forward(self, input_ids: torch.Tensor):

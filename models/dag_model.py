@@ -27,37 +27,155 @@ LOG_LIM = (
 class DAGExecutor(nn.Module):
     """New tensor-based DAG execution engine with (dag_depth + 1) + dag_depth node architecture."""
 
-    def __init__(self, dag_depth: int):
+    def __init__(
+        self,
+        dag_depth: int,
+        max_digits: int = 4,
+        max_decimal_places: int = 4,
+        base: int = 10,
+    ):
         super().__init__()
         self.dag_depth = dag_depth
+        self.max_digits = max_digits
+        self.max_decimal_places = max_decimal_places
+        self.base = base
         self.num_initial_nodes = dag_depth + 1
         self.num_intermediate_nodes = dag_depth
         self.total_nodes = self.num_initial_nodes + self.num_intermediate_nodes
 
-    def forward(self, V_mag, V_sign, O, G):
+    @staticmethod
+    def digits_to_vmag(
+        digit_logits: torch.Tensor,
+        max_digits: int,
+        max_decimal_places: int,
+        base: int = 10,
+        temperature: float = 0.01,
+    ) -> torch.Tensor:
         """
-        Execute DAG operations using tensor representation with (dag_depth + 1) + dag_depth node architecture.
+        Convert digit logits to V_mag tensor using soft/differentiable conversion.
 
         Args:
-            V_mag: (1, 1, total_nodes) - magnitudes of all nodes (initial + intermediate)
-            V_sign: (1, 1, total_nodes) - signs of all nodes
-            O: (1, 1, dag_depth, total_nodes) - operand selection matrix
-            G: (1, 1, dag_depth) - domain selector (0=log, 1=linear)
+            digit_logits: (B, T, num_initial_nodes, D, base) - digit prediction logits
+            max_digits: Maximum number of integer digits
+            max_decimal_places: Maximum number of decimal places
+            base: Numerical base (default 10)
+            temperature: Temperature for softmax (lower = more discrete)
 
         Returns:
-            torch.Tensor: final result (scalar)
+            V_mag: (B, T, num_initial_nodes) - magnitude values for initial nodes
         """
-        _, _, total_nodes = V_mag.shape
+        B, T, num_initial_nodes, D, _ = digit_logits.shape
+
+        # Use same dtype as input for consistency
+        compute_dtype = digit_logits.dtype
+
+        # Use low temperature to make softmax nearly one-hot for accuracy
+        # This preserves gradients while minimizing conversion error
+        digit_probs = torch.softmax(
+            digit_logits / temperature, dim=-1
+        )  # (B, T, num_initial_nodes, D, base)
+
+        # Create digit value matrix: [0, 1, 2, ..., base-1]
+        digit_values = torch.arange(
+            base, dtype=compute_dtype, device=digit_logits.device
+        )
+
+        # Soft expected digit values: sum(prob_i * digit_i)
+        expected_digits = (digit_probs * digit_values.view(1, 1, 1, 1, -1)).sum(
+            dim=-1
+        )  # (B, T, N, D)
+
+        # Initialize output tensor
+        V_mag = torch.zeros(
+            B, T, num_initial_nodes, dtype=compute_dtype, device=digit_logits.device
+        )
+
+        for b in range(B):
+            for t in range(T):
+                for n in range(num_initial_nodes):
+                    try:
+                        # Integer part (positions 0 to max_digits-1)
+                        int_value = 0.0
+                        for d in range(max_digits):
+                            digit_val = expected_digits[b, t, n, d]
+                            # Validate digit value is reasonable
+                            if (
+                                not torch.isfinite(digit_val)
+                                or digit_val < 0
+                                or digit_val >= base
+                            ):
+                                raise ValueError(
+                                    f"Invalid digit value {digit_val} at position {d} for node {n}"
+                                )
+                            int_value += digit_val * (base ** (max_digits - 1 - d))
+
+                        # Fractional part (positions max_digits to D-1)
+                        frac_value = 0.0
+                        for d in range(max_digits, max_digits + max_decimal_places):
+                            digit_val = expected_digits[b, t, n, d]
+                            # Validate digit value is reasonable
+                            if (
+                                not torch.isfinite(digit_val)
+                                or digit_val < 0
+                                or digit_val >= base
+                            ):
+                                raise ValueError(
+                                    f"Invalid digit value {digit_val} at position {d} for node {n}"
+                                )
+                            frac_value += digit_val * (base ** (max_digits - 1 - d))
+
+                        # Combine and validate total
+                        total_value = int_value + frac_value
+                        if not torch.isfinite(total_value):
+                            raise ValueError(
+                                f"Digit-to-float conversion produced non-finite value: {total_value}"
+                            )
+
+                        # Clip to reasonable range to prevent inf/nan in operations
+                        clipped_value = torch.clamp(total_value, min=1e-8, max=1e6)
+                        V_mag[b, t, n] = clipped_value
+
+                    except Exception as e:
+                        raise RuntimeError(
+                            f"Failed to convert digits to magnitude for batch {b}, token {t}, node {n}: {e}"
+                        ) from e
+
+        return V_mag
+
+    def forward(self, digit_logits, V_sign, O, G):
+        """
+            Execute DAG operations using tensor representation with digit prediction.
+
+        Args:
+                digit_logits: (B, T, num_initial_nodes, D, base) - digit predictions for initial nodes
+                V_sign: (B, T, total_nodes) - signs of all nodes
+                O: (B, T, dag_depth, total_nodes) - operand selection matrix
+                G: (B, T, dag_depth) - domain selector (0=log, 1=linear)
+
+        Returns:
+                torch.Tensor: final result (B, T)
+        """
+        B, T = V_sign.shape[:2]
 
         # Store original dtype for final result
-        original_dtype = V_mag.dtype
+        original_dtype = V_sign.dtype
 
         # Cast to float64 for precise computation (except on MPS)
-        compute_dtype = torch.float64 if V_mag.device.type != "mps" else torch.float32
+        compute_dtype = torch.float64 if V_sign.device.type != "mps" else torch.float32
 
-        # Work with a copy to avoid modifying the input and cast to high precision
-        working_V_mag = V_mag.clone().to(compute_dtype)
+        # Convert digit predictions to V_mag for initial nodes using shared method
+        initial_V_mag = self.digits_to_vmag(
+            digit_logits, self.max_digits, self.max_decimal_places, self.base
+        )  # (B, T, num_initial_nodes)
+
+        # Create full working tensors
+        working_V_mag = torch.zeros(
+            B, T, self.total_nodes, dtype=compute_dtype, device=V_sign.device
+        )
         working_V_sign = V_sign.clone().to(compute_dtype)
+
+        # Copy initial node magnitudes into working tensor (convert dtype if needed)
+        working_V_mag[:, :, : self.num_initial_nodes] = initial_V_mag.to(compute_dtype)
 
         # Execute each intermediate computation step
         for step in range(self.num_intermediate_nodes):
@@ -120,30 +238,40 @@ class DAGExecutor(nn.Module):
             )
 
         # Always use the last intermediate slot as the final result
-        final_idx = total_nodes - 1
+        final_idx = self.total_nodes - 1
         final_mag = working_V_mag[:, :, final_idx]  # (B, T)
         final_sign = working_V_sign[:, :, final_idx]  # (B, T)
         final_value = final_sign * final_mag  # (B, T)
 
-        # Cast back to original dtype for gradient compatibility
+        # Cast back to original dtype
         return final_value.to(original_dtype)
 
 
 class DAGPlanPredictor(nn.Module):
-    """Predictor for tensor-based DAG execution with (dag_depth + 1) + dag_depth node architecture."""
+    """Predictor for tensor-based DAG execution with (dag_depth + 1) + dag_depth node architecture using digit prediction."""
 
     def __init__(self, config):
         super().__init__()
         self.dag_depth = config.dag_depth
+        self.max_digits = config.max_digits
+        self.max_decimal_places = config.max_decimal_places
+        self.base = 10  # Default base
+
         num_initial_nodes = config.dag_depth + 1
         num_intermediate_nodes = config.dag_depth
+        self.num_initial_nodes = num_initial_nodes
 
         self.total_nodes = num_initial_nodes + num_intermediate_nodes
         self.n_embd = config.n_embd
 
+        # Digit dimensions
+        self.D = self.max_digits + self.max_decimal_places
+
         # Predict tensor components with (dag_depth + 1) + dag_depth architecture
-        # V_mag: magnitudes for all nodes (initial + intermediate)
-        self.V_mag_predictor = nn.Linear(config.n_embd, self.total_nodes)
+        # digit_predictor: digit logits for initial nodes only (magnitudes via digits)
+        self.digit_predictor = nn.Linear(
+            config.n_embd, self.num_initial_nodes * self.D * self.base
+        )
 
         # V_sign: signs for all nodes
         self.V_sign_predictor = nn.Linear(config.n_embd, self.total_nodes)
@@ -156,7 +284,7 @@ class DAGPlanPredictor(nn.Module):
 
         # Initialize weights
         for module in [
-            self.V_mag_predictor,
+            self.digit_predictor,
             self.V_sign_predictor,
             self.O_predictor,
             self.G_predictor,
@@ -172,15 +300,22 @@ class DAGPlanPredictor(nn.Module):
                 hidden_state: (B, T, n_embd) - causal hidden states from transformer
 
         Returns:
-                V_mag: (B, T, total_nodes) - magnitudes for all nodes
+                digit_logits: (B, T, num_initial_nodes, D, base) - digit logits for initial nodes
                 V_sign: (B, T, total_nodes) - signs for all nodes
                 O: (B, T, dag_depth, total_nodes) - operand selection matrix
                 G: (B, T, dag_depth) - domain selector
         """
         B, T = hidden_state.shape[:2]
 
-        # Predict each component with (dag_depth + 1) + dag_depth architecture
-        V_mag = torch.abs(self.V_mag_predictor(hidden_state))  # (B, T, total_nodes)
+        # Predict digit logits for initial nodes only
+        digit_flat = self.digit_predictor(
+            hidden_state
+        )  # (B, T, num_initial_nodes * D * base)
+        digit_logits = digit_flat.view(
+            B, T, self.num_initial_nodes, self.D, self.base
+        )  # (B, T, num_initial_nodes, D, base)
+
+        # V_sign: signs for all nodes
         V_sign = torch.tanh(self.V_sign_predictor(hidden_state))  # (B, T, total_nodes)
 
         # Predict operand matrix and reshape
@@ -192,7 +327,49 @@ class DAGPlanPredictor(nn.Module):
         # Domain selector: 0=log, 1=linear
         G = torch.sigmoid(self.G_predictor(hidden_state))  # (B, T, dag_depth)
 
-        return V_mag, V_sign, O, G
+        return digit_logits, V_sign, O, G
+
+    def to_text(self, digit_logits, V_sign, O, G, batch_idx=0, time_idx=0):
+        """
+            Convert predicted DAG tensors to human-readable text expression.
+
+        Args:
+                digit_logits: (B, T, num_initial_nodes, D, base) predicted digit logits
+                V_sign: (B, T, total_nodes) predicted signs
+                O: (B, T, dag_depth, total_nodes) predicted operand selectors
+                G: (B, T, dag_depth) predicted domain gates
+                batch_idx: Which batch element to convert (default: 0)
+                time_idx: Which time step to convert (default: 0)
+
+        Returns:
+                str: Human-readable expression
+        """
+        from data.dagset.streaming import tensor_to_expression
+
+        # Extract single prediction from batch and time dimensions
+        single_digit_logits = digit_logits[
+            batch_idx, time_idx
+        ]  # (num_initial_nodes, D, base)
+        single_V_sign = V_sign[batch_idx, time_idx]  # (total_nodes,)
+        single_O = O[batch_idx, time_idx]  # (dag_depth, total_nodes)
+        single_G = G[batch_idx, time_idx]  # (dag_depth,)
+
+        try:
+            # Convert tensors to SymPy expression
+            expr = tensor_to_expression(
+                single_digit_logits,
+                single_V_sign,
+                single_O,
+                single_G,
+                self.max_digits,
+                self.max_decimal_places,
+            )
+
+            # Convert to string
+            return str(expr)
+
+        except Exception as e:
+            return f"[Error converting to expression: {e}]"
 
 
 class ScalarToEmbed(nn.Module):
@@ -238,6 +415,8 @@ class GPTConfig:
 
     # DAG-specific parameters
     dag_depth: int = 6
+    max_digits: int = 4
+    max_decimal_places: int = 4
 
 
 class GPT(BaseGPTModel):
@@ -249,7 +428,9 @@ class GPT(BaseGPTModel):
         if config.dag_depth > 0:
             # Use DAG system
             self.dag_predictor = DAGPlanPredictor(config)
-            self.dag_executor = DAGExecutor(config.dag_depth)
+            self.dag_executor = DAGExecutor(
+                config.dag_depth, config.max_digits, config.max_decimal_places
+            )
         else:
             self.dag_predictor = None
             self.dag_executor = None
@@ -269,24 +450,12 @@ class GPT(BaseGPTModel):
 
         if self.dag_predictor is not None:
             # Predict DAG tensors for each token position
-            V_mag, V_sign, O, G = self.dag_predictor(hidden_states)  # (B, T, ...)
+            digit_logits, V_sign, O, G = self.dag_predictor(
+                hidden_states
+            )  # (B, T, ...)
 
-            # Execute DAG for each token position
-            _, T = hidden_states.shape[:2]
-            dag_outputs = []
-
-            for t in range(T):
-                # Execute DAG for token t using only causal information
-                V_mag_t = V_mag[:, t : t + 1, :]  # (B, 1, total_nodes)
-                V_sign_t = V_sign[:, t : t + 1, :]  # (B, 1, total_nodes)
-                O_t = O[:, t : t + 1, :, :]  # (B, 1, dag_depth, total_nodes)
-                G_t = G[:, t : t + 1, :]  # (B, 1, dag_depth)
-
-                result_t = self.dag_executor(V_mag_t, V_sign_t, O_t, G_t)  # (B, 1)
-                dag_outputs.append(result_t)
-
-            # Concatenate results
-            return torch.cat(dag_outputs, dim=1)  # (B, T)
+            # Execute DAG - the executor handles digit conversion internally
+            return self.dag_executor(digit_logits, V_sign, O, G)  # (B, T)
         else:
             # No DAG - this shouldn't happen in practice
             raise ValueError("DAG depth is 0, cannot perform DAG computation")

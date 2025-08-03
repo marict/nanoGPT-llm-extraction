@@ -46,7 +46,7 @@ max_iters = 10000
 weight_decay = 1e-2
 beta1 = 0.9
 beta2 = 0.95
-grad_clip = 1.0
+grad_clip = 0.5
 
 # Learning rate schedule
 warmup_iters = max_iters * 0.02  # 1/50 of max_iters
@@ -56,7 +56,8 @@ learning_rate = 3e-4
 
 # System settings (optimized for RunPod)
 backend = "nccl"
-dtype = "bfloat16"  # Use bfloat16 for efficiency if available
+# dtype = "bfloat16"  # Use bfloat16 for efficiency if available
+dtype = "float32"
 compile = True
 keep_alive = False  # Auto-stop by default
 check_nans = False  # Check for NaNs in cloud training

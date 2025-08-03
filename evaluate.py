@@ -14,25 +14,60 @@ import torch.nn.functional as F
 from predictor_utils import compute_dag_loss, tokenize_texts
 
 
-def dag_tensors_to_english(V_mag, V_sign, O, G, dag_depth=None):
+def dag_tensors_to_english(
+    digit_logits, V_sign, O, G, dag_depth=None, max_digits=4, max_decimal_places=4
+):
     """
     Convert DAG tensors to readable English representation using argmax.
 
     Args:
-        V_mag: (total_nodes,) magnitude values
+        digit_logits: (num_initial_nodes, D, base) digit prediction logits
         V_sign: (total_nodes,) sign values
         O: (dag_depth, total_nodes) operand selectors
         G: (dag_depth,) domain gates
         dag_depth: Number of operation steps (default: use O.shape[0])
+        max_digits: Maximum number of integer digits
+        max_decimal_places: Maximum number of decimal places
 
     Returns:
         str: Human-readable representation of the DAG
     """
+    from data.dagset.streaming import digit_onehot_to_float
+
+    num_initial_nodes = digit_logits.shape[0]
+    total_nodes = V_sign.shape[0]
+
+    # Create V_mag from digit predictions
+    V_mag = torch.zeros(total_nodes)
+
+    # Convert digit logits to V_mag for initial nodes
+    digit_probs = torch.softmax(digit_logits, dim=-1)  # (num_initial_nodes, D, base)
+
+    for n in range(num_initial_nodes):
+        # Convert digit probabilities to float value
+        digit_indices = torch.argmax(digit_probs[n], dim=1)  # (D,)
+
+        # Use the conversion function
+        digit_onehot = torch.zeros_like(digit_probs[n])
+        for d, idx in enumerate(digit_indices):
+            digit_onehot[d, idx] = 1.0
+
+        # Get sign for this node
+        sign = V_sign[n].item()
+
+        # Convert to float
+        float_value = digit_onehot_to_float(
+            digit_onehot, sign, max_digits, max_decimal_places
+        )
+        V_mag[n] = abs(float_value)
+
     if dag_depth is None:
         dag_depth = O.shape[0]
 
     total_nodes = V_mag.shape[0]
-    initial_slots = total_nodes // 2  # Half for initial values, half for intermediate
+    # Use new architecture: (dag_depth + 1) + dag_depth
+    num_initial_nodes = (total_nodes + 1) // 2
+    initial_slots = num_initial_nodes
 
     # Format initial values
     initial_values = []
@@ -109,6 +144,7 @@ def evaluate_dag_model(
         k: 0.0
         for k in (
             "total_loss",
+            "digit_loss",
             "V_mag_loss",
             "V_sign_loss",
             "O_loss",
@@ -157,14 +193,14 @@ def evaluate_dag_model(
                     if dag_predictor is None:
                         raise RuntimeError("Model has no DAG predictor (dag_depth=0)")
 
-                    pred_V_mag, pred_V_sign, pred_O, pred_G = dag_predictor(
+                    pred_digit_logits, pred_V_sign, pred_O, pred_G = dag_predictor(
                         hidden_states
                     )
 
                 # Compute loss using DAG tensor loss function
                 dag_executor = getattr(model, "dag_executor", None)
                 losses = compute_dag_loss(
-                    pred_V_mag,
+                    pred_digit_logits,
                     pred_V_sign,
                     pred_O,
                     pred_G,
@@ -251,8 +287,10 @@ def evaluate_dag_model(
                             # Get target and prediction for the final/complete expression
                             target_dict = target_tensors[0][last_valid_pos]
 
-                            # Target DAG tensors
-                            target_V_mag = target_dict["target_V_mag"]  # (total_nodes,)
+                            # Target DAG tensors - convert from digit targets
+                            target_digits = target_dict[
+                                "target_digits"
+                            ]  # (num_initial_nodes, D, base)
                             target_V_sign = target_dict[
                                 "target_V_sign"
                             ]  # (total_nodes,)
@@ -263,9 +301,9 @@ def evaluate_dag_model(
                             target_final_exec = target_dict["target_final_exec"]
 
                             # Predicted DAG tensors (from the forward pass)
-                            pred_V_mag_sample = pred_V_mag[
+                            pred_digit_logits_sample = pred_digit_logits[
                                 0, last_valid_pos
-                            ]  # (total_nodes,)
+                            ]  # (num_initial_nodes, D, base)
                             pred_V_sign_sample = pred_V_sign[
                                 0, last_valid_pos
                             ]  # (total_nodes,)
@@ -276,13 +314,22 @@ def evaluate_dag_model(
 
                             # Convert to English representations
                             target_english = dag_tensors_to_english(
-                                target_V_mag, target_V_sign, target_O, target_G
+                                target_digits,
+                                target_V_sign,
+                                target_O,
+                                target_G,
+                                max_digits=cfg.max_digits,
+                                max_decimal_places=cfg.max_decimal_places,
                             )
-                            pred_english = dag_tensors_to_english(
-                                pred_V_mag_sample,
-                                pred_V_sign_sample,
-                                pred_O_sample,
-                                pred_G_sample,
+
+                            # Use the new to_text method for model predictions
+                            pred_expression_text = dag_predictor.to_text(
+                                pred_digit_logits,
+                                pred_V_sign,
+                                pred_O,
+                                pred_G,
+                                batch_idx=0,
+                                time_idx=last_valid_pos,
                             )
 
                             # Execute predicted DAG if executor is available
@@ -290,11 +337,11 @@ def evaluate_dag_model(
                             if dag_executor is not None:
                                 try:
                                     # Add batch and time dimensions for executor
-                                    pred_V_mag_exec = pred_V_mag_sample.unsqueeze(
-                                        0
-                                    ).unsqueeze(
-                                        0
-                                    )  # (1, 1, total_nodes)
+                                    pred_digit_logits_exec = (
+                                        pred_digit_logits_sample.unsqueeze(0).unsqueeze(
+                                            0
+                                        )
+                                    )  # (1, 1, num_initial_nodes, D, base)
                                     pred_V_sign_exec = pred_V_sign_sample.unsqueeze(
                                         0
                                     ).unsqueeze(
@@ -308,7 +355,7 @@ def evaluate_dag_model(
                                     )  # (1, 1, dag_depth)
 
                                     pred_final_exec = dag_executor(
-                                        pred_V_mag_exec,
+                                        pred_digit_logits_exec,
                                         pred_V_sign_exec,
                                         pred_O_exec,
                                         pred_G_exec,
@@ -322,7 +369,7 @@ def evaluate_dag_model(
                             print(f"Target Final Execution: {target_final_exec:.6f}")
 
                             print("\n--- PREDICTED DAG ---")
-                            print(pred_english)
+                            print(f"Model Prediction: {pred_expression_text}")
                             print(f"Predicted Final Execution: {pred_final_exec:.6f}")
 
                             if not torch.isnan(torch.tensor(pred_final_exec)):

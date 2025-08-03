@@ -83,7 +83,7 @@ def setup_tokenizer(data_dir: Path) -> Tuple[Optional[Callable], Optional[Callab
         except Exception as e:
             print(f"Warning: Failed to load meta.pkl: {e}")
 
-    # Fallback to GPT-2 tokenizer
+    # Use GPT-2 tokenizer
     enc = tiktoken.get_encoding("gpt2")
     encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
     decode = lambda l: enc.decode(l)

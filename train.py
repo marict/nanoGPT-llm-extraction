@@ -315,13 +315,13 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
 
     # (Streaming dataset pathway removed.)
 
-    # Fallback to GPT-2 tokenizer if no meta available
+    # Use GPT-2 tokenizer if no meta available
     if encode is None or decode is None:
         enc = tiktoken.get_encoding("gpt2")
         encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
         decode = lambda l: enc.decode(l)
         if master_process:
-            print(f"[{time.time() - setup_start:.2f}s] Using GPT-2 tokenizer fallback")
+            print(f"[{time.time() - setup_start:.2f}s] Using GPT-2 tokenizer")
 
     print(
         f"[{time.time() - setup_start:.2f}s] Data loading completed in {time.time() - data_start:.2f}s"
@@ -468,18 +468,14 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     compile_start = time.time()
     if cfg.compile:
         print(f"[{time.time() - setup_start:.2f}s] Compiling model")
-        try:
-            # Disable CUDA graphs; they crash when tensors share storage in
-            # complex ways ("complex memory overlap" segfault). This keeps the
-            # bulk of Inductor speed-ups while avoiding the runtime fault.
-            model = torch.compile(
-                model,
-                mode="reduce-overhead",
-                disable="cudagraphs",
-            )
-        except TypeError:
-            # Older PyTorch without the 'disable' kwarg – fall back to safe compile
-            model = torch.compile(model, mode="reduce-overhead")
+        # Disable CUDA graphs; they crash when tensors share storage in
+        # complex ways ("complex memory overlap" segfault). This keeps the
+        # bulk of Inductor speed-ups while avoiding the runtime fault.
+        model = torch.compile(
+            model,
+            mode="reduce-overhead",
+            disable="cudagraphs",
+        )
         print(
             f"[{time.time() - setup_start:.2f}s] Model compilation completed in {time.time() - compile_start:.2f}s"
         )

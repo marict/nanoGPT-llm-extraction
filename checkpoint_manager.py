@@ -154,7 +154,7 @@ class CheckpointManager:
             ]
             return max(candidates, key=lambda x: x.stat().st_mtime)
 
-        # Fallback: no iteration info, choose by modification time
+        # No iteration info found, choose by modification time
         return max(checkpoint_files, key=lambda x: x.stat().st_mtime)
 
     def find_best_checkpoint(self, config_name: str) -> Path | None:
@@ -406,12 +406,11 @@ class CheckpointManager:
 
         for attempt in range(retries + 1):
             try:
+                # Use safetensors for pure tensor data, otherwise use torch.save
                 if _HAVE_ST and self._all_tensors(checkpoint_data):
-                    # Use safetensors for pure tensor checkpoints
                     final_path = checkpoint_path.with_suffix(".safetensors")
                     _st.save_file(checkpoint_data, str(tmp_path))
                 else:
-                    # Fallback to torch.save for mixed-type or no-safetensors state
                     final_path = checkpoint_path.with_suffix(".pt")
                     torch.save(
                         checkpoint_data, tmp_path, _use_new_zipfile_serialization=False
@@ -575,7 +574,7 @@ class CheckpointManager:
         """Initialize a DAG predictor (GPT backbone or PredictorOnly) model.
 
         Args:
-            cfg: DAGTrainConfig or compatible namespace with relevant attributes
+            cfg: DAGTrainConfig with required attributes
             checkpoint: Loaded checkpoint dictionary (or None)
             device: Device string ("cpu", "cuda", etc.)
             setup_start_time: Reference start time for consistent logging (optional)
@@ -609,6 +608,8 @@ class CheckpointManager:
             "n_layer",
             "block_size",
             "vocab_size",
+            "max_digits",
+            "max_decimal_places",
         ]
         if saved_cfg is not None:
             incompat = []
@@ -638,6 +639,12 @@ class CheckpointManager:
                 "bias": (saved_cfg or {}).get("bias", cfg.bias),
                 "dag_depth": (saved_cfg or {}).get("dag_depth", cfg.dag_depth),
                 "block_size": (saved_cfg or {}).get("block_size", cfg.block_size),
+                "max_digits": (saved_cfg or {}).get(
+                    "max_digits", getattr(cfg, "max_digits", 4)
+                ),
+                "max_decimal_places": (saved_cfg or {}).get(
+                    "max_decimal_places", getattr(cfg, "max_decimal_places", 4)
+                ),
             }
             model_config = GPTConfig(**model_cfg_dict)
             model = GPT(model_config)
@@ -652,6 +659,12 @@ class CheckpointManager:
                 "bias": (saved_cfg or {}).get("bias", cfg.bias),
                 "dag_depth": (saved_cfg or {}).get("dag_depth", cfg.dag_depth),
                 "block_size": (saved_cfg or {}).get("block_size", cfg.block_size),
+                "max_digits": (saved_cfg or {}).get(
+                    "max_digits", getattr(cfg, "max_digits", 4)
+                ),
+                "max_decimal_places": (saved_cfg or {}).get(
+                    "max_decimal_places", getattr(cfg, "max_decimal_places", 4)
+                ),
             }
             model_config = PredictorOnlyConfig(**model_cfg_dict)
             model = PredictorOnlyModel(model_config)

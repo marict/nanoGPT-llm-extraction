@@ -33,7 +33,7 @@ def compare_models_comprehensive(
         ckpt_baseline: Path to baseline checkpoint
         ckpt_dag: Path to DAG checkpoint
         data_dir: Directory with train.bin/val.bin for comprehensive evaluation
-        dataset_file: Simple text file for basic loss evaluation (fallback)
+        dataset_file: Simple text file for basic loss evaluation
         eval_iters: Number of iterations for loss estimation
         batch_size: Batch size for evaluation
         math_tasks: Math evaluation tasks
@@ -97,7 +97,7 @@ def compare_models_comprehensive(
         )
         results["dag"].update(dag_results)
 
-    # Fallback evaluation using dataset file
+    # Basic evaluation using dataset file
     elif dataset_file and Path(dataset_file).exists():
         print(f"\n=== Basic Evaluation using {dataset_file} ===")
 
@@ -192,7 +192,7 @@ def main():
     parser.add_argument(
         "--dataset",
         default="tests/math_eval.txt",
-        help="Dataset file for basic evaluation (fallback)",
+        help="Dataset file for basic evaluation",
     )
     parser.add_argument(
         "--eval_iters",

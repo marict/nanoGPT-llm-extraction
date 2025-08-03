@@ -47,6 +47,78 @@ def _compute_value_loss(
     return loss_per_element.mean()
 
 
+def _compute_digit_loss(
+    pred_digit_logits: torch.Tensor,  # (num_valid, N, D, base) - Raw logits for each digit
+    target_digits: torch.Tensor,  # (num_valid, N, D, base) - One-hot target digits
+    device_type: str = "cuda",
+) -> torch.Tensor:
+    """Compute cross-entropy loss for digit prediction.
+
+    This loss function is inherently stable because each digit prediction is bounded [0, 9].
+    Maximum loss per digit is cross_entropy ≤ ln(10) ≈ 2.3, preventing NaN explosion.
+
+    Args:
+        pred_digit_logits: (num_valid, N, D, base) Raw logits for each digit position
+        target_digits: (num_valid, N, D, base) One-hot target digits
+        device_type: Device type for autocast
+
+    Returns:
+        Scalar tensor with averaged digit loss
+    """
+    num_valid, N, D, base = pred_digit_logits.shape
+
+    # Sanity checks (matching original implementation)
+    if target_digits.shape[-2] != D:
+        raise ValueError(
+            "Shape mismatch between model-predicted digits and target digits: "
+            f"predicted D={D}, target D={target_digits.shape[-2]}. "
+            "Ensure that `max_digits` and `max_decimal_places` are set to the "
+            "same values for both the dataset and the model."
+        )
+
+    if target_digits.shape[-1] != base:
+        raise ValueError(
+            "Shape mismatch between model-predicted base and target base: "
+            f"predicted base={base}, target base={target_digits.shape[-1]}. "
+            "Ensure that `base` is set to the same value for both the dataset and the model."
+        )
+
+    with torch.amp.autocast(device_type=device_type, enabled=False):
+        # Reshape for efficient cross-entropy computation
+        logits_flat = pred_digit_logits.reshape(-1, base).to(
+            torch.float32
+        )  # (num_valid*N*D, base)
+        target_flat = target_digits.reshape(-1, base)
+        row_sums = target_flat.sum(dim=-1)
+
+        # Strict validation: every row must be a valid one-hot distribution (matching original)
+        if (row_sums == 0).any():
+            offending = torch.nonzero(row_sums == 0).flatten()[:5].tolist()
+            raise ValueError(
+                "Encountered target digit rows with all zeros (invalid one-hot). "
+                f"Example flat indices: {offending}. This indicates a bug in the "
+                "dataset generation pipeline."
+            )
+
+        # Allow tiny numerical tolerance when checking that rows sum to 1.0
+        if not torch.allclose(row_sums, torch.ones_like(row_sums), atol=1e-6):
+            bad = torch.nonzero(
+                ~torch.isclose(row_sums, torch.ones_like(row_sums), atol=1e-6)
+            )
+            first_bad = bad.flatten()[:5].tolist()
+            raise ValueError(
+                "Target digit rows are expected to be one-hot (sum to 1). "
+                f"Found rows that sum to values != 1. Example flat indices: {first_bad}."
+            )
+
+        target_idx = target_flat.argmax(dim=-1)  # (num_valid*N*D,)
+
+        # Standard cross-entropy over raw logits - bounded loss prevents NaN
+        digit_loss = F.cross_entropy(logits_flat, target_idx, reduction="mean")
+
+    return digit_loss
+
+
 def _compute_exec_loss(
     pred_exec: torch.Tensor, target_exec: torch.Tensor
 ) -> torch.Tensor:
@@ -118,7 +190,7 @@ def _compute_exec_loss(
 
 
 def compute_dag_loss(
-    pred_V_mag: torch.Tensor,  # (B, T, total_nodes) predicted magnitudes
+    pred_digit_logits: torch.Tensor,  # (B, T, num_initial_nodes, D, base) predicted digit logits
     pred_V_sign: torch.Tensor,  # (B, T, total_nodes) predicted signs
     pred_O: torch.Tensor,  # (B, T, dag_depth, total_nodes) predicted operand selection
     pred_G: torch.Tensor,  # (B, T, dag_depth) predicted domain gates
@@ -128,25 +200,24 @@ def compute_dag_loss(
     valid_mask: torch.Tensor,  # (B, T) boolean mask for valid positions
     dag_executor=None,  # Optional DAGExecutor for execution loss
 ) -> dict[str, torch.Tensor]:
-    """Compute loss for DAG tensor format with V_mag, V_sign, O, G targets.
+    """Compute loss for DAG tensor format with digit prediction, V_sign, O, G targets.
 
     Args:
-        pred_V_mag: (B, T, total_nodes) predicted magnitudes
+        pred_digit_logits: (B, T, num_initial_nodes, D, base) predicted digit logits for initial nodes
         pred_V_sign: (B, T, total_nodes) predicted signs
         pred_O: (B, T, dag_depth, total_nodes) predicted operand selectors
         pred_G: (B, T, dag_depth) predicted domain gates
         target_tensors: (B, T) nested list of target dictionaries with keys:
-            - "target_V_mag": (total_nodes,) target magnitudes
+            - "target_digits": (num_initial_nodes, D, base) target digit one-hots
             - "target_V_sign": (total_nodes,) target signs
             - "target_O": (dag_depth, total_nodes) target operand selectors
             - "target_G": (dag_depth,) target domain gates
         valid_mask: (B, T) boolean mask for valid positions
-        cfg: Training configuration
 
     Returns:
         Dictionary with loss components
     """
-    device = pred_V_mag.device
+    device = pred_digit_logits.device
 
     # Get valid positions
     valid_positions = valid_mask.nonzero(as_tuple=False)  # (num_valid, 2)
@@ -155,7 +226,7 @@ def compute_dag_loss(
         # No valid positions - return zero losses
         return {
             "total_loss": torch.tensor(0.0, device=device),
-            "V_mag_loss": torch.tensor(0.0, device=device),
+            "digit_loss": torch.tensor(0.0, device=device),
             "V_sign_loss": torch.tensor(0.0, device=device),
             "O_loss": torch.tensor(0.0, device=device),
             "G_loss": torch.tensor(0.0, device=device),
@@ -165,9 +236,9 @@ def compute_dag_loss(
     batch_indices, token_indices = valid_positions[:, 0], valid_positions[:, 1]
 
     # Extract predictions for valid positions
-    pred_V_mag_valid = pred_V_mag[
+    pred_digit_logits_valid = pred_digit_logits[
         batch_indices, token_indices
-    ]  # (num_valid, total_nodes)
+    ]  # (num_valid, num_initial_nodes, D, base)
     pred_V_sign_valid = pred_V_sign[
         batch_indices, token_indices
     ]  # (num_valid, total_nodes)
@@ -183,9 +254,9 @@ def compute_dag_loss(
         valid_targets.append(target_dict)
 
     # Stack targets from all valid positions
-    target_V_mag = torch.stack([t["target_V_mag"] for t in valid_targets]).to(
+    target_digits = torch.stack([t["target_digits"] for t in valid_targets]).to(
         device
-    )  # (num_valid, total_nodes)
+    )  # (num_valid, num_initial_nodes, D, base)
     target_V_sign = torch.stack([t["target_V_sign"] for t in valid_targets]).to(
         device
     )  # (num_valid, total_nodes)
@@ -203,15 +274,49 @@ def compute_dag_loss(
 
     # Compute losses
 
-    # Determine node counts from tensor shapes (total_nodes = (dag_depth + 1) + dag_depth)
-    total_nodes = pred_V_mag_valid.shape[-1]
+    # Determine node counts from tensor shapes
+    total_nodes = pred_V_sign_valid.shape[-1]
     dag_depth = (total_nodes - 1) // 2
     num_initial_nodes = dag_depth + 1
 
-    # Magnitude loss - only on initial nodes (use robust loss for wide range of values)
-    V_mag_loss = _compute_value_loss(
-        pred_V_mag_valid[:, :num_initial_nodes], target_V_mag[:, :num_initial_nodes]
-    )
+    # Digit loss - stable bounded loss for magnitudes
+    digit_loss = _compute_digit_loss(pred_digit_logits_valid, target_digits)
+
+    # V_mag loss - convert digits to magnitudes and compute L2 loss
+    from models.dag_model import DAGExecutor
+
+    # Convert predicted digit logits to V_mag values using shared method
+    # Add batch and time dimensions for DAGExecutor interface: (num_valid, N, D, base) -> (num_valid, 1, N, D, base)
+    pred_digit_logits_expanded = pred_digit_logits_valid.unsqueeze(1)
+    pred_V_mag_from_digits = DAGExecutor.digits_to_vmag(
+        pred_digit_logits_expanded,
+        max_digits=pred_digit_logits_valid.shape[-2]
+        // 2,  # Assuming D = max_digits + max_decimal_places
+        max_decimal_places=pred_digit_logits_valid.shape[-2] // 2,
+        base=pred_digit_logits_valid.shape[-1],
+    ).squeeze(
+        1
+    )  # (num_valid, num_initial_nodes)
+
+    # Convert target digits to V_mag values for comparison
+    target_V_mag_from_digits = []
+    for i in range(target_digits.shape[0]):
+        target_digits_expanded = target_digits[i : i + 1].unsqueeze(
+            1
+        )  # (1, 1, N, D, base)
+        target_V_mag = DAGExecutor.digits_to_vmag(
+            target_digits_expanded,
+            max_digits=target_digits.shape[-2] // 2,
+            max_decimal_places=target_digits.shape[-2] // 2,
+            base=target_digits.shape[-1],
+        ).squeeze()  # (num_initial_nodes,)
+        target_V_mag_from_digits.append(target_V_mag)
+    target_V_mag_from_digits = torch.stack(
+        target_V_mag_from_digits
+    )  # (num_valid, num_initial_nodes)
+
+    # Compute V_mag loss using robust value loss
+    V_mag_loss = _compute_value_loss(pred_V_mag_from_digits, target_V_mag_from_digits)
 
     # Sign loss - only on initial nodes (L2 on tanh-activated predictions)
     V_sign_loss = F.mse_loss(
@@ -229,11 +334,10 @@ def compute_dag_loss(
     exec_loss = torch.tensor(0.0, device=device)
     if dag_executor is not None:
         try:
-            # Execute the predicted DAG tensors
-            # Need to add batch and time dimensions back for executor: (num_valid,) -> (num_valid, 1)
-            pred_V_mag_exec = pred_V_mag_valid.unsqueeze(
+            # Add batch and time dimensions back for executor: (num_valid,) -> (num_valid, 1)
+            pred_digit_logits_exec = pred_digit_logits_valid.unsqueeze(
                 1
-            )  # (num_valid, 1, total_nodes)
+            )  # (num_valid, 1, num_initial_nodes, D, base)
             pred_V_sign_exec = pred_V_sign_valid.unsqueeze(
                 1
             )  # (num_valid, 1, total_nodes)
@@ -242,9 +346,9 @@ def compute_dag_loss(
             )  # (num_valid, 1, dag_depth, total_nodes)
             pred_G_exec = pred_G_valid.unsqueeze(1)  # (num_valid, 1, dag_depth)
 
-            # Execute predicted DAG
+            # Execute predicted DAG - executor handles digit conversion internally
             pred_final_exec = dag_executor(
-                pred_V_mag_exec, pred_V_sign_exec, pred_O_exec, pred_G_exec
+                pred_digit_logits_exec, pred_V_sign_exec, pred_O_exec, pred_G_exec
             )  # (num_valid, 1)
             pred_final_exec = pred_final_exec.squeeze(1)  # (num_valid,)
 
@@ -258,11 +362,17 @@ def compute_dag_loss(
 
     exec_loss_weight = 0.01
     total_loss = (
-        V_mag_loss + V_sign_loss + O_loss + G_loss + (exec_loss * exec_loss_weight)
+        digit_loss
+        + V_mag_loss
+        + V_sign_loss
+        + O_loss
+        + G_loss
+        + (exec_loss * exec_loss_weight)
     )
 
     return {
         "total_loss": total_loss,
+        "digit_loss": digit_loss,
         "V_mag_loss": V_mag_loss,
         "V_sign_loss": V_sign_loss,
         "O_loss": O_loss,
