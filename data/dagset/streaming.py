@@ -45,7 +45,12 @@ class Recip(sympy.Function):
 
 
 def isNum(node: sympy.Basic):
-    return isinstance(node, sympy.Integer) or isinstance(node, sympy.Float)
+    return (
+        isinstance(node, sympy.Integer)
+        or isinstance(node, sympy.Float)
+        or isinstance(node, sympy.Rational)
+        or isinstance(node, sympy.Number)
+    )
 
 
 def isUnnormalizedNegation(node: sympy.Basic):
@@ -343,14 +348,11 @@ def expression_to_tensors(
     values = []
     step_index = 0
 
-    # PHASE 1: Collect all initial numeric values (including Neg of numbers)
+    # PHASE 1: Collect all initial numeric values
     for node in postorder_traversal(normalized_expr):
-        is_float = isinstance(node, sympy_float)
-        is_int = isinstance(node, sympy.Integer)
-        is_rational = isinstance(node, sympy.Rational)
 
         # Handle direct numbers
-        if is_float or is_int or is_rational:
+        if isNum(node):
             if step_index >= num_initial_nodes:
                 raise ValueError(
                     f"Expression has too many initial values. Needs dag_depth >= {step_index - 1} (allowing {num_initial_nodes} initial values)"
@@ -422,15 +424,11 @@ def expression_to_tensors(
         coefficients = []
 
         for arg in node.args:
-            if isinstance(arg, Neg):
-                operands.append(arg.args[0])  # Extract x from Neg(x)
-                coefficients.append(-1)
-            elif isinstance(arg, Recip):
-                operands.append(arg.args[0])  # Extract x from Recip(x)
+            if isinstance(arg, Neg) or isinstance(arg, Recip):
                 coefficients.append(-1)
             else:
-                operands.append(arg)
                 coefficients.append(1)
+            operands.append(arg)
 
         # Map operands to values array with coefficients
         for operand, coeff in zip(operands, coefficients):
