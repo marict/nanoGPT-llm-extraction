@@ -63,14 +63,14 @@ keep_alive = False  # Auto-stop by default
 check_nans = False  # Check for NaNs in cloud training
 
 
+# Loss component flags
+enable_digit_loss = True
+enable_vmag_loss = False
+enable_vsign_loss = True
+enable_o_loss = True
+enable_g_loss = True
+enable_exec_loss = False
+exec_loss_weight = 0.01
+
 # Random seeds
 seed = 42
-
-loss_flags = {
-    "sign": True,
-    "digit": True,
-    "op": True,
-    "value": True,
-    "exec": True,
-    "stats": False,
-}

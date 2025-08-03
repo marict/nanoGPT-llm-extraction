@@ -199,6 +199,7 @@ def compute_dag_loss(
     ],  # (B, T) nested list: new target tensors
     valid_mask: torch.Tensor,  # (B, T) boolean mask for valid positions
     dag_executor=None,  # Optional DAGExecutor for execution loss
+    cfg=None,  # Configuration object with loss flags
 ) -> dict[str, torch.Tensor]:
     """Compute loss for DAG tensor format with digit prediction, V_sign, O, G targets.
 
@@ -360,15 +361,30 @@ def compute_dag_loss(
             )
             raise
 
-    exec_loss_weight = 0.01
-    total_loss = (
-        digit_loss
-        + V_mag_loss
-        + V_sign_loss
-        + O_loss
-        + G_loss
-        + (exec_loss * exec_loss_weight)
-    )
+    # Build total loss from enabled components
+    total_loss = torch.tensor(0.0, device=device)
+
+    # Use cfg flags if provided, otherwise default to all enabled
+    enable_digit_loss = getattr(cfg, "enable_digit_loss", True)
+    enable_vmag_loss = getattr(cfg, "enable_vmag_loss", True)
+    enable_vsign_loss = getattr(cfg, "enable_vsign_loss", True)
+    enable_o_loss = getattr(cfg, "enable_o_loss", True)
+    enable_g_loss = getattr(cfg, "enable_g_loss", True)
+    enable_exec_loss = getattr(cfg, "enable_exec_loss", True)
+    exec_loss_weight = getattr(cfg, "exec_loss_weight", 0.01)
+
+    if enable_digit_loss:
+        total_loss = total_loss + digit_loss
+    if enable_vmag_loss:
+        total_loss = total_loss + V_mag_loss
+    if enable_vsign_loss:
+        total_loss = total_loss + V_sign_loss
+    if enable_o_loss:
+        total_loss = total_loss + O_loss
+    if enable_g_loss:
+        total_loss = total_loss + G_loss
+    if enable_exec_loss:
+        total_loss = total_loss + (exec_loss * exec_loss_weight)
 
     return {
         "total_loss": total_loss,

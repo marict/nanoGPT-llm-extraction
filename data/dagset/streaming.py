@@ -13,8 +13,7 @@ from typing import Iterator, Tuple
 import sympy
 import torch
 from num2words import num2words
-from sympy import im, postorder_traversal
-from sympy.core.numbers import Float as sympy_float
+from sympy import postorder_traversal
 from tiktoken import get_encoding
 
 # Add parent directories to path for imports
@@ -314,9 +313,7 @@ def digit_onehot_to_float(
 
         return final_value
 
-    except (ValueError, OverflowError) as e:
-        if isinstance(e, ValueError) and "non-finite" in str(e):
-            raise e  # Re-raise our own validation errors
+    except Exception as e:
         raise ValueError(f"Failed to convert digits to float: {e}") from e
 
 

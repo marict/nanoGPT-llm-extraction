@@ -52,21 +52,16 @@ class DAGTrainConfig(BaseConfig):
     lr_decay_iters: int = 10000
     min_lr: float = 3e-5
 
+    # Loss component flags
+    enable_digit_loss: bool = True
+    enable_vmag_loss: bool = True
+    enable_vsign_loss: bool = True
+    enable_o_loss: bool = True
+    enable_g_loss: bool = True
+    enable_exec_loss: bool = True
+    exec_loss_weight: float = 0.01
+
     # Random seeds
     seed: int = 42
-
-    # Loss configuration - flags to enable/disable specific loss components
-    # Disabled losses are still computed for logging but excluded from optimization
-    # Available flags: "sign", "digit", "op", "value", "exec", "stats"
-    loss_flags: dict[str, bool] = field(
-        default_factory=lambda: {
-            "sign": True,
-            "digit": True,
-            "op": True,
-            "value": False,
-            "exec": False,
-            "stats": False,
-        }
-    )
 
     n_layer: int = 12

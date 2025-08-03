@@ -52,14 +52,3 @@ min_lr = 1e-4
 backend = "gloo"
 dtype = "float32"  # Fastest on most systems
 compile = False  # Skip compilation overhead
-
-loss_flags: dict[str, bool] = field(
-    default_factory=lambda: {
-        "sign": False,
-        "digit": False,
-        "op": False,
-        "value": False,
-        "exec": False,
-        "stats": False,
-    }
-)
