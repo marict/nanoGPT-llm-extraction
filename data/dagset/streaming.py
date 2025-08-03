@@ -823,8 +823,10 @@ def expressions_to_tensors(
         except:
             string_expr = str(expr)
             print(f"Conversion failed for expression: {string_expr}")
-            print()
-            print(f"Other format: {sympy.sympify(string_expr)}")
+            string_expr2 = str(sympy.sympify(string_expr, evaluate=False))
+            print(f"Other format: {string_expr2}")
+            string_expr3 = str(sympy.sympify(string_expr2, evaluate=False))
+            print(f"Other format: {string_expr3}")
             raise
 
     return tensor_results, valid_mask
