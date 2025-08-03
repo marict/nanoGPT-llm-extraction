@@ -165,8 +165,8 @@ def float_to_digit_onehot(
     temp_frac = frac_part
     for _ in range(max_decimal_places):
         temp_frac *= base
-        # Add small epsilon and round to mitigate floating point precision issues
-        digit = round(temp_frac + 1e-10) if temp_frac < base - 0.5 else int(temp_frac)
+        # Extract the integer part as the digit
+        digit = int(temp_frac)
         digit = min(max(digit, 0), base - 1)  # Clamp to valid range
         frac_digits.append(digit)
         temp_frac -= digit
