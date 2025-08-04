@@ -73,6 +73,111 @@ def _compute_value_loss(
     return value_loss
 
 
+def _compute_vsign_loss(
+    pred_V_sign_valid: torch.Tensor,  # (num_valid, total_nodes) - Predicted signs (tanh outputs)
+    target_V_sign: torch.Tensor,  # (num_valid, total_nodes) - Target signs
+    num_initial_nodes: int,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute V_sign loss and sign accuracy.
+
+    Args:
+        pred_V_sign_valid: (num_valid, total_nodes) predicted signs (tanh activated)
+        target_V_sign: (num_valid, total_nodes) target signs
+        num_initial_nodes: Number of initial nodes (signs only matter for these)
+        device: Device for tensor operations
+
+    Returns:
+        Tuple of (V_sign_loss, sign_accuracy)
+    """
+    # Sign loss - only on initial nodes (model already outputs tanh-activated values)
+    V_sign_loss = F.mse_loss(
+        pred_V_sign_valid[:, :num_initial_nodes],
+        target_V_sign[:, :num_initial_nodes],
+    )
+
+    # Sign accuracy - V_sign predictions (tanh outputs) vs {-1, 1} targets
+    # Convert tanh outputs to discrete values using thresholds
+    pred_V_sign_discrete = torch.where(
+        pred_V_sign_valid[:, :num_initial_nodes] > 0.5,
+        torch.tensor(1.0, device=device),
+        torch.where(
+            pred_V_sign_valid[:, :num_initial_nodes] < -0.5,
+            torch.tensor(-1.0, device=device),
+            torch.tensor(0.0, device=device),
+        ),
+    )
+    sign_correct = (
+        pred_V_sign_discrete == target_V_sign[:, :num_initial_nodes]
+    ).float()
+    sign_accuracy = sign_correct.mean()  # Average across tokens and batch
+
+    return V_sign_loss, sign_accuracy
+
+
+def _compute_o_loss(
+    pred_O_valid: torch.Tensor,  # (num_valid, dag_depth, total_nodes) - Predicted operand selectors
+    target_O: torch.Tensor,  # (num_valid, dag_depth, total_nodes) - Target operand selectors
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute operand selector loss and operand accuracy.
+
+    Args:
+        pred_O_valid: (num_valid, dag_depth, total_nodes) predicted operand selectors
+        target_O: (num_valid, dag_depth, total_nodes) target operand selectors
+        device: Device for tensor operations
+
+    Returns:
+        Tuple of (O_loss, op_accuracy)
+    """
+    # Operand selector loss (L2)
+    O_loss = F.mse_loss(pred_O_valid, target_O)
+
+    # Operand accuracy - O predictions vs target operand selectors
+    # Convert O predictions to discrete values {-1, 0, 1} using thresholds
+    pred_O_discrete = torch.where(
+        pred_O_valid > 0.5,
+        torch.tensor(1.0, device=device),
+        torch.where(
+            pred_O_valid < -0.5,
+            torch.tensor(-1.0, device=device),
+            torch.tensor(0.0, device=device),
+        ),
+    )
+    op_correct = (pred_O_discrete == target_O).float()
+    op_accuracy = op_correct.mean()  # Average across tokens and batch
+
+    return O_loss, op_accuracy
+
+
+def _compute_g_loss(
+    pred_G_valid: torch.Tensor,  # (num_valid, dag_depth) - Predicted gate values (raw logits)
+    target_G: torch.Tensor,  # (num_valid, dag_depth) - Target gate values
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute domain gate loss and gate accuracy.
+
+    Args:
+        pred_G_valid: (num_valid, dag_depth) predicted gate values (raw logits)
+        target_G: (num_valid, dag_depth) target gate values
+        device: Device for tensor operations
+
+    Returns:
+        Tuple of (G_loss, gate_accuracy)
+    """
+    # Domain gate loss (L2 on sigmoid-activated predictions)
+    pred_G_sigmoid = torch.sigmoid(pred_G_valid)
+    G_loss = F.mse_loss(pred_G_sigmoid, target_G)
+
+    # Gate accuracy - G predictions (sigmoid outputs) vs {0, 1} targets
+    # Convert sigmoid outputs to discrete values using 0.5 threshold
+    pred_G_discrete = (pred_G_sigmoid > 0.5).float()
+    gate_correct = (pred_G_discrete == target_G).float()
+    gate_accuracy = gate_correct.mean()  # Average across tokens and batch
+
+    return G_loss, gate_accuracy
+
+
 def _compute_digit_loss(
     pred_digit_logits: torch.Tensor,  # (num_valid, N, D, base) - Raw logits for each digit
     target_digits: torch.Tensor,  # (num_valid, N, D, base) - One-hot target digits
@@ -324,14 +429,19 @@ def compute_dag_loss(
     valid_positions = valid_mask.nonzero(as_tuple=False)  # (num_valid, 2)
 
     if valid_positions.numel() == 0:
-        # No valid positions - return zero losses
+        # No valid positions - return zero losses and accuracies
         return {
             "total_loss": torch.tensor(0.0, device=device),
             "digit_loss": torch.tensor(0.0, device=device),
+            "digit_accuracy": torch.tensor(0.0, device=device),
+            "V_mag_loss": torch.tensor(0.0, device=device),
             "V_sign_loss": torch.tensor(0.0, device=device),
             "O_loss": torch.tensor(0.0, device=device),
             "G_loss": torch.tensor(0.0, device=device),
             "exec_loss": torch.tensor(0.0, device=device),
+            "sign_accuracy": torch.tensor(0.0, device=device),
+            "op_accuracy": torch.tensor(0.0, device=device),
+            "gate_accuracy": torch.tensor(0.0, device=device),
         }
 
     batch_indices, token_indices = valid_positions[:, 0], valid_positions[:, 1]
@@ -388,17 +498,16 @@ def compute_dag_loss(
     # Compute V_mag loss using robust value loss (handles digit conversion internally)
     V_mag_loss = _compute_value_loss(pred_digit_logits_valid, target_digits)
 
-    # Sign loss - only on initial nodes (model already outputs tanh-activated values)
-    V_sign_loss = F.mse_loss(
-        pred_V_sign_valid[:, :num_initial_nodes],
-        target_V_sign[:, :num_initial_nodes],
+    # Compute V_sign loss and sign accuracy
+    V_sign_loss, sign_accuracy = _compute_vsign_loss(
+        pred_V_sign_valid, target_V_sign, num_initial_nodes, device
     )
 
-    # Operand selector loss (L2)
-    O_loss = F.mse_loss(pred_O_valid, target_O)
+    # Compute operand selector loss and operand accuracy
+    O_loss, op_accuracy = _compute_o_loss(pred_O_valid, target_O, device)
 
-    # Domain gate loss (L2 on sigmoid-activated predictions)
-    G_loss = F.mse_loss(torch.sigmoid(pred_G_valid), target_G)
+    # Compute domain gate loss and gate accuracy
+    G_loss, gate_accuracy = _compute_g_loss(pred_G_valid, target_G, device)
 
     # Execution loss (if DAG executor is provided)
     exec_loss = torch.tensor(0.0, device=device)
@@ -451,6 +560,9 @@ def compute_dag_loss(
         "O_loss": O_loss,
         "G_loss": G_loss,
         "exec_loss": exec_loss * exec_loss_weight,
+        "sign_accuracy": sign_accuracy,
+        "op_accuracy": op_accuracy,
+        "gate_accuracy": gate_accuracy,
     }
 
 

@@ -264,8 +264,11 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         f"digit_acc {eval_losses.get('digit_accuracy', 0.0):.1%}, "
                         f"V_mag_loss {eval_losses.get('V_mag_loss', 0.0):.4f}, "
                         f"V_sign_loss {eval_losses.get('V_sign_loss', 0.0):.4f}, "
+                        f"sign_acc {eval_losses.get('sign_accuracy', 0.0):.1%}, "
                         f"O_loss {eval_losses.get('O_loss', 0.0):.4f}, "
+                        f"op_acc {eval_losses.get('op_accuracy', 0.0):.1%}, "
                         f"G_loss {eval_losses.get('G_loss', 0.0):.4f}, "
+                        f"gate_acc {eval_losses.get('gate_accuracy', 0.0):.1%}, "
                         f"exec_loss {eval_losses.get('exec_loss', 0.0):.4f}, "
                         f"valid_rate {eval_losses.get('expression_valid_rate', 0.0):.1%}, "
                         f"time {eval_time_ms:.1f}ms"
@@ -280,8 +283,11 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "val/digit_loss": eval_losses.get("digit_loss", 0.0),
                         "val/digit_accuracy": eval_losses.get("digit_accuracy", 0.0),
                         "val/V_sign_loss": eval_losses.get("V_sign_loss", 0.0),
+                        "val/sign_accuracy": eval_losses.get("sign_accuracy", 0.0),
                         "val/O_loss": eval_losses.get("O_loss", 0.0),
+                        "val/op_accuracy": eval_losses.get("op_accuracy", 0.0),
                         "val/G_loss": eval_losses.get("G_loss", 0.0),
+                        "val/gate_accuracy": eval_losses.get("gate_accuracy", 0.0),
                         "val/exec_loss": eval_losses.get("exec_loss", 0.0),
                         "val/expression_valid_rate": eval_losses.get(
                             "expression_valid_rate", 0.0
@@ -477,6 +483,9 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 G_loss_val = loss_accum.get("G_loss", 0.0)
                 exec_loss_val = loss_accum.get("exec_loss", 0.0)
                 expression_valid_rate_val = loss_accum.get("expression_valid_rate", 0.0)
+                sign_accuracy_val = loss_accum.get("sign_accuracy", 0.0)
+                op_accuracy_val = loss_accum.get("op_accuracy", 0.0)
+                gate_accuracy_val = loss_accum.get("gate_accuracy", 0.0)
 
                 log_msg = (
                     f"iter {iter_num}: loss {loss_accum['total_loss']:.4f}, "
@@ -484,8 +493,11 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     f"digit_acc {digit_accuracy_val:.1%}, "
                     f"V_mag {V_mag_loss_val:.4f}, "
                     f"V_sign {V_sign_loss_val:.4f}, "
+                    f"sign_acc {sign_accuracy_val:.1%}, "
                     f"O {O_loss_val:.4f}, "
+                    f"op_acc {op_accuracy_val:.1%}, "
                     f"G {G_loss_val:.4f}, "
+                    f"gate_acc {gate_accuracy_val:.1%}, "
                     f"exec {exec_loss_val:.4f}, "
                     f"valid_rate {expression_valid_rate_val:.1%}, "
                     f"time {dt*1000:.2f}ms"
@@ -506,8 +518,11 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "train/digit_loss": loss_accum.get("digit_loss", 0.0),
                         "train/digit_accuracy": loss_accum.get("digit_accuracy", 0.0),
                         "train/V_sign_loss": loss_accum.get("V_sign_loss", 0.0),
+                        "train/sign_accuracy": loss_accum.get("sign_accuracy", 0.0),
                         "train/O_loss": loss_accum.get("O_loss", 0.0),
+                        "train/op_accuracy": loss_accum.get("op_accuracy", 0.0),
                         "train/G_loss": loss_accum.get("G_loss", 0.0),
+                        "train/gate_accuracy": loss_accum.get("gate_accuracy", 0.0),
                         "train/exec_loss": loss_accum.get("exec_loss", 0.0),
                         "train/expression_valid_rate": loss_accum.get(
                             "expression_valid_rate", 0.0
