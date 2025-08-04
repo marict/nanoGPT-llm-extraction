@@ -555,9 +555,9 @@ def tensor_to_expression(
             if idx < len(node_expressions):
                 operand = node_expressions[idx]
                 if abs(coeff + 1) < 1e-10:  # coefficient ≈ -1
-                    result_expr = -operand
+                    result_expr = sympy.Mul(-1, operand, evaluate=False)
                 else:
-                    result_expr = coeff * operand
+                    result_expr = sympy.Mul(coeff, operand, evaluate=False)
             else:
                 # Invalid index, use fallback
                 result_expr = (
@@ -581,32 +581,53 @@ def tensor_to_expression(
                 operand2, coeff2 = valid_operands[1]
 
                 # Determine operation type based on domain and coefficients
+                # Use unevaluated operations to preserve expression structure
                 if domain_gate == 0:  # Log domain (Mul/Div)
                     if abs(coeff1 - 1) < 1e-10 and abs(coeff2 - 1) < 1e-10:
-                        result_expr = operand1 * operand2
+                        result_expr = sympy.Mul(operand1, operand2, evaluate=False)
                     elif abs(coeff1 - 1) < 1e-10 and abs(coeff2 + 1) < 1e-10:
-                        result_expr = operand1 / operand2
+                        result_expr = sympy.Mul(
+                            operand1,
+                            sympy.Pow(operand2, -1, evaluate=False),
+                            evaluate=False,
+                        )
                     else:
                         # General case with coefficients
                         if coeff2 > 0:
-                            result_expr = operand1 * (operand2**coeff2)
+                            result_expr = sympy.Mul(
+                                operand1,
+                                sympy.Pow(operand2, coeff2, evaluate=False),
+                                evaluate=False,
+                            )
                         else:
-                            result_expr = operand1 / (operand2 ** abs(coeff2))
+                            result_expr = sympy.Mul(
+                                operand1,
+                                sympy.Pow(operand2, -abs(coeff2), evaluate=False),
+                                evaluate=False,
+                            )
                 else:  # Linear domain (Add/Sub)
                     if abs(coeff1 - 1) < 1e-10 and abs(coeff2 - 1) < 1e-10:
-                        result_expr = operand1 + operand2
+                        result_expr = sympy.Add(operand1, operand2, evaluate=False)
                     elif abs(coeff1 - 1) < 1e-10 and abs(coeff2 + 1) < 1e-10:
-                        result_expr = operand1 - operand2
+                        result_expr = sympy.Add(
+                            operand1,
+                            sympy.Mul(-1, operand2, evaluate=False),
+                            evaluate=False,
+                        )
                     else:
                         # General case with coefficients
-                        result_expr = coeff1 * operand1 + coeff2 * operand2
+                        result_expr = sympy.Add(
+                            sympy.Mul(coeff1, operand1, evaluate=False),
+                            sympy.Mul(coeff2, operand2, evaluate=False),
+                            evaluate=False,
+                        )
             elif len(valid_operands) == 1:
                 # Only one valid operand - treat as unary
                 operand, coeff = valid_operands[0]
                 if abs(coeff + 1) < 1e-10:
-                    result_expr = -operand
+                    result_expr = sympy.Mul(-1, operand, evaluate=False)
                 else:
-                    result_expr = coeff * operand
+                    result_expr = sympy.Mul(coeff, operand, evaluate=False)
             else:
                 # No valid operands - use fallback
                 result_expr = (
@@ -628,9 +649,9 @@ def tensor_to_expression(
                 if abs(coeff - 1) < 1e-10:
                     terms.append(operand)
                 elif abs(coeff + 1) < 1e-10:
-                    terms.append(-operand)
+                    terms.append(sympy.Mul(-1, operand, evaluate=False))
                 else:
-                    terms.append(coeff * operand)
+                    terms.append(sympy.Mul(coeff, operand, evaluate=False))
 
             if len(terms) == 0:
                 # No valid operands, use first initial value as fallback
@@ -640,9 +661,9 @@ def tensor_to_expression(
             elif len(terms) == 1:
                 result_expr = terms[0]
             elif domain_gate == 0:  # Log domain - multiply
-                result_expr = sympy.Mul(*terms)
+                result_expr = sympy.Mul(*terms, evaluate=False)
             else:  # Linear domain - add
-                result_expr = sympy.Add(*terms)
+                result_expr = sympy.Add(*terms, evaluate=False)
 
         # Store intermediate result
         if len(node_expressions) <= num_initial_nodes + step:

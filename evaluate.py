@@ -7,121 +7,137 @@ for better code organization and separation of concerns.
 import random as _eval_random
 from typing import Dict
 
+import sympy
 import torch
 import torch.distributed as dist
-import torch.nn.functional as F
 
-from data.dagset.streaming import digit_onehot_to_float
+from data.dagset.streaming import tensor_to_expression
 from predictor_utils import compute_dag_loss, tokenize_texts
 
 
-def dag_tensors_to_english(
-    digit_logits, V_sign, O, G, dag_depth=None, max_digits=4, max_decimal_places=4
+def print_detailed_validation_sample(
+    texts,
+    target_tensors,
+    valid_mask,
+    pred_digit_logits,
+    pred_V_sign,
+    pred_O,
+    pred_G,
+    dag_executor,
+    cfg,
+    seed,
+    batch_idx,
 ):
     """
-    Convert DAG tensors to readable English representation using argmax.
+    Print detailed validation information for a single sample.
 
     Args:
-        digit_logits: (num_initial_nodes, D, base) digit prediction logits
-        V_sign: (total_nodes,) sign values
-        O: (dag_depth, total_nodes) operand selectors
-        G: (dag_depth,) domain gates
-        dag_depth: Number of operation steps (default: use O.shape[0])
-        max_digits: Maximum number of integer digits
-        max_decimal_places: Maximum number of decimal places
-
-    Returns:
-        str: Human-readable representation of the DAG
+        texts: List of input text expressions
+        target_tensors: Target tensor data for the batch
+        valid_mask: Boolean mask indicating valid positions
+        pred_digit_logits: Predicted digit logits
+        pred_V_sign: Predicted signs
+        pred_O: Predicted operand selectors
+        pred_G: Predicted domain gates
+        dag_predictor: DAG predictor model
+        dag_executor: DAG executor for computing final values
+        cfg: Configuration object with max_digits, max_decimal_places, batch_size
+        seed: Random seed used for validation
+        batch_idx: Index of current batch
     """
+    # Reconstruct seed for this sample
+    sample_seed = seed + batch_idx * cfg.batch_size + 10000  # Validation offset
 
-    num_initial_nodes = digit_logits.shape[0]
-    total_nodes = V_sign.shape[0]
+    print(f"\n=== DETAILED VALIDATION SAMPLE (seed={sample_seed}) ===")
+    print(f"Expression Text: '{texts[0]}'")
 
-    # Create V_mag from digit predictions
-    V_mag = torch.zeros(total_nodes)
+    # Get the last valid token position for this sample (complete expression)
+    sample_mask = valid_mask[0]  # (T,)
+    last_valid_pos = -1
+    for pos in range(len(sample_mask)):
+        if sample_mask[pos]:
+            last_valid_pos = pos
 
-    # Convert digit logits to V_mag for initial nodes
-    digit_probs = torch.softmax(digit_logits, dim=-1)  # (num_initial_nodes, D, base)
-
-    for n in range(num_initial_nodes):
-        # Convert digit probabilities to float value
-        digit_indices = torch.argmax(digit_probs[n], dim=1)  # (D,)
-
-        # Use the conversion function
-        digit_onehot = torch.zeros_like(digit_probs[n])
-        for d, idx in enumerate(digit_indices):
-            digit_onehot[d, idx] = 1.0
-
-        # Get sign for this node
-        sign = V_sign[n].item()
-
-        # Convert to float
-        float_value = digit_onehot_to_float(
-            digit_onehot, sign, max_digits, max_decimal_places
+    if last_valid_pos < 0:
+        raise ValueError(
+            f"No valid tokens found in validation sample: '{texts[0]}'. This should never happen during validation."
         )
-        V_mag[n] = abs(float_value)
 
-    if dag_depth is None:
-        dag_depth = O.shape[0]
+    # Get target and prediction for the final/complete expression
+    target_dict = target_tensors[0][last_valid_pos]
 
-    total_nodes = V_mag.shape[0]
-    # Use new architecture: (dag_depth + 1) + dag_depth
-    num_initial_nodes = (total_nodes + 1) // 2
-    initial_slots = num_initial_nodes
+    # Target DAG tensors - convert from digit targets
+    target_digits = target_dict["target_digits"]  # (num_initial_nodes, D, base)
+    target_V_sign = target_dict["target_V_sign"]  # (total_nodes,)
+    target_O = target_dict["target_O"]  # (dag_depth, total_nodes)
+    target_G = target_dict["target_G"]  # (dag_depth,)
+    target_final_exec = target_dict["target_final_exec"]
 
-    # Format initial values
-    initial_values = []
-    for i in range(initial_slots):
-        mag = V_mag[i].item()
-        sign = V_sign[i].item()
-        value = sign * mag
-        initial_values.append(f"{value:.3f}")
+    # Convert target tensors to expression string
+    target_expr = tensor_to_expression(
+        target_digits,
+        target_V_sign,
+        target_O,
+        target_G,
+        max_digits=cfg.max_digits,
+        max_decimal_places=cfg.max_decimal_places,
+    )
+    target_expression_text = str(target_expr)
 
-    result = f"Initial Values: [{', '.join(initial_values)}]\n"
+    # Extract single prediction tensors for expression conversion
+    single_digit_logits = pred_digit_logits[
+        0, last_valid_pos
+    ]  # (num_initial_nodes, D, base)
+    single_V_sign = pred_V_sign[0, last_valid_pos]  # (total_nodes,)
+    single_O = pred_O[0, last_valid_pos]  # (dag_depth, total_nodes)
+    single_G = pred_G[0, last_valid_pos]  # (dag_depth,)
 
-    # Format operations
-    operations = []
-    for step in range(dag_depth):
-        # Get operand selection (argmax over operands)
-        operand_probs = O[step]  # (total_nodes,)
+    # Convert predicted tensors to expression string using same method as target
+    pred_expr = tensor_to_expression(
+        single_digit_logits,
+        single_V_sign,
+        single_O,
+        single_G,
+        max_digits=cfg.max_digits,
+        max_decimal_places=cfg.max_decimal_places,
+    )
+    pred_expression_text = str(pred_expr)
 
-        # Find which operands are selected (non-zero after argmax)
-        # For simplicity, take top 2 operands as this is typical for binary operations
-        _, top_indices = torch.topk(operand_probs, k=min(2, total_nodes))
+    # Execute predicted DAG if executor is available
+    pred_final_exec = 0.0
+    if dag_executor is not None:
+        # Reuse the already extracted single tensors for execution
+        # Add batch and time dimensions for executor
+        pred_digit_logits_exec = single_digit_logits.unsqueeze(0).unsqueeze(
+            0
+        )  # (1, 1, num_initial_nodes, D, base)
+        pred_V_sign_exec = single_V_sign.unsqueeze(0).unsqueeze(
+            0
+        )  # (1, 1, total_nodes)
+        pred_O_exec = single_O.unsqueeze(0).unsqueeze(
+            0
+        )  # (1, 1, dag_depth, total_nodes)
+        pred_G_exec = single_G.unsqueeze(0).unsqueeze(0)  # (1, 1, dag_depth)
 
-        # Domain gate (sigmoid for interpretation)
-        domain = torch.sigmoid(G[step]).item()
-        domain_str = "linear" if domain > 0.5 else "log"
+        pred_final_exec = dag_executor(
+            pred_digit_logits_exec,
+            pred_V_sign_exec,
+            pred_O_exec,
+            pred_G_exec,
+        )[0, 0].item()
 
-        # Result slot
-        result_slot = initial_slots + step
-        result_mag = V_mag[result_slot].item() if result_slot < total_nodes else 0.0
-        result_sign = V_sign[result_slot].item() if result_slot < total_nodes else 1.0
-        result_value = result_sign * result_mag
+    print(f"Target Expression: {str(target_expr)}")
+    print(f"Target Final Execution: {target_final_exec:.6f}")
+    print(f"Predicted Expression: {str(pred_expr)}")
+    print(f"Predicted Final Execution: {pred_final_exec:.6f}")
 
-        # Format operands
-        operand_strs = []
-        for idx in top_indices:
-            idx_val = idx.item()
-            if idx_val < total_nodes:
-                op_mag = V_mag[idx_val].item()
-                op_sign = V_sign[idx_val].item()
-                op_value = op_sign * op_mag
-                operand_strs.append(f"slot{idx_val}({op_value:.3f})")
+    if not torch.isnan(torch.tensor(pred_final_exec)):
+        exec_error = abs(target_final_exec - pred_final_exec)
+        print(f"Execution Error: {exec_error:.6f}")
+    else:
+        print("Execution Error: NaN (execution failed)")
 
-        op_str = f"Step {step}: {' ○ '.join(operand_strs)} → slot{result_slot}({result_value:.3f}) [{domain_str}]"
-        operations.append(op_str)
-
-    result += "Operations:\n" + "\n".join(f"  {op}" for op in operations)
-
-    # Final result (last slot)
-    final_slot = total_nodes - 1
-    final_mag = V_mag[final_slot].item()
-    final_sign = V_sign[final_slot].item()
-    final_value = final_sign * final_mag
-    result += f"\nFinal Result: {final_value:.6f}"
-
-    return result
+    print("=" * 60 + "\n")
 
 
 def evaluate_dag_model(
@@ -262,119 +278,19 @@ def evaluate_dag_model(
 
                     # Display detailed validation for every batch during validation sessions
                     if valid_tokens_count > 0 and len(texts) > 0:
-                        # Reconstruct seed for this sample
-                        sample_seed = (
-                            seed + i * cfg.batch_size + 10000
-                        )  # Validation offset
-
-                        print(
-                            f"\n=== DETAILED VALIDATION SAMPLE (seed={sample_seed}) ==="
+                        print_detailed_validation_sample(
+                            texts=texts,
+                            target_tensors=target_tensors,
+                            valid_mask=valid_mask,
+                            pred_digit_logits=pred_digit_logits,
+                            pred_V_sign=pred_V_sign,
+                            pred_O=pred_O,
+                            pred_G=pred_G,
+                            dag_executor=dag_executor,
+                            cfg=cfg,
+                            seed=seed,
+                            batch_idx=i,
                         )
-                        print(f"Expression Text: '{texts[0]}'")
-
-                        # Get the last valid token position for this sample (complete expression)
-                        sample_mask = valid_mask[0]  # (T,)
-                        last_valid_pos = -1
-                        for pos in range(len(sample_mask)):
-                            if sample_mask[pos]:
-                                last_valid_pos = pos
-
-                        if last_valid_pos >= 0:
-                            # Get target and prediction for the final/complete expression
-                            target_dict = target_tensors[0][last_valid_pos]
-
-                            # Target DAG tensors - convert from digit targets
-                            target_digits = target_dict[
-                                "target_digits"
-                            ]  # (num_initial_nodes, D, base)
-                            target_V_sign = target_dict[
-                                "target_V_sign"
-                            ]  # (total_nodes,)
-                            target_O = target_dict[
-                                "target_O"
-                            ]  # (dag_depth, total_nodes)
-                            target_G = target_dict["target_G"]  # (dag_depth,)
-                            target_final_exec = target_dict["target_final_exec"]
-
-                            # Predicted DAG tensors (from the forward pass)
-                            pred_digit_logits_sample = pred_digit_logits[
-                                0, last_valid_pos
-                            ]  # (num_initial_nodes, D, base)
-                            pred_V_sign_sample = pred_V_sign[
-                                0, last_valid_pos
-                            ]  # (total_nodes,)
-                            pred_O_sample = pred_O[
-                                0, last_valid_pos
-                            ]  # (dag_depth, total_nodes)
-                            pred_G_sample = pred_G[0, last_valid_pos]  # (dag_depth,)
-
-                            # Convert to English representations
-                            target_english = dag_tensors_to_english(
-                                target_digits,
-                                target_V_sign,
-                                target_O,
-                                target_G,
-                                max_digits=cfg.max_digits,
-                                max_decimal_places=cfg.max_decimal_places,
-                            )
-
-                            # Use the new to_text method for model predictions
-                            pred_expression_text = dag_predictor.to_text(
-                                pred_digit_logits,
-                                pred_V_sign,
-                                pred_O,
-                                pred_G,
-                                batch_idx=0,
-                                time_idx=last_valid_pos,
-                            )
-
-                            # Execute predicted DAG if executor is available
-                            pred_final_exec = 0.0
-                            if dag_executor is not None:
-                                try:
-                                    # Add batch and time dimensions for executor
-                                    pred_digit_logits_exec = (
-                                        pred_digit_logits_sample.unsqueeze(0).unsqueeze(
-                                            0
-                                        )
-                                    )  # (1, 1, num_initial_nodes, D, base)
-                                    pred_V_sign_exec = pred_V_sign_sample.unsqueeze(
-                                        0
-                                    ).unsqueeze(
-                                        0
-                                    )  # (1, 1, total_nodes)
-                                    pred_O_exec = pred_O_sample.unsqueeze(0).unsqueeze(
-                                        0
-                                    )  # (1, 1, dag_depth, total_nodes)
-                                    pred_G_exec = pred_G_sample.unsqueeze(0).unsqueeze(
-                                        0
-                                    )  # (1, 1, dag_depth)
-
-                                    pred_final_exec = dag_executor(
-                                        pred_digit_logits_exec,
-                                        pred_V_sign_exec,
-                                        pred_O_exec,
-                                        pred_G_exec,
-                                    )[0, 0].item()
-                                except Exception as e:
-                                    pred_final_exec = float("nan")
-                                    print(f"  Warning: DAG execution failed: {e}")
-
-                            print("\n--- TARGET DAG ---")
-                            print(target_english)
-                            print(f"Target Final Execution: {target_final_exec:.6f}")
-
-                            print("\n--- PREDICTED DAG ---")
-                            print(f"Model Prediction: {pred_expression_text}")
-                            print(f"Predicted Final Execution: {pred_final_exec:.6f}")
-
-                            if not torch.isnan(torch.tensor(pred_final_exec)):
-                                exec_error = abs(target_final_exec - pred_final_exec)
-                                print(f"Execution Error: {exec_error:.6f}")
-                            else:
-                                print("Execution Error: NaN (execution failed)")
-
-                        print("=" * 60 + "\n")
 
             except Exception as e:
                 # Fail fast on ALL exceptions during evaluation - no skipping

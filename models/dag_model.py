@@ -16,6 +16,8 @@ import torch
 import torch.nn as nn
 from rff.layers import PositionalEncoding
 
+from data.dagset.streaming import tensor_to_expression
+
 from .base_model import BaseGPTModel
 
 # Log-space arithmetic utilities
@@ -132,7 +134,8 @@ class DAGExecutor(nn.Module):
                             )
 
                         # Clip to reasonable range to prevent inf/nan in operations
-                        clipped_value = torch.clamp(total_value, min=1e-8, max=1e6)
+                        # Allow for large intermediate results from compound arithmetic operations
+                        clipped_value = torch.clamp(total_value, min=1e-8, max=1e18)
                         V_mag[b, t, n] = clipped_value
 
                     except Exception as e:
@@ -216,7 +219,7 @@ class DAGExecutor(nn.Module):
             V_sign_new = G_step * linear_sign + (1 - G_step) * log_sign
 
             # For magnitude: use safer clamping to prevent exp overflow
-            linear_mag = torch.clamp(torch.abs(R_mag), max=1e6)
+            linear_mag = torch.clamp(torch.abs(R_mag), max=1e18)
 
             # For log domain, clamp R_mag before exp to prevent overflow
             R_mag_clamped = torch.clamp(
@@ -228,7 +231,7 @@ class DAGExecutor(nn.Module):
 
             # Clamp intermediate results to prevent value accumulation across DAG steps
             # This prevents runaway growth that can lead to NaN/Inf in later steps
-            V_mag_new = torch.clamp(V_mag_new, min=1e-12, max=1e6)
+            V_mag_new = torch.clamp(V_mag_new, min=1e-12, max=1e18)
             V_sign_new = torch.clamp(V_sign_new, min=-1.0, max=1.0)
 
             # Write result to the predetermined intermediate slot
@@ -355,8 +358,6 @@ class DAGPlanPredictor(nn.Module):
         Returns:
                 str: Human-readable expression
         """
-        from data.dagset.streaming import tensor_to_expression
-
         # Extract single prediction from batch and time dimensions
         single_digit_logits = digit_logits[
             batch_idx, time_idx

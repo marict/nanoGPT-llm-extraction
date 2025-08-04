@@ -125,8 +125,10 @@ def _compute_exec_loss(
     asinh_pred = torch.asinh(pred_exec)
     asinh_target = torch.asinh(target_exec)
 
-    # Simple MSE in asinh space
-    exec_loss = F.mse_loss(asinh_pred, asinh_target)
+    # Use Huber loss in asinh space for smooth handling of extreme errors
+    # Huber loss: quadratic for small errors, linear for large errors
+    delta = 1.0  # Transition point between quadratic and linear behavior
+    exec_loss = F.huber_loss(asinh_pred, asinh_target, delta=delta)
 
     return exec_loss
 
