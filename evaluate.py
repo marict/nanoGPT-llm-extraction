@@ -36,24 +36,21 @@ def _sharpen_operand_predictions(
 
 def _extract_initial_value(digit_data, sign, cfg, is_target: bool = True) -> float:
     """Extract initial value from digit data (target or predicted)."""
-    try:
-        if is_target:
-            # Target digits are already one-hot
-            digit_onehot = digit_data
-        else:
-            # Predicted digits need softmax -> argmax -> one-hot conversion
-            digit_probs = torch.softmax(digit_data, dim=-1)
-            digit_indices = torch.argmax(digit_probs, dim=1)
-            digit_onehot = torch.zeros_like(digit_probs)
-            for d, idx in enumerate(digit_indices):
-                digit_onehot[d, idx] = 1.0
-            sign = 1.0 if sign >= 0 else -1.0
+    if is_target:
+        # Target digits are already one-hot
+        digit_onehot = digit_data
+    else:
+        # Predicted digits need softmax -> argmax -> one-hot conversion
+        digit_probs = torch.softmax(digit_data, dim=-1)
+        digit_indices = torch.argmax(digit_probs, dim=1)
+        digit_onehot = torch.zeros_like(digit_probs)
+        for d, idx in enumerate(digit_indices):
+            digit_onehot[d, idx] = 1.0
+        sign = 1.0 if sign >= 0 else -1.0
 
-        return digit_onehot_to_float(
-            digit_onehot, sign, cfg.max_digits, cfg.max_decimal_places
-        )
-    except Exception:
-        return float("nan")
+    return digit_onehot_to_float(
+        digit_onehot, sign, cfg.max_digits, cfg.max_decimal_places
+    )
 
 
 def _print_initial_values_comparison(
@@ -146,27 +143,42 @@ def _print_token_by_token_breakdown(
                 target_O = target_dict["target_O"]
                 target_G = target_dict["target_G"]
 
-                try:
-                    target_expr_sympy = tensor_to_expression(
-                        target_digits,
-                        target_V_sign,
-                        target_O,
-                        target_G,
-                        max_digits=cfg.max_digits,
-                        max_decimal_places=cfg.max_decimal_places,
-                    )
-                    # Convert to string for display
-                    target_expr = str(target_expr_sympy)
-                    # Truncate very long expressions for readability
-                    if len(target_expr) > 60:
-                        target_expr = target_expr[:57] + "..."
-                except Exception as e:
-                    target_expr = f"<conversion error: {str(e)[:30]}>"
+                target_expr_sympy = tensor_to_expression(
+                    target_digits,
+                    target_V_sign,
+                    target_O,
+                    target_G,
+                    max_digits=cfg.max_digits,
+                    max_decimal_places=cfg.max_decimal_places,
+                )
+                # Convert to string for display
+                target_expr = str(target_expr_sympy)
+                # Truncate very long expressions for readability
+                if len(target_expr) > 60:
+                    target_expr = target_expr[:57] + "..."
 
-                print(f"  Position {pos:2d}: [VALID] Target = {target_expr}")
+                # Show what substring the model sees at this position
+                if pos + 1 <= actual_token_count:
+                    partial_tokens = actual_tokens[: pos + 1]
+                    partial_text = enc.decode(partial_tokens)
+                else:
+                    partial_text = text[: pos + 1] if pos + 1 <= len(text) else text
+
+                print(
+                    f"  Position {pos:2d}: '{partial_text}' → [VALID] Target = {target_expr}"
+                )
                 positions_shown += 1
             else:
-                print(f"  Position {pos:2d}: [NOT VALID] (invalid substring)")
+                # Show what substring the model sees for invalid positions too
+                if pos + 1 <= actual_token_count:
+                    partial_tokens = actual_tokens[: pos + 1]
+                    partial_text = enc.decode(partial_tokens)
+                else:
+                    partial_text = text[: pos + 1] if pos + 1 <= len(text) else text
+
+                print(
+                    f"  Position {pos:2d}: '{partial_text}' → [NOT VALID] (invalid substring)"
+                )
                 positions_shown += 1
         else:
             # This is padding beyond the actual tokens
@@ -179,16 +191,6 @@ def _print_token_by_token_breakdown(
 
     if padding_count > 0:
         print(f"  ... and {padding_count} tokens of padding")
-
-    print(f"\n📊 Summary:")
-    print(f"  • Final text length: {len(text)} characters")
-    print(f"  • Valid prediction positions: {len(valid_positions)}")
-    print(f"  • Total target positions: {len(sample_targets)}")
-
-    print(
-        f"\n✅ NOTE: Target alignment is now correct. The model sees progressive substrings"
-    )
-    print(f"   of the same expression that the targets are based on.")
 
 
 def print_detailed_validation_sample(
