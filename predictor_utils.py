@@ -15,62 +15,51 @@ from data.dagset.streaming import tensor_to_expression
 from models.dag_model import DAGExecutor
 
 
+def _create_zero_losses(device: torch.device) -> dict[str, torch.Tensor]:
+    """Create dictionary of zero losses/accuracies for edge cases."""
+    zero = torch.tensor(0.0, device=device)
+    return {
+        "total_loss": zero,
+        "digit_loss": zero,
+        "digit_accuracy": zero,
+        "V_mag_loss": zero,
+        "V_sign_loss": zero,
+        "O_loss": zero,
+        "G_loss": zero,
+        "exec_loss": zero,
+        "sign_accuracy": zero,
+        "op_accuracy": zero,
+        "gate_accuracy": zero,
+    }
+
+
 def _compute_value_loss(
     pred_digit_logits: torch.Tensor, target_digits: torch.Tensor
 ) -> torch.Tensor:
-    """
-    Compute robust loss for magnitude values by converting digits to values and using asinh transformation.
+    """Compute robust loss for magnitude values using asinh transformation."""
+    # Constants for digit parameters
+    D = pred_digit_logits.shape[-2]
+    max_digits = max_decimal_places = D // 2
+    base = pred_digit_logits.shape[-1]
 
-    Args:
-        pred_digit_logits: (num_valid, num_initial_nodes, D, base) predicted digit logits
-        target_digits: (num_valid, num_initial_nodes, D, base) target digit one-hot vectors
-    """
-    # Convert predicted digit logits to V_mag values using shared method
-    # Add batch and time dimensions for DAGExecutor interface: (num_valid, N, D, base) -> (num_valid, 1, N, D, base)
-    pred_digit_logits_expanded = pred_digit_logits.unsqueeze(1)
-    pred_V_mag_from_digits = DAGExecutor.digits_to_vmag(
-        pred_digit_logits_expanded,
-        max_digits=pred_digit_logits.shape[-2]
-        // 2,  # Assuming D = max_digits + max_decimal_places
-        max_decimal_places=pred_digit_logits.shape[-2] // 2,
-        base=pred_digit_logits.shape[-1],
-    ).squeeze(
-        1
-    )  # (num_valid, num_initial_nodes)
+    # Convert predictions to magnitude values (vectorized)
+    pred_expanded = pred_digit_logits.unsqueeze(1)
+    pred_V_mag = DAGExecutor.digits_to_vmag(
+        pred_expanded, max_digits, max_decimal_places, base
+    ).squeeze(1)
 
-    # Convert target digits to V_mag values for comparison
-    target_V_mag_from_digits = []
-    for i in range(target_digits.shape[0]):
-        target_digits_expanded = target_digits[i : i + 1].unsqueeze(
-            1
-        )  # (1, 1, N, D, base)
-        target_V_mag = DAGExecutor.digits_to_vmag(
-            target_digits_expanded,
-            max_digits=target_digits.shape[-2] // 2,
-            max_decimal_places=target_digits.shape[-2] // 2,
-            base=target_digits.shape[-1],
-        ).squeeze()  # (num_initial_nodes,)
-        target_V_mag_from_digits.append(target_V_mag)
-    target_V_mag_from_digits = torch.stack(
-        target_V_mag_from_digits
-    )  # (num_valid, num_initial_nodes)
+    # Convert targets to magnitude values (vectorized)
+    target_expanded = target_digits.unsqueeze(1)
+    target_V_mag = DAGExecutor.digits_to_vmag(
+        target_expanded, max_digits, max_decimal_places, base
+    ).squeeze(1)
 
-    # Handle edge cases
-    if torch.any(torch.isnan(pred_V_mag_from_digits)) or torch.any(
-        torch.isinf(pred_V_mag_from_digits)
-    ):
-        # Heavily penalize NaN/Inf predictions
+    # Handle NaN/Inf with penalty
+    if torch.any(~torch.isfinite(pred_V_mag)):
         return torch.tensor(100.0, device=pred_digit_logits.device, requires_grad=True)
 
-    # Use asinh transformation - handles all positive values smoothly
-    # asinh(x) ≈ x for small x, ≈ log(2x) for large x
-    asinh_pred = torch.asinh(pred_V_mag_from_digits)
-    asinh_target = torch.asinh(target_V_mag_from_digits)
-
-    # Simple MSE in asinh space - stable across all magnitude ranges
-    value_loss = F.mse_loss(asinh_pred, asinh_target)
-
-    return value_loss
+    # Robust loss in asinh space
+    return F.mse_loss(torch.asinh(pred_V_mag), torch.asinh(target_V_mag))
 
 
 def _compute_vsign_loss(
@@ -283,18 +272,10 @@ def _compute_exec_loss(
             batch_indices,
             token_indices,
             target_final_exec,
-            pred_digit_logits_exec,
-            pred_V_sign_exec,
-            pred_O_exec,
-            pred_G_exec,
-            cfg,
         )
 
-        # Handle edge cases
-        if torch.any(torch.isnan(pred_final_exec)) or torch.any(
-            torch.isinf(pred_final_exec)
-        ):
-            # Heavily penalize NaN/Inf predictions
+        # Handle NaN/Inf predictions with penalty
+        if torch.any(~torch.isfinite(pred_final_exec)):
             return torch.tensor(100.0, device=device, requires_grad=True)
 
         # Use asinh transformation - differentiable and handles all real values
@@ -321,95 +302,41 @@ def _log_problematic_dag_executions(
     batch_indices: torch.Tensor,
     token_indices: torch.Tensor,
     target_final_exec: torch.Tensor,
-    pred_digit_logits_exec: torch.Tensor,
-    pred_V_sign_exec: torch.Tensor,
-    pred_O_exec: torch.Tensor,
-    pred_G_exec: torch.Tensor,
-    cfg=None,
 ) -> None:
-    """Log detailed information about DAG executions that produced NaN/Inf values."""
-    if not (
-        torch.any(torch.isnan(pred_final_exec))
-        or torch.any(torch.isinf(pred_final_exec))
-    ):
-        return  # No problematic values
+    """Log brief information about DAG executions that produced NaN/Inf values."""
+    problematic_mask = ~torch.isfinite(pred_final_exec)
+    if not problematic_mask.any():
+        return
 
-    nan_mask = torch.isnan(pred_final_exec)
-    inf_mask = torch.isinf(pred_final_exec)
-    problematic_mask = nan_mask | inf_mask
+    # Log summary of problematic executions
+    num_problematic = problematic_mask.sum().item()
+    print(f"WARNING: {num_problematic} DAG executions produced NaN/Inf values")
 
-    for i in torch.where(problematic_mask)[0]:
+    # Log first few problematic cases
+    for i in torch.where(problematic_mask)[0][:3]:  # Limit to first 3
         batch_idx = batch_indices[i].item()
         token_idx = token_indices[i].item()
         result_val = pred_final_exec[i].item()
         target_val = target_final_exec[i].item()
-
-        # Extract tensor components for this problematic case
-        single_digit_logits = pred_digit_logits_exec[
-            i, 0
-        ]  # (num_initial_nodes, D, base)
-        single_V_sign = pred_V_sign_exec[i, 0]  # (total_nodes,)
-        single_O = pred_O_exec[i, 0]  # (dag_depth, total_nodes)
-        single_G = pred_G_exec[i, 0]  # (dag_depth,)
-
-        # Try to convert back to expression
-        try:
-            # Get max_digits and max_decimal_places from config if available
-            max_digits = getattr(cfg, "max_digits", 4)
-            max_decimal_places = getattr(cfg, "max_decimal_places", 4)
-
-            problematic_expr = tensor_to_expression(
-                single_digit_logits,
-                single_V_sign,
-                single_O,
-                single_G,
-                max_digits=max_digits,
-                max_decimal_places=max_decimal_places,
-            )
-            expr_str = str(problematic_expr)
-        except Exception as e:
-            expr_str = f"[Could not convert to expression: {e}]"
-
         print(
-            f"WARNING: DAG execution produced {'NaN' if nan_mask[i] else 'Inf'} value"
-        )
-        print(f"  Location: batch {batch_idx}, token {token_idx}")
-        print(f"  Problematic expression: {expr_str}")
-        print(f"  Execution result: {result_val}")
-        print(f"  Target value: {target_val}")
-        print(
-            f"  Digit logits range: [{pred_digit_logits_exec[i].min().item():.2f}, {pred_digit_logits_exec[i].max().item():.2f}]"
+            f"  batch {batch_idx}, token {token_idx}: {result_val} (target: {target_val})"
         )
 
 
 def compute_dag_loss(
-    pred_digit_logits: torch.Tensor,  # (B, T, num_initial_nodes, D, base) predicted digit logits
-    pred_V_sign: torch.Tensor,  # (B, T, total_nodes) predicted signs
-    pred_O: torch.Tensor,  # (B, T, dag_depth, total_nodes) predicted operand selection
-    pred_G: torch.Tensor,  # (B, T, dag_depth) predicted domain gates
-    target_tensors: list[
-        list[dict[str, torch.Tensor]]
-    ],  # (B, T) nested list: new target tensors
-    valid_mask: torch.Tensor,  # (B, T) boolean mask for valid positions
-    dag_executor=None,  # Optional DAGExecutor for execution loss
-    cfg=None,  # Configuration object with loss flags
+    pred_digit_logits: torch.Tensor,
+    pred_V_sign: torch.Tensor,
+    pred_O: torch.Tensor,
+    pred_G: torch.Tensor,
+    target_tensors: list[list[dict[str, torch.Tensor]]],
+    valid_mask: torch.Tensor,
+    dag_executor=None,
+    cfg=None,
 ) -> dict[str, torch.Tensor]:
-    """Compute loss for DAG tensor format with digit prediction, V_sign, O, G targets.
+    """Compute DAG losses and accuracy metrics.
 
-    Args:
-        pred_digit_logits: (B, T, num_initial_nodes, D, base) predicted digit logits for initial nodes
-        pred_V_sign: (B, T, total_nodes) predicted signs
-        pred_O: (B, T, dag_depth, total_nodes) predicted operand selectors
-        pred_G: (B, T, dag_depth) predicted domain gates
-        target_tensors: (B, T) nested list of target dictionaries with keys:
-            - "target_digits": (num_initial_nodes, D, base) target digit one-hots
-            - "target_V_sign": (total_nodes,) target signs
-            - "target_O": (dag_depth, total_nodes) target operand selectors
-            - "target_G": (dag_depth,) target domain gates
-        valid_mask: (B, T) boolean mask for valid positions
-
-    Returns:
-        Dictionary with loss components
+    Returns dictionary with losses (digit, V_mag, V_sign, O, G, exec) and
+    accuracies (sign, op, gate) for all valid positions.
     """
     device = pred_digit_logits.device
 
@@ -417,20 +344,7 @@ def compute_dag_loss(
     valid_positions = valid_mask.nonzero(as_tuple=False)  # (num_valid, 2)
 
     if valid_positions.numel() == 0:
-        # No valid positions - return zero losses and accuracies
-        return {
-            "total_loss": torch.tensor(0.0, device=device),
-            "digit_loss": torch.tensor(0.0, device=device),
-            "digit_accuracy": torch.tensor(0.0, device=device),
-            "V_mag_loss": torch.tensor(0.0, device=device),
-            "V_sign_loss": torch.tensor(0.0, device=device),
-            "O_loss": torch.tensor(0.0, device=device),
-            "G_loss": torch.tensor(0.0, device=device),
-            "exec_loss": torch.tensor(0.0, device=device),
-            "sign_accuracy": torch.tensor(0.0, device=device),
-            "op_accuracy": torch.tensor(0.0, device=device),
-            "gate_accuracy": torch.tensor(0.0, device=device),
-        }
+        return _create_zero_losses(device)
 
     batch_indices, token_indices = valid_positions[:, 0], valid_positions[:, 1]
 

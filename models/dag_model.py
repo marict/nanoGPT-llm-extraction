@@ -53,111 +53,65 @@ class DAGExecutor(nn.Module):
         base: int = 10,
         temperature: float = 0.01,
     ) -> torch.Tensor:
-        """
-        Convert digit logits to V_mag tensor using soft/differentiable conversion.
-
-        Args:
-            digit_logits: (B, T, num_initial_nodes, D, base) - digit prediction logits
-            max_digits: Maximum number of integer digits
-            max_decimal_places: Maximum number of decimal places
-            base: Numerical base (default 10)
-            temperature: Temperature for softmax (lower = more discrete)
-
-        Returns:
-            V_mag: (B, T, num_initial_nodes) - magnitude values for initial nodes
-        """
+        """Convert digit logits to magnitude values using vectorized operations."""
         B, T, num_initial_nodes, D, _ = digit_logits.shape
+        device, dtype = digit_logits.device, digit_logits.dtype
 
-        # Use same dtype as input for consistency
-        compute_dtype = digit_logits.dtype
+        # Convert logits to expected digit values
+        digit_probs = torch.softmax(digit_logits / temperature, dim=-1)
+        digit_values = torch.arange(base, dtype=dtype, device=device)
+        expected_digits = (digit_probs * digit_values.view(1, 1, 1, 1, -1)).sum(dim=-1)
 
-        # Use low temperature to make softmax nearly one-hot for accuracy
-        # This preserves gradients while minimizing conversion error
-        digit_probs = torch.softmax(
-            digit_logits / temperature, dim=-1
-        )  # (B, T, num_initial_nodes, D, base)
-
-        # Create digit value matrix: [0, 1, 2, ..., base-1]
-        digit_values = torch.arange(
-            base, dtype=compute_dtype, device=digit_logits.device
+        # Create positional weights for base conversion (vectorized)
+        int_powers = torch.tensor(
+            [base ** (max_digits - 1 - d) for d in range(max_digits)],
+            dtype=dtype,
+            device=device,
+        )
+        frac_powers = torch.tensor(
+            [base ** (max_digits - 1 - d) for d in range(max_digits, D)],
+            dtype=dtype,
+            device=device,
         )
 
-        # Soft expected digit values: sum(prob_i * digit_i)
-        expected_digits = (digit_probs * digit_values.view(1, 1, 1, 1, -1)).sum(
-            dim=-1
-        )  # (B, T, N, D)
+        # Vectorized base conversion
+        int_part = (expected_digits[..., :max_digits] * int_powers).sum(dim=-1)
+        frac_part = (expected_digits[..., max_digits:] * frac_powers).sum(dim=-1)
 
-        # Initialize output tensor
-        V_mag = torch.zeros(
-            B, T, num_initial_nodes, dtype=compute_dtype, device=digit_logits.device
-        )
-
-        for b in range(B):
-            for t in range(T):
-                for n in range(num_initial_nodes):
-                    try:
-                        # Integer part (positions 0 to max_digits-1)
-                        int_value = 0.0
-                        for d in range(max_digits):
-                            digit_val = expected_digits[b, t, n, d]
-                            # Validate digit value is reasonable
-                            if (
-                                not torch.isfinite(digit_val)
-                                or digit_val < 0
-                                or digit_val >= base
-                            ):
-                                raise ValueError(
-                                    f"Invalid digit value {digit_val} at position {d} for node {n}"
-                                )
-                            int_value += digit_val * (base ** (max_digits - 1 - d))
-
-                        # Fractional part (positions max_digits to D-1)
-                        frac_value = 0.0
-                        for d in range(max_digits, max_digits + max_decimal_places):
-                            digit_val = expected_digits[b, t, n, d]
-                            # Validate digit value is reasonable
-                            if (
-                                not torch.isfinite(digit_val)
-                                or digit_val < 0
-                                or digit_val >= base
-                            ):
-                                raise ValueError(
-                                    f"Invalid digit value {digit_val} at position {d} for node {n}"
-                                )
-                            frac_value += digit_val * (base ** (max_digits - 1 - d))
-
-                        # Combine and validate total
-                        total_value = int_value + frac_value
-                        if not torch.isfinite(total_value):
-                            raise ValueError(
-                                f"Digit-to-float conversion produced non-finite value: {total_value}"
-                            )
-
-                        # Clip to reasonable range to prevent inf/nan in operations
-                        # Allow for large intermediate results from compound arithmetic operations
-                        clipped_value = torch.clamp(total_value, min=1e-8, max=1e18)
-                        V_mag[b, t, n] = clipped_value
-
-                    except Exception as e:
-                        raise RuntimeError(
-                            f"Failed to convert digits to magnitude for batch {b}, token {t}, node {n}: {e}"
-                        ) from e
+        # Combine and clamp to prevent overflow/underflow
+        V_mag = torch.clamp(int_part + frac_part, min=1e-8, max=1e18)
 
         return V_mag
 
+    def _compute_domain_mixed_result(
+        self, working_V_mag, working_V_sign, O_step, G_step
+    ):
+        """Compute domain-mixed arithmetic result for one step."""
+        signed_values = working_V_sign * working_V_mag
+        log_mag = torch.log(torch.clamp(working_V_mag, min=1e-12))
+        mixed = log_mag * (1 - G_step) + signed_values * G_step
+        return torch.sum(O_step * mixed, dim=-1, keepdim=True)
+
+    def _compute_new_sign(self, R_mag, working_V_sign, O_step, G_step):
+        """Compute new sign using domain mixing."""
+        # Linear domain sign
+        linear_sign = torch.tanh(R_mag / 0.0001)
+
+        # Log domain sign (product of selected signs)
+        sign_weights = (working_V_sign * torch.abs(O_step)) * 2 + 1
+        log_sign = torch.tanh(torch.prod(sign_weights, dim=-1, keepdim=True) / 0.0001)
+
+        return G_step * linear_sign + (1 - G_step) * log_sign
+
+    def _compute_new_magnitude(self, R_mag, G_step):
+        """Compute new magnitude using domain mixing."""
+        linear_mag = torch.clamp(torch.abs(R_mag), max=1e18)
+        R_mag_clamped = torch.clamp(R_mag, min=-LOG_LIM, max=LOG_LIM)
+        log_mag_result = torch.exp(R_mag_clamped)
+        return G_step * linear_mag + (1 - G_step) * log_mag_result
+
     def forward(self, digit_logits, V_sign, O, G):
-        """
-            Execute DAG operations using tensor representation with digit prediction.
-
-        Args:
-                digit_logits: (B, T, num_initial_nodes, D, base) - digit predictions for initial nodes
-                V_sign: (B, T, total_nodes) - signs of all nodes
-                O: (B, T, dag_depth, total_nodes) - operand selection matrix
-                G: (B, T, dag_depth) - domain selector (0=log, 1=linear)
-
-        Returns:
-                torch.Tensor: final result (B, T)
-        """
+        """Execute DAG operations using tensor representation."""
         B, T = V_sign.shape[:2]
 
         # Store original dtype for final result
@@ -183,60 +137,28 @@ class DAGExecutor(nn.Module):
         # Execute each intermediate computation step
         for step in range(self.num_intermediate_nodes):
             # Get operand selector and domain gate for this step
-            O_step = O[:, :, step, :].to(compute_dtype)  # (B, T, total_nodes)
-            G_step = G[:, :, step].unsqueeze(-1).to(compute_dtype)  # (B, T, 1)
+            O_step = O[:, :, step, :].to(compute_dtype)
+            G_step = G[:, :, step].unsqueeze(-1).to(compute_dtype)
 
-            # Apply triangular mask to prevent using future intermediate results
-            valid_positions = (
-                self.num_initial_nodes + step
-            )  # How many positions are available
-
-            # Create causal mask
-            causal_mask = torch.zeros_like(O_step)  # (B, T, total_nodes)
+            # Apply causal mask to prevent using future intermediate results
+            valid_positions = self.num_initial_nodes + step
+            causal_mask = torch.zeros_like(O_step)
             causal_mask[:, :, :valid_positions] = 1.0
-
-            # Apply mask to operand selector
             O_step = O_step * causal_mask
 
-            # Domain-mixed computation (keeping original dtype for gradients)
-            signed_values = working_V_sign * working_V_mag
-            log_mag = torch.log(torch.clamp(working_V_mag, min=1e-12))
-            mixed = log_mag * (1 - G_step) + signed_values * G_step
-            R_mag = torch.sum(O_step * mixed, dim=-1, keepdim=True)
+            # Compute new values using helper functions
+            R_mag = self._compute_domain_mixed_result(
+                working_V_mag, working_V_sign, O_step, G_step
+            )
+            V_sign_new = self._compute_new_sign(R_mag, working_V_sign, O_step, G_step)
+            V_mag_new = self._compute_new_magnitude(R_mag, G_step)
 
-            # Linear domain sign
-            linear_sign = torch.tanh(R_mag / 0.0001)
-
-            # Log domain sign: product of selected signs.
-            # We multiply by 2 and add 1 such that
-            # pos: 2*1 + 1 = 3
-            # neg: 2*(-1) + 1 = -1
-            # zero: 2*0 + 1 = 1 (does not change sign)
-            sign_weights = (working_V_sign * torch.abs(O_step)) * 2 + 1
-            sign_product = torch.prod(sign_weights, dim=-1, keepdim=True)
-            log_sign = torch.tanh(sign_product / 0.0001)
-
-            V_sign_new = G_step * linear_sign + (1 - G_step) * log_sign
-
-            # For magnitude: use safer clamping to prevent exp overflow
-            linear_mag = torch.clamp(torch.abs(R_mag), max=1e18)
-
-            # For log domain, clamp R_mag before exp to prevent overflow
-            R_mag_clamped = torch.clamp(
-                R_mag, min=-LOG_LIM, max=LOG_LIM
-            )  # Use LOG_LIM for proper range
-            log_mag_result = torch.exp(R_mag_clamped)
-
-            V_mag_new = G_step * linear_mag + (1 - G_step) * log_mag_result
-
-            # Clamp intermediate results to prevent value accumulation across DAG steps
-            # This prevents runaway growth that can lead to NaN/Inf in later steps
+            # Clamp intermediate results
             V_mag_new = torch.clamp(V_mag_new, min=1e-12, max=1e18)
             V_sign_new = torch.clamp(V_sign_new, min=-1.0, max=1.0)
 
-            # Write result to the predetermined intermediate slot
+            # Update working tensors (use scatter to avoid in-place operations)
             intermediate_idx = self.num_initial_nodes + step
-            # Use scatter to avoid in-place operations that break gradients
             indices = torch.tensor(
                 [intermediate_idx], device=working_V_mag.device
             ).expand(working_V_mag.shape[:2])

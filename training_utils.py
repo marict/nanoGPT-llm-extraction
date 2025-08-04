@@ -330,59 +330,21 @@ def parse_args() -> argparse.ArgumentParser:
 
 
 def get_lr(it: int, *, cfg: BaseConfig) -> float:
-    """Calculate learning rate with warmup and decay."""
-    # Validate configuration first
-    if not hasattr(cfg, "learning_rate"):
-        raise AttributeError("Config must have 'learning_rate' attribute")
-    if not hasattr(cfg, "warmup_iters"):
-        raise AttributeError("Config must have 'warmup_iters' attribute")
-    if not hasattr(cfg, "lr_decay_iters"):
-        raise AttributeError("Config must have 'lr_decay_iters' attribute")
-    if not hasattr(cfg, "min_lr"):
-        raise AttributeError("Config must have 'min_lr' attribute")
-
-    # 1. Determine base learning rate
+    """Calculate learning rate with warmup and cosine decay."""
+    # Linear warmup
     if it < cfg.warmup_iters:
-        # Linear warmup
-        if cfg.warmup_iters > 0:
-            # Using it + 1 to make it 1-based for warmup, matches test expectations
-            base_lr = cfg.learning_rate * (it + 1) / cfg.warmup_iters
-        else:
-            base_lr = cfg.learning_rate
-    elif it > cfg.lr_decay_iters:
-        # Past decay phase
-        base_lr = cfg.min_lr
-    else:
-        # In between, might be constant or cosine decay
-        if not getattr(cfg, "decay_lr", True):
-            base_lr = cfg.learning_rate
-        else:
-            # Cosine decay
-            decay_ratio = (it - cfg.warmup_iters) / (
-                cfg.lr_decay_iters - cfg.warmup_iters
-            )
-            coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-            base_lr = cfg.min_lr + coeff * (cfg.learning_rate - cfg.min_lr)
+        return cfg.learning_rate * (it + 1) / max(1, cfg.warmup_iters)
 
-    # 2. Apply cyclical modulation if enabled and not in warmup
-    final_lr = base_lr
-    if getattr(cfg, "use_cyclical_lr", False) and it >= cfg.warmup_iters:
-        period = getattr(cfg, "cyclical_lr_period", 1000)
-        amplitude = getattr(cfg, "cyclical_lr_amplitude", 0.1)
+    # Past decay phase
+    if it > cfg.lr_decay_iters:
+        return cfg.min_lr
 
-        # Cycle starts after warmup
-        progress_in_decay = it - cfg.warmup_iters
-        cycle_progress = (progress_in_decay % period) / period
-        cyclical_factor = 1.0 + amplitude * math.sin(2 * math.pi * cycle_progress)
-
-        final_lr *= cyclical_factor
-
-    # 3. Final clamping
-    # During warmup, we want the linear ramp-up, so no min_lr clamping yet
-    if it < cfg.warmup_iters:
-        return final_lr
-
-    return max(cfg.min_lr, final_lr)
+    # Cosine decay
+    decay_ratio = (it - cfg.warmup_iters) / max(
+        1, cfg.lr_decay_iters - cfg.warmup_iters
+    )
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+    return cfg.min_lr + coeff * (cfg.learning_rate - cfg.min_lr)
 
 
 def get_checkpoint_filename(

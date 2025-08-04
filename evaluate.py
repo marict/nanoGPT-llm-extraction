@@ -15,6 +15,93 @@ from data.dagset.streaming import digit_onehot_to_float, tensor_to_expression
 from predictor_utils import compute_dag_loss, tokenize_texts
 
 
+def _sharpen_operand_predictions(
+    pred_O: torch.Tensor, threshold: float = 0.1
+) -> torch.Tensor:
+    """Sharpen operand predictions to discrete {-1, 0, 1} values."""
+    sharp_O = torch.zeros_like(pred_O)
+    dag_depth, total_nodes = pred_O.shape
+
+    for step in range(dag_depth):
+        step_coeffs = pred_O[step]
+        significant_mask = torch.abs(step_coeffs) > threshold
+        significant_indices = torch.where(significant_mask)[0]
+
+        for idx in significant_indices:
+            coeff_val = step_coeffs[idx].item()
+            sharp_O[step, idx] = 1.0 if coeff_val > 0 else -1.0
+
+    return sharp_O
+
+
+def _extract_initial_value(digit_data, sign, cfg, is_target: bool = True) -> float:
+    """Extract initial value from digit data (target or predicted)."""
+    try:
+        if is_target:
+            # Target digits are already one-hot
+            digit_onehot = digit_data
+        else:
+            # Predicted digits need softmax -> argmax -> one-hot conversion
+            digit_probs = torch.softmax(digit_data, dim=-1)
+            digit_indices = torch.argmax(digit_probs, dim=1)
+            digit_onehot = torch.zeros_like(digit_probs)
+            for d, idx in enumerate(digit_indices):
+                digit_onehot[d, idx] = 1.0
+            sign = 1.0 if sign >= 0 else -1.0
+
+        return digit_onehot_to_float(
+            digit_onehot, sign, cfg.max_digits, cfg.max_decimal_places
+        )
+    except Exception:
+        return float("nan")
+
+
+def _print_initial_values_comparison(
+    target_digits, target_V_sign, pred_digit_logits, pred_V_sign, cfg
+):
+    """Print comparison of target vs predicted initial values."""
+    num_initial_nodes = target_digits.shape[0]
+    print(f"\n--- Initial Values Comparison ---")
+
+    for n in range(num_initial_nodes):
+        target_val = _extract_initial_value(
+            target_digits[n], target_V_sign[n].item(), cfg, is_target=True
+        )
+        pred_val = _extract_initial_value(
+            pred_digit_logits[n], pred_V_sign[n].item(), cfg, is_target=False
+        )
+
+        error = (
+            abs(target_val - pred_val)
+            if not (
+                torch.isnan(torch.tensor(target_val))
+                or torch.isnan(torch.tensor(pred_val))
+            )
+            else float("nan")
+        )
+
+        print(
+            f"Initial[{n}]: Target={target_val:.6f}, Predicted={pred_val:.6f}, Error={error:.6f}"
+        )
+
+
+def _execute_dag_prediction(dag_executor, digit_logits, V_sign, O, G) -> float:
+    """Execute DAG with proper dimension handling."""
+    if dag_executor is None:
+        return 0.0
+
+    # Add batch and time dimensions for executor (single sample)
+    pred_digit_logits_exec = digit_logits.unsqueeze(0).unsqueeze(0)
+    pred_V_sign_exec = V_sign.unsqueeze(0).unsqueeze(0)
+    pred_O_exec = O.unsqueeze(0).unsqueeze(0)
+    pred_G_exec = G.unsqueeze(0).unsqueeze(0)
+
+    result = dag_executor(
+        pred_digit_logits_exec, pred_V_sign_exec, pred_O_exec, pred_G_exec
+    )
+    return result[0, 0].item()
+
+
 def print_detailed_validation_sample(
     texts,
     target_tensors,
@@ -53,15 +140,10 @@ def print_detailed_validation_sample(
 
     # Get the last valid token position for this sample (complete expression)
     sample_mask = valid_mask[0]  # (T,)
-    last_valid_pos = -1
-    for pos in range(len(sample_mask)):
-        if sample_mask[pos]:
-            last_valid_pos = pos
-
-    if last_valid_pos < 0:
-        raise ValueError(
-            f"No valid tokens found in validation sample: '{texts[0]}'. This should never happen during validation."
-        )
+    valid_positions = torch.where(sample_mask)[0]
+    if len(valid_positions) == 0:
+        raise ValueError(f"No valid tokens found in validation sample: '{texts[0]}'")
+    last_valid_pos = valid_positions[-1].item()
 
     # Get target and prediction for the final/complete expression
     target_dict = target_tensors[0][last_valid_pos]
@@ -91,29 +173,11 @@ def print_detailed_validation_sample(
     single_O = pred_O[0, last_valid_pos]  # (dag_depth, total_nodes)
     single_G = pred_G[0, last_valid_pos]  # (dag_depth,)
 
-    # Sharpen predictions to discrete choices for cleaner expression display
+    # Sharpen predictions for cleaner expression display
     sharp_digit_logits = single_digit_logits.clone()
     sharp_V_sign = single_V_sign.clone()
-    sharp_O = torch.zeros_like(single_O)
-    sharp_G = (single_G > 0.5).float()  # Binary threshold for domain gates
-
-    # For O tensor: Use threshold-based approach to preserve unary/binary/trinary operations
-    dag_depth, _ = single_O.shape
-    threshold = 0.1  # Only keep operands with significant probability (>10% confidence)
-
-    for step in range(dag_depth):
-        step_coeffs = single_O[step]  # (total_nodes,)
-
-        # Find operands above threshold
-        significant_mask = torch.abs(step_coeffs) > threshold
-        significant_indices = torch.nonzero(significant_mask, as_tuple=False).flatten()
-
-        if len(significant_indices) > 0:
-            # Keep the signs and normalize to clean values (+1, -1)
-            for idx in significant_indices:
-                coeff_val = step_coeffs[idx].item()
-                # Preserve sign but make it clean: positive -> +1, negative -> -1
-                sharp_O[step, idx] = 1.0 if coeff_val > 0 else -1.0
+    sharp_O = _sharpen_operand_predictions(single_O)
+    sharp_G = (single_G > 0.5).float()
 
     # Convert predicted tensors to expression string with sharpened values
     pred_expr = tensor_to_expression(
@@ -125,91 +189,15 @@ def print_detailed_validation_sample(
         max_decimal_places=cfg.max_decimal_places,
     )
 
-    # Extract and log initial values for comparison
-    num_initial_nodes = target_digits.shape[0]
-
-    print(f"\n--- Initial Values Comparison ---")
-
-    # Target initial values (from target_digits)
-    target_initial_values = []
-    for n in range(num_initial_nodes):
-        target_digit_onehot = target_digits[n]  # (D, base)
-        target_sign = target_V_sign[n].item()
-        try:
-            target_value = digit_onehot_to_float(
-                target_digit_onehot, target_sign, cfg.max_digits, cfg.max_decimal_places
-            )
-            target_initial_values.append(target_value)
-        except Exception as e:
-            print(f"Error converting target digit {n}: {e}")
-            target_initial_values.append(float("nan"))
-
-    # Predicted initial values (from predicted digit logits)
-    pred_initial_values = []
-    for n in range(num_initial_nodes):
-        pred_digit_logits_node = single_digit_logits[n]  # (D, base)
-        pred_sign = single_V_sign[n].item()
-
-        try:
-            # Convert logits to probabilities and then to one-hot (same as tensor_to_expression)
-            digit_probs = torch.softmax(pred_digit_logits_node, dim=-1)
-            digit_indices = torch.argmax(digit_probs, dim=1)
-
-            # Create one-hot encoding
-            digit_onehot = torch.zeros_like(digit_probs)
-            for d, idx in enumerate(digit_indices):
-                digit_onehot[d, idx] = 1.0
-
-            # Convert sign to discrete
-            sign = 1.0 if pred_sign >= 0 else -1.0
-
-            # Convert to float value
-            pred_value = digit_onehot_to_float(
-                digit_onehot, sign, cfg.max_digits, cfg.max_decimal_places
-            )
-            pred_initial_values.append(pred_value)
-        except Exception as e:
-            print(f"Error converting predicted digit {n}: {e}")
-            pred_initial_values.append(float("nan"))
-
     # Print initial values comparison
-    for n in range(num_initial_nodes):
-        target_val = target_initial_values[n]
-        pred_val = pred_initial_values[n]
-        error = (
-            abs(target_val - pred_val)
-            if not (
-                torch.isnan(torch.tensor(target_val))
-                or torch.isnan(torch.tensor(pred_val))
-            )
-            else float("nan")
-        )
-        print(
-            f"Initial[{n}]: Target={target_val:.6f}, Predicted={pred_val:.6f}, Error={error:.6f}"
-        )
+    _print_initial_values_comparison(
+        target_digits, target_V_sign, single_digit_logits, single_V_sign, cfg
+    )
 
-    # Execute predicted DAG if executor is available
-    pred_final_exec = 0.0
-    if dag_executor is not None:
-        # Reuse the already extracted single tensors for execution
-        # Add batch and time dimensions for executor
-        pred_digit_logits_exec = single_digit_logits.unsqueeze(0).unsqueeze(
-            0
-        )  # (1, 1, num_initial_nodes, D, base)
-        pred_V_sign_exec = single_V_sign.unsqueeze(0).unsqueeze(
-            0
-        )  # (1, 1, total_nodes)
-        pred_O_exec = single_O.unsqueeze(0).unsqueeze(
-            0
-        )  # (1, 1, dag_depth, total_nodes)
-        pred_G_exec = single_G.unsqueeze(0).unsqueeze(0)  # (1, 1, dag_depth)
-
-        pred_final_exec = dag_executor(
-            pred_digit_logits_exec,
-            pred_V_sign_exec,
-            pred_O_exec,
-            pred_G_exec,
-        )[0, 0].item()
+    # Execute predicted DAG
+    pred_final_exec = _execute_dag_prediction(
+        dag_executor, single_digit_logits, single_V_sign, single_O, single_G
+    )
 
     print(f"\n--- Expression Comparison ---")
     print(f"Target Expression: {str(target_expr)}")
