@@ -97,15 +97,11 @@ def _compute_vsign_loss(
     )
 
     # Sign accuracy - V_sign predictions (tanh outputs) vs {-1, 1} targets
-    # Convert tanh outputs to discrete values using thresholds
+    # Convert tanh outputs to discrete values using 0.0 threshold (matches target generation)
     pred_V_sign_discrete = torch.where(
-        pred_V_sign_valid[:, :num_initial_nodes] > 0.5,
+        pred_V_sign_valid[:, :num_initial_nodes] > 0.0,
         torch.tensor(1.0, device=device),
-        torch.where(
-            pred_V_sign_valid[:, :num_initial_nodes] < -0.5,
-            torch.tensor(-1.0, device=device),
-            torch.tensor(0.0, device=device),
-        ),
+        torch.tensor(-1.0, device=device),
     )
     sign_correct = (
         pred_V_sign_discrete == target_V_sign[:, :num_initial_nodes]
@@ -134,16 +130,8 @@ def _compute_o_loss(
     O_loss = F.mse_loss(pred_O_valid, target_O)
 
     # Operand accuracy - O predictions vs target operand selectors
-    # Convert O predictions to discrete values {-1, 0, 1} using thresholds
-    pred_O_discrete = torch.where(
-        pred_O_valid > 0.5,
-        torch.tensor(1.0, device=device),
-        torch.where(
-            pred_O_valid < -0.5,
-            torch.tensor(-1.0, device=device),
-            torch.tensor(0.0, device=device),
-        ),
-    )
+    # Convert O predictions to nearest integers (targets can be any integer due to accumulation)
+    pred_O_discrete = torch.round(pred_O_valid)
     op_correct = (pred_O_discrete == target_O).float()
     op_accuracy = op_correct.mean()  # Average across tokens and batch
 

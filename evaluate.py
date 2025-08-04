@@ -258,6 +258,10 @@ def evaluate_dag_model(
         "valid_tokens": 0.0,
         "total_tokens": 0.0,
         "expression_valid_rate": 0.0,
+        "digit_accuracy": 0.0,
+        "sign_accuracy": 0.0,
+        "op_accuracy": 0.0,
+        "gate_accuracy": 0.0,
     }
 
     num_batches = 0
@@ -309,11 +313,17 @@ def evaluate_dag_model(
                     target_tensors,
                     valid_mask,
                     dag_executor=dag_executor,
+                    cfg=cfg,
                 )
 
                 # Accumulate losses
                 for key in total_losses.keys():
                     total_losses[key] += losses[key].item()
+
+                # Accumulate metrics (including accuracy metrics)
+                for key in losses.keys():
+                    if key in total_metrics:
+                        total_metrics[key] += losses[key].item()
 
                 # Compute per-token metrics
                 valid_tokens_count = valid_mask.sum().item()
