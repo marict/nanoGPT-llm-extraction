@@ -138,10 +138,8 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     # Placeholder for per-run directory; will be overwritten on the master
     # process once the wandb run is created.
     safe_run_name: str = "default_run"
-    # If overwrite_previous is enabled we keep only a single rolling checkpoint
-    # for this run, so we skip the aggressive cleanup that would otherwise
-    # delete checkpoints from earlier runs.
-    if cfg.clear_previous_checkpoints and not getattr(cfg, "overwrite_previous", False):
+    # Always clean previous checkpoints if enabled (no backwards compatibility)
+    if cfg.clear_previous_checkpoints:
         checkpoint_manager.clean_previous_checkpoints(cfg.name)
 
     # --------------------------------------------------------------------- #
@@ -665,18 +663,10 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                                 if valid_scores:
                                     val_acc = sum(valid_scores) / len(valid_scores)
 
-                            if getattr(cfg, "overwrite_previous", False):
-                                # Constant rolling checkpoint name inside the per-run directory
-                                checkpoint_filename = (
-                                    f"{safe_run_name}/ckpt_{cfg.name}.pt"
-                                )
-                            else:
-                                rel_name = (
-                                    checkpoint_manager.generate_checkpoint_filename(
-                                        cfg.name, iter_num, val_acc=val_acc
-                                    )
-                                )
-                                checkpoint_filename = f"{safe_run_name}/{rel_name}"
+                            rel_name = checkpoint_manager.generate_checkpoint_filename(
+                                cfg.name, iter_num, val_acc=val_acc
+                            )
+                            checkpoint_filename = f"{safe_run_name}/{rel_name}"
 
                             if master_process:
                                 print(f"Saving checkpoint: {checkpoint_filename}")

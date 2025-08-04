@@ -102,11 +102,7 @@ def _execute_dag_prediction(dag_executor, digit_logits, V_sign, O, G) -> float:
 def _print_token_by_token_breakdown(
     texts, target_tensors, valid_mask, cfg, batch_idx=0
 ):
-    """Print token-by-token breakdown showing what substring the model sees and target expression.
-
-    Shows the progressive substrings that the model sees during training and the corresponding
-    target expressions. The alignment between model input and targets is now correct.
-    """
+    """Print token-by-token breakdown showing what substring the model sees and target expression."""
     print(f"\n--- Token-by-Token Learning Objective ---")
 
     text = texts[batch_idx]
@@ -119,76 +115,57 @@ def _print_token_by_token_breakdown(
     valid_positions = torch.where(sample_mask)[0]
     print(f"Valid positions: {valid_positions.tolist()}")
 
-    # Show target positions for meaningful positions only
     print(f"\nTarget breakdown:")
 
-    # Get tokenization to understand which positions are beyond the actual tokens
+    # Get tokenization
     enc = tiktoken.get_encoding("gpt2")
     actual_tokens = enc.encode_ordinary(text)
     actual_token_count = len(actual_tokens)
 
-    positions_shown = 0
-    padding_count = 0
+    # Show enough positions to include all valid positions, with a reasonable limit
+    max_valid_pos = valid_positions[-1].item() if len(valid_positions) > 0 else 0
+    display_limit = min(max(25, max_valid_pos + 1), len(sample_targets))
 
-    for pos in range(min(20, len(sample_targets))):  # Show up to 20 positions
-        is_valid = sample_mask[pos].item()
+    def get_partial_text(pos):
+        """Get the partial text up to position pos."""
+        if pos + 1 <= actual_token_count:
+            partial_tokens = actual_tokens[: pos + 1]
+            return enc.decode(partial_tokens)
+        else:
+            return text[: pos + 1] if pos + 1 <= len(text) else text
 
+    for pos in range(display_limit):
         if pos < actual_token_count:
             # This is within the actual tokenized text
+            partial_text = get_partial_text(pos)
+            is_valid = sample_mask[pos].item()
+
             if is_valid:
                 # Get target expression for valid positions
                 target_dict = sample_targets[pos]
-                target_digits = target_dict["target_digits"]
-                target_V_sign = target_dict["target_V_sign"]
-                target_O = target_dict["target_O"]
-                target_G = target_dict["target_G"]
-
                 target_expr_sympy = tensor_to_expression(
-                    target_digits,
-                    target_V_sign,
-                    target_O,
-                    target_G,
+                    target_dict["target_digits"],
+                    target_dict["target_V_sign"],
+                    target_dict["target_O"],
+                    target_dict["target_G"],
                     max_digits=cfg.max_digits,
                     max_decimal_places=cfg.max_decimal_places,
                 )
-                # Convert to string for display
                 target_expr = str(target_expr_sympy)
                 # Truncate very long expressions for readability
                 if len(target_expr) > 60:
                     target_expr = target_expr[:57] + "..."
 
-                # Show what substring the model sees at this position
-                if pos + 1 <= actual_token_count:
-                    partial_tokens = actual_tokens[: pos + 1]
-                    partial_text = enc.decode(partial_tokens)
-                else:
-                    partial_text = text[: pos + 1] if pos + 1 <= len(text) else text
-
                 print(
                     f"  Position {pos:2d}: '{partial_text}' → [VALID] Target = {target_expr}"
                 )
-                positions_shown += 1
             else:
-                # Show what substring the model sees for invalid positions too
-                if pos + 1 <= actual_token_count:
-                    partial_tokens = actual_tokens[: pos + 1]
-                    partial_text = enc.decode(partial_tokens)
-                else:
-                    partial_text = text[: pos + 1] if pos + 1 <= len(text) else text
-
                 print(
                     f"  Position {pos:2d}: '{partial_text}' → [NOT VALID] (invalid substring)"
                 )
-                positions_shown += 1
-        else:
-            # This is padding beyond the actual tokens
-            padding_count += 1
 
-    # Count remaining padding if we stopped early
-    if len(sample_targets) > 20:
-        remaining_padding = len(sample_targets) - 20
-        padding_count += remaining_padding
-
+    # Count padding beyond display limit
+    padding_count = max(0, len(sample_targets) - display_limit)
     if padding_count > 0:
         print(f"  ... and {padding_count} tokens of padding")
 

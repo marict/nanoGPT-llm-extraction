@@ -632,18 +632,14 @@ class CheckpointManager:
                 "vocab_size": (saved_cfg or {}).get("vocab_size", 50304),
                 "n_embd": (saved_cfg or {}).get("n_embd", cfg.n_embd),
                 "n_head": (saved_cfg or {}).get("n_head", cfg.n_head),
-                "n_layer": (saved_cfg or {}).get(
-                    "n_layer", getattr(cfg, "n_layer", 12)
-                ),
+                "n_layer": (saved_cfg or {}).get("n_layer", cfg.n_layer),
                 "dropout": (saved_cfg or {}).get("dropout", cfg.dropout),
                 "bias": (saved_cfg or {}).get("bias", cfg.bias),
                 "dag_depth": (saved_cfg or {}).get("dag_depth", cfg.dag_depth),
                 "block_size": (saved_cfg or {}).get("block_size", cfg.block_size),
-                "max_digits": (saved_cfg or {}).get(
-                    "max_digits", getattr(cfg, "max_digits", 4)
-                ),
+                "max_digits": (saved_cfg or {}).get("max_digits", cfg.max_digits),
                 "max_decimal_places": (saved_cfg or {}).get(
-                    "max_decimal_places", getattr(cfg, "max_decimal_places", 4)
+                    "max_decimal_places", cfg.max_decimal_places
                 ),
             }
             model_config = GPTConfig(**model_cfg_dict)
@@ -659,11 +655,9 @@ class CheckpointManager:
                 "bias": (saved_cfg or {}).get("bias", cfg.bias),
                 "dag_depth": (saved_cfg or {}).get("dag_depth", cfg.dag_depth),
                 "block_size": (saved_cfg or {}).get("block_size", cfg.block_size),
-                "max_digits": (saved_cfg or {}).get(
-                    "max_digits", getattr(cfg, "max_digits", 4)
-                ),
+                "max_digits": (saved_cfg or {}).get("max_digits", cfg.max_digits),
                 "max_decimal_places": (saved_cfg or {}).get(
-                    "max_decimal_places", getattr(cfg, "max_decimal_places", 4)
+                    "max_decimal_places", cfg.max_decimal_places
                 ),
             }
             model_config = PredictorOnlyConfig(**model_cfg_dict)

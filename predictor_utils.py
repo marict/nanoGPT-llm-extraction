@@ -434,7 +434,7 @@ def compute_dag_loss(
 
     # Execution loss (if DAG executor is provided)
     exec_loss = torch.tensor(0.0, device=device)
-    enable_exec_loss = getattr(cfg, "enable_exec_loss", True)
+    enable_exec_loss = cfg.enable_exec_loss
     if dag_executor is not None and enable_exec_loss:
         exec_loss = _compute_exec_loss(
             dag_executor,
@@ -452,14 +452,14 @@ def compute_dag_loss(
     # Build total loss from enabled components
     total_loss = torch.tensor(0.0, device=device)
 
-    # Use cfg flags if provided, otherwise default to all enabled
-    enable_digit_loss = getattr(cfg, "enable_digit_loss", True)
-    enable_vmag_loss = getattr(cfg, "enable_vmag_loss", True)
-    enable_vsign_loss = getattr(cfg, "enable_vsign_loss", True)
-    enable_o_loss = getattr(cfg, "enable_o_loss", True)
-    enable_g_loss = getattr(cfg, "enable_g_loss", True)
-    enable_exec_loss = getattr(cfg, "enable_exec_loss", True)
-    exec_loss_weight = getattr(cfg, "exec_loss_weight", 0.01)
+    # Use cfg flags directly (no backwards compatibility)
+    enable_digit_loss = cfg.enable_digit_loss
+    enable_vmag_loss = cfg.enable_vmag_loss
+    enable_vsign_loss = cfg.enable_vsign_loss
+    enable_o_loss = cfg.enable_o_loss
+    enable_g_loss = cfg.enable_g_loss
+    enable_exec_loss = cfg.enable_exec_loss
+    exec_loss_weight = cfg.exec_loss_weight
 
     if enable_digit_loss:
         total_loss = total_loss + digit_loss

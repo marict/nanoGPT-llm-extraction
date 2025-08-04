@@ -13,7 +13,14 @@ class MockConfig:
     def __init__(self):
         self.max_digits = 4
         self.max_decimal_places = 4
+        # Loss component flags (required after removing backwards compatibility)
+        self.enable_digit_loss = True
+        self.enable_vmag_loss = True
+        self.enable_vsign_loss = True
+        self.enable_o_loss = True
+        self.enable_g_loss = True
         self.enable_exec_loss = True
+        self.exec_loss_weight = 0.01
 
 
 @pytest.fixture

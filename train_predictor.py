@@ -320,16 +320,14 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     if cfg.always_save_checkpoint or is_new_best:
                         val_acc = eval_losses.get("op_accuracy", None)
 
-                        if getattr(cfg, "overwrite_previous", False):
-                            checkpoint_filename = f"{safe_run_name}/ckpt_{cfg.name}.pt"
-                        else:
-                            rel_name = checkpoint_manager.generate_checkpoint_filename(
-                                cfg.name,
-                                iter_num,
-                                val_acc=val_acc,
-                                is_best=is_new_best,
-                            )
-                            checkpoint_filename = f"{safe_run_name}/{rel_name}"
+                        # Always use unique checkpoint names (no backwards compatibility)
+                        rel_name = checkpoint_manager.generate_checkpoint_filename(
+                            cfg.name,
+                            iter_num,
+                            val_acc=val_acc,
+                            is_best=is_new_best,
+                        )
+                        checkpoint_filename = f"{safe_run_name}/{rel_name}"
 
                         if is_new_best:
                             print(

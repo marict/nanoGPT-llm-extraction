@@ -142,9 +142,13 @@ def test_gate_targets_distribution_hypothesis():
                 f"This explains why gate accuracy starts high and doesn't improve much."
             )
 
-        return baseline_accuracy
-
-    return 0.0
+        # Assert that we found evidence of the gate bias issue
+        assert (
+            baseline_accuracy >= 0.5
+        ), f"Expected high baseline accuracy due to unused positions, got {baseline_accuracy:.1%}"
+        assert (
+            total_ones > total_gates // 2
+        ), f"Expected majority of gates to be 1s, got {total_ones}/{total_gates}"
 
 
 def test_proposed_fix_for_gate_targets():
@@ -171,19 +175,17 @@ def test_proposed_fix_for_gate_targets():
 
 
 if __name__ == "__main__":
+    # Run tests individually for manual testing
     test_gate_targets_unused_positions()
     test_gate_targets_different_dag_depths()
-    baseline = test_gate_targets_distribution_hypothesis()
+    test_gate_targets_distribution_hypothesis()
     test_proposed_fix_for_gate_targets()
 
     print(f"\n=== CONCLUSION ===")
-    if baseline >= 0.75:
-        print(
-            f"✅ BUG CONFIRMED: Unused gate positions cause artificially high accuracy!"
-        )
-        print(
-            f"   The model achieves {baseline:.0%}+ accuracy by predicting mostly 1s."
-        )
-        print(f"   This is why gate accuracy doesn't improve during training.")
-    else:
-        print(f"❓ Need to investigate further - baseline accuracy only {baseline:.1%}")
+    print(f"✅ All gate target tests completed successfully!")
+    print(
+        f"   The tests verify that unused gate positions cause artificially high accuracy."
+    )
+    print(
+        f"   This explains why gate accuracy starts high and doesn't improve much during training."
+    )

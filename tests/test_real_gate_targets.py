@@ -1,5 +1,6 @@
 """Test gate targets using actual generated expressions from the data pipeline."""
 
+import pytest
 import tiktoken
 import torch
 
@@ -90,11 +91,24 @@ def test_real_generated_expressions_gate_targets():
         else:
             print(f"\n✅ Real data looks more balanced than test expressions")
 
-        return baseline_accuracy, gate_patterns
+        # Assert that we found evidence of the gate bias issue
+        assert (
+            baseline_accuracy >= 0.5
+        ), f"Expected high baseline accuracy due to gate bias, got {baseline_accuracy:.1%}"
+        assert len(gate_patterns) > 0, "Expected to find gate patterns in real data"
+
+        # Verify the most common pattern is all 1s (indicating bias)
+        most_common_pattern = max(gate_patterns.items(), key=lambda x: x[1])
+        assert most_common_pattern[0] == (
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+        ), f"Expected most common pattern to be all 1s, got {most_common_pattern[0]}"
 
     else:
-        print("No valid expressions found!")
-        return 0.0, {}
+        # If no valid expressions found, this is a test setup issue
+        pytest.fail("No valid expressions found - test setup problem")
 
 
 def test_gate_vs_operation_count():
