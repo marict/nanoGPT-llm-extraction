@@ -82,7 +82,6 @@ def print_detailed_validation_sample(
         max_digits=cfg.max_digits,
         max_decimal_places=cfg.max_decimal_places,
     )
-    target_expression_text = str(target_expr)
 
     # Extract single prediction tensors for expression conversion
     single_digit_logits = pred_digit_logits[
@@ -92,16 +91,39 @@ def print_detailed_validation_sample(
     single_O = pred_O[0, last_valid_pos]  # (dag_depth, total_nodes)
     single_G = pred_G[0, last_valid_pos]  # (dag_depth,)
 
-    # Convert predicted tensors to expression string using same method as target
+    # Sharpen predictions to discrete choices for cleaner expression display
+    sharp_digit_logits = single_digit_logits.clone()
+    sharp_V_sign = single_V_sign.clone()
+    sharp_O = torch.zeros_like(single_O)
+    sharp_G = (single_G > 0.5).float()  # Binary threshold for domain gates
+
+    # For O tensor: Use threshold-based approach to preserve unary/binary/trinary operations
+    dag_depth, _ = single_O.shape
+    threshold = 0.1  # Only keep operands with significant probability (>10% confidence)
+
+    for step in range(dag_depth):
+        step_coeffs = single_O[step]  # (total_nodes,)
+
+        # Find operands above threshold
+        significant_mask = torch.abs(step_coeffs) > threshold
+        significant_indices = torch.nonzero(significant_mask, as_tuple=False).flatten()
+
+        if len(significant_indices) > 0:
+            # Keep the signs and normalize to clean values (+1, -1)
+            for idx in significant_indices:
+                coeff_val = step_coeffs[idx].item()
+                # Preserve sign but make it clean: positive -> +1, negative -> -1
+                sharp_O[step, idx] = 1.0 if coeff_val > 0 else -1.0
+
+    # Convert predicted tensors to expression string with sharpened values
     pred_expr = tensor_to_expression(
-        single_digit_logits,
-        single_V_sign,
-        single_O,
-        single_G,
+        sharp_digit_logits,
+        sharp_V_sign,
+        sharp_O,
+        sharp_G,
         max_digits=cfg.max_digits,
         max_decimal_places=cfg.max_decimal_places,
     )
-    pred_expression_text = str(pred_expr)
 
     # Execute predicted DAG if executor is available
     pred_final_exec = 0.0

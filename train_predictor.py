@@ -261,6 +261,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     eval_msg = (
                         f"[val] iter {iter_num}: total_loss {eval_losses['total_loss']:.4f}, "
                         f"digit_loss {eval_losses.get('digit_loss', 0.0):.4f}, "
+                        f"digit_acc {eval_losses.get('digit_accuracy', 0.0):.1%}, "
                         f"V_mag_loss {eval_losses.get('V_mag_loss', 0.0):.4f}, "
                         f"V_sign_loss {eval_losses.get('V_sign_loss', 0.0):.4f}, "
                         f"O_loss {eval_losses.get('O_loss', 0.0):.4f}, "
