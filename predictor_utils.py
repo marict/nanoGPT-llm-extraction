@@ -460,6 +460,9 @@ def compute_dag_loss(
     enable_g_loss = cfg.enable_g_loss
     enable_exec_loss = cfg.enable_exec_loss
     exec_loss_weight = cfg.exec_loss_weight
+    g_loss_weight = getattr(
+        cfg, "g_loss_weight", 1.0
+    )  # Default to 1.0 if not specified
 
     if enable_digit_loss:
         total_loss = total_loss + digit_loss
@@ -470,7 +473,7 @@ def compute_dag_loss(
     if enable_o_loss:
         total_loss = total_loss + O_loss
     if enable_g_loss:
-        total_loss = total_loss + G_loss
+        total_loss = total_loss + (G_loss * g_loss_weight)
     if enable_exec_loss:
         total_loss = total_loss + (exec_loss * exec_loss_weight)
 
@@ -481,7 +484,7 @@ def compute_dag_loss(
         "V_mag_loss": V_mag_loss,
         "V_sign_loss": V_sign_loss,
         "O_loss": O_loss,
-        "G_loss": G_loss,
+        "G_loss": G_loss * g_loss_weight,
         "exec_loss": exec_loss * exec_loss_weight,
         "sign_accuracy": sign_accuracy,
         "op_accuracy": op_accuracy,

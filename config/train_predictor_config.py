@@ -66,11 +66,12 @@ check_nans = False  # Check for NaNs in cloud training
 # Loss component flags
 enable_digit_loss = True
 enable_vmag_loss = False
-enable_vsign_loss = False
-enable_o_loss = False
-enable_g_loss = False
+enable_vsign_loss = True
+enable_o_loss = True
+enable_g_loss = True  # Enable gate loss for learning
 enable_exec_loss = False
 exec_loss_weight = 0.01
+g_loss_weight = 100.0  # High multiplier to compensate for low learning rate (3e-4)
 
 # Random seeds
 seed = 42
