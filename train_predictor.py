@@ -277,6 +277,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "iter": iter_num,
                         "val/total_loss": eval_losses["total_loss"],
                         "val/digit_loss": eval_losses.get("digit_loss", 0.0),
+                        "val/digit_accuracy": eval_losses.get("digit_accuracy", 0.0),
                         "val/V_sign_loss": eval_losses.get("V_sign_loss", 0.0),
                         "val/O_loss": eval_losses.get("O_loss", 0.0),
                         "val/G_loss": eval_losses.get("G_loss", 0.0),
@@ -468,6 +469,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
             if iter_num % cfg.log_interval == 0 and master_process:
                 # Display losses for DAG model
                 digit_loss_val = loss_accum.get("digit_loss", 0.0)
+                digit_accuracy_val = loss_accum.get("digit_accuracy", 0.0)
                 V_mag_loss_val = loss_accum.get("V_mag_loss", 0.0)
                 V_sign_loss_val = loss_accum.get("V_sign_loss", 0.0)
                 O_loss_val = loss_accum.get("O_loss", 0.0)
@@ -478,6 +480,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 log_msg = (
                     f"iter {iter_num}: loss {loss_accum['total_loss']:.4f}, "
                     f"digit {digit_loss_val:.4f}, "
+                    f"digit_acc {digit_accuracy_val:.1%}, "
                     f"V_mag {V_mag_loss_val:.4f}, "
                     f"V_sign {V_sign_loss_val:.4f}, "
                     f"O {O_loss_val:.4f}, "
@@ -500,6 +503,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "iter": iter_num,
                         "train/total_loss": loss_accum["total_loss"],
                         "train/digit_loss": loss_accum.get("digit_loss", 0.0),
+                        "train/digit_accuracy": loss_accum.get("digit_accuracy", 0.0),
                         "train/V_sign_loss": loss_accum.get("V_sign_loss", 0.0),
                         "train/O_loss": loss_accum.get("O_loss", 0.0),
                         "train/G_loss": loss_accum.get("G_loss", 0.0),

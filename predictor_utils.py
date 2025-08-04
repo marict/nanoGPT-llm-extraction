@@ -41,8 +41,8 @@ def _compute_digit_loss(
     pred_digit_logits: torch.Tensor,  # (num_valid, N, D, base) - Raw logits for each digit
     target_digits: torch.Tensor,  # (num_valid, N, D, base) - One-hot target digits
     device_type: str = "cuda",
-) -> torch.Tensor:
-    """Compute cross-entropy loss for digit prediction.
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute cross-entropy loss and accuracy for digit prediction.
 
     This loss function is inherently stable because each digit prediction is bounded [0, 9].
     Maximum loss per digit is cross_entropy ≤ ln(10) ≈ 2.3, preventing NaN explosion.
@@ -53,7 +53,9 @@ def _compute_digit_loss(
         device_type: Device type for autocast
 
     Returns:
-        Scalar tensor with averaged digit loss
+        Tuple of (digit_loss, digit_accuracy) where:
+        - digit_loss: Scalar tensor with averaged cross-entropy loss
+        - digit_accuracy: Scalar tensor with percentage of digits predicted correctly
     """
     num_valid, N, D, base = pred_digit_logits.shape
 
@@ -106,7 +108,12 @@ def _compute_digit_loss(
         # Standard cross-entropy over raw logits - bounded loss prevents NaN
         digit_loss = F.cross_entropy(logits_flat, target_idx, reduction="mean")
 
-    return digit_loss
+        # Compute digit accuracy - percentage of digits predicted correctly
+        pred_idx = torch.argmax(logits_flat, dim=-1)  # (num_valid * N * D,)
+        correct_digits = (pred_idx == target_idx).float()
+        digit_accuracy = correct_digits.mean()  # Average over all digit positions
+
+    return digit_loss, digit_accuracy
 
 
 def _compute_exec_loss(
@@ -290,8 +297,10 @@ def compute_dag_loss(
     dag_depth = (total_nodes - 1) // 2
     num_initial_nodes = dag_depth + 1
 
-    # Digit loss - stable bounded loss for magnitudes
-    digit_loss = _compute_digit_loss(pred_digit_logits_valid, target_digits)
+    # Digit loss and accuracy - stable bounded loss for magnitudes
+    digit_loss, digit_accuracy = _compute_digit_loss(
+        pred_digit_logits_valid, target_digits
+    )
 
     # Convert predicted digit logits to V_mag values using shared method
     # Add batch and time dimensions for DAGExecutor interface: (num_valid, N, D, base) -> (num_valid, 1, N, D, base)
@@ -409,6 +418,7 @@ def compute_dag_loss(
     return {
         "total_loss": total_loss,
         "digit_loss": digit_loss,
+        "digit_accuracy": digit_accuracy,
         "V_mag_loss": V_mag_loss,
         "V_sign_loss": V_sign_loss,
         "O_loss": O_loss,
