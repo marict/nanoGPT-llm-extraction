@@ -11,7 +11,7 @@ import sympy
 import torch
 import torch.distributed as dist
 
-from data.dagset.streaming import tensor_to_expression
+from data.dagset.streaming import digit_onehot_to_float, tensor_to_expression
 from predictor_utils import compute_dag_loss, tokenize_texts
 
 
@@ -125,6 +125,69 @@ def print_detailed_validation_sample(
         max_decimal_places=cfg.max_decimal_places,
     )
 
+    # Extract and log initial values for comparison
+    num_initial_nodes = target_digits.shape[0]
+
+    print(f"\n--- Initial Values Comparison ---")
+
+    # Target initial values (from target_digits)
+    target_initial_values = []
+    for n in range(num_initial_nodes):
+        target_digit_onehot = target_digits[n]  # (D, base)
+        target_sign = target_V_sign[n].item()
+        try:
+            target_value = digit_onehot_to_float(
+                target_digit_onehot, target_sign, cfg.max_digits, cfg.max_decimal_places
+            )
+            target_initial_values.append(target_value)
+        except Exception as e:
+            print(f"Error converting target digit {n}: {e}")
+            target_initial_values.append(float("nan"))
+
+    # Predicted initial values (from predicted digit logits)
+    pred_initial_values = []
+    for n in range(num_initial_nodes):
+        pred_digit_logits_node = single_digit_logits[n]  # (D, base)
+        pred_sign = single_V_sign[n].item()
+
+        try:
+            # Convert logits to probabilities and then to one-hot (same as tensor_to_expression)
+            digit_probs = torch.softmax(pred_digit_logits_node, dim=-1)
+            digit_indices = torch.argmax(digit_probs, dim=1)
+
+            # Create one-hot encoding
+            digit_onehot = torch.zeros_like(digit_probs)
+            for d, idx in enumerate(digit_indices):
+                digit_onehot[d, idx] = 1.0
+
+            # Convert sign to discrete
+            sign = 1.0 if pred_sign >= 0 else -1.0
+
+            # Convert to float value
+            pred_value = digit_onehot_to_float(
+                digit_onehot, sign, cfg.max_digits, cfg.max_decimal_places
+            )
+            pred_initial_values.append(pred_value)
+        except Exception as e:
+            print(f"Error converting predicted digit {n}: {e}")
+            pred_initial_values.append(float("nan"))
+
+    # Print initial values comparison
+    for n in range(num_initial_nodes):
+        target_val = target_initial_values[n]
+        pred_val = pred_initial_values[n]
+        error = (
+            abs(target_val - pred_val)
+            if not (
+                torch.isnan(torch.tensor(target_val))
+                or torch.isnan(torch.tensor(pred_val))
+            )
+            else float("nan")
+        )
+        print(
+            f"Initial[{n}]: Target={target_val:.6f}, Predicted={pred_val:.6f}, Error={error:.6f}"
+        )
+
     # Execute predicted DAG if executor is available
     pred_final_exec = 0.0
     if dag_executor is not None:
@@ -148,6 +211,7 @@ def print_detailed_validation_sample(
             pred_G_exec,
         )[0, 0].item()
 
+    print(f"\n--- Expression Comparison ---")
     print(f"Target Expression: {str(target_expr)}")
     print(f"Target Final Execution: {target_final_exec:.6f}")
     print(f"Predicted Expression: {str(pred_expr)}")
