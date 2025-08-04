@@ -16,20 +16,56 @@ from models.dag_model import DAGExecutor
 
 
 def _compute_value_loss(
-    pred_values: torch.Tensor, target_values: torch.Tensor
+    pred_digit_logits: torch.Tensor, target_digits: torch.Tensor
 ) -> torch.Tensor:
     """
-    Compute robust loss for magnitude values using asinh transformation.
+    Compute robust loss for magnitude values by converting digits to values and using asinh transformation.
+
+    Args:
+        pred_digit_logits: (num_valid, num_initial_nodes, D, base) predicted digit logits
+        target_digits: (num_valid, num_initial_nodes, D, base) target digit one-hot vectors
     """
+    # Convert predicted digit logits to V_mag values using shared method
+    # Add batch and time dimensions for DAGExecutor interface: (num_valid, N, D, base) -> (num_valid, 1, N, D, base)
+    pred_digit_logits_expanded = pred_digit_logits.unsqueeze(1)
+    pred_V_mag_from_digits = DAGExecutor.digits_to_vmag(
+        pred_digit_logits_expanded,
+        max_digits=pred_digit_logits.shape[-2]
+        // 2,  # Assuming D = max_digits + max_decimal_places
+        max_decimal_places=pred_digit_logits.shape[-2] // 2,
+        base=pred_digit_logits.shape[-1],
+    ).squeeze(
+        1
+    )  # (num_valid, num_initial_nodes)
+
+    # Convert target digits to V_mag values for comparison
+    target_V_mag_from_digits = []
+    for i in range(target_digits.shape[0]):
+        target_digits_expanded = target_digits[i : i + 1].unsqueeze(
+            1
+        )  # (1, 1, N, D, base)
+        target_V_mag = DAGExecutor.digits_to_vmag(
+            target_digits_expanded,
+            max_digits=target_digits.shape[-2] // 2,
+            max_decimal_places=target_digits.shape[-2] // 2,
+            base=target_digits.shape[-1],
+        ).squeeze()  # (num_initial_nodes,)
+        target_V_mag_from_digits.append(target_V_mag)
+    target_V_mag_from_digits = torch.stack(
+        target_V_mag_from_digits
+    )  # (num_valid, num_initial_nodes)
+
     # Handle edge cases
-    if torch.any(torch.isnan(pred_values)) or torch.any(torch.isinf(pred_values)):
+    if torch.any(torch.isnan(pred_V_mag_from_digits)) or torch.any(
+        torch.isinf(pred_V_mag_from_digits)
+    ):
         # Heavily penalize NaN/Inf predictions
-        return torch.tensor(100.0, device=pred_values.device, requires_grad=True)
+        return torch.tensor(100.0, device=pred_digit_logits.device, requires_grad=True)
 
     # Use asinh transformation - handles all positive values smoothly
     # asinh(x) ≈ x for small x, ≈ log(2x) for large x
-    asinh_pred = torch.asinh(pred_values)
-    asinh_target = torch.asinh(target_values)
+    asinh_pred = torch.asinh(pred_V_mag_from_digits)
+    asinh_target = torch.asinh(target_V_mag_from_digits)
 
     # Simple MSE in asinh space - stable across all magnitude ranges
     value_loss = F.mse_loss(asinh_pred, asinh_target)
@@ -117,27 +153,74 @@ def _compute_digit_loss(
 
 
 def _compute_exec_loss(
-    pred_exec: torch.Tensor, target_exec: torch.Tensor
+    dag_executor,
+    pred_digit_logits_valid: torch.Tensor,
+    pred_V_sign_valid: torch.Tensor,
+    pred_O_valid: torch.Tensor,
+    pred_G_valid: torch.Tensor,
+    target_final_exec: torch.Tensor,
+    batch_indices: torch.Tensor,
+    token_indices: torch.Tensor,
+    cfg,
+    device: torch.device,
 ) -> torch.Tensor:
     """
-    Compute robust execution loss using asinh transformation for stability.
+    Execute predicted DAG and compute robust execution loss using asinh transformation for stability.
     """
-    # Handle edge cases
-    if torch.any(torch.isnan(pred_exec)) or torch.any(torch.isinf(pred_exec)):
-        # Heavily penalize NaN/Inf predictions
-        return torch.tensor(100.0, device=pred_exec.device, requires_grad=True)
+    try:
+        # Add batch and time dimensions back for executor: (num_valid,) -> (num_valid, 1)
+        pred_digit_logits_exec = pred_digit_logits_valid.unsqueeze(
+            1
+        )  # (num_valid, 1, num_initial_nodes, D, base)
+        pred_V_sign_exec = pred_V_sign_valid.unsqueeze(1)  # (num_valid, 1, total_nodes)
+        pred_O_exec = pred_O_valid.unsqueeze(
+            1
+        )  # (num_valid, 1, dag_depth, total_nodes)
+        pred_G_exec = pred_G_valid.unsqueeze(1)  # (num_valid, 1, dag_depth)
 
-    # Use asinh transformation - differentiable and handles all real values
-    # asinh(x) ≈ log(|x|) for large |x|, but smooth and defined everywhere
-    asinh_pred = torch.asinh(pred_exec)
-    asinh_target = torch.asinh(target_exec)
+        # Execute predicted DAG - executor handles digit conversion internally
+        pred_final_exec = dag_executor(
+            pred_digit_logits_exec, pred_V_sign_exec, pred_O_exec, pred_G_exec
+        )  # (num_valid, 1)
+        pred_final_exec = pred_final_exec.squeeze(1)  # (num_valid,)
 
-    # Use Huber loss in asinh space for smooth handling of extreme errors
-    # Huber loss: quadratic for small errors, linear for large errors
-    delta = 1.0  # Transition point between quadratic and linear behavior
-    exec_loss = F.huber_loss(asinh_pred, asinh_target, delta=delta)
+        # Check for NaN/Inf in execution results and log problematic cases
+        _log_problematic_dag_executions(
+            pred_final_exec,
+            batch_indices,
+            token_indices,
+            target_final_exec,
+            pred_digit_logits_exec,
+            pred_V_sign_exec,
+            pred_O_exec,
+            pred_G_exec,
+            cfg,
+        )
 
-    return exec_loss
+        # Handle edge cases
+        if torch.any(torch.isnan(pred_final_exec)) or torch.any(
+            torch.isinf(pred_final_exec)
+        ):
+            # Heavily penalize NaN/Inf predictions
+            return torch.tensor(100.0, device=device, requires_grad=True)
+
+        # Use asinh transformation - differentiable and handles all real values
+        # asinh(x) ≈ log(|x|) for large |x|, but smooth and defined everywhere
+        asinh_pred = torch.asinh(pred_final_exec)
+        asinh_target = torch.asinh(target_final_exec)
+
+        # Use Huber loss in asinh space for smooth handling of extreme errors
+        # Huber loss: quadratic for small errors, linear for large errors
+        # Increase delta to stay in quadratic regime longer for better gradients
+        delta = 10.0  # Larger delta for stronger gradients on large errors
+        exec_loss = F.huber_loss(asinh_pred, asinh_target, delta=delta)
+
+        return exec_loss
+    except Exception:
+        print(
+            f"Execution failed for batch {batch_indices[0].item()}, token {token_indices[0].item()}"
+        )
+        raise
 
 
 def _log_problematic_dag_executions(
@@ -302,38 +385,8 @@ def compute_dag_loss(
         pred_digit_logits_valid, target_digits
     )
 
-    # Convert predicted digit logits to V_mag values using shared method
-    # Add batch and time dimensions for DAGExecutor interface: (num_valid, N, D, base) -> (num_valid, 1, N, D, base)
-    pred_digit_logits_expanded = pred_digit_logits_valid.unsqueeze(1)
-    pred_V_mag_from_digits = DAGExecutor.digits_to_vmag(
-        pred_digit_logits_expanded,
-        max_digits=pred_digit_logits_valid.shape[-2]
-        // 2,  # Assuming D = max_digits + max_decimal_places
-        max_decimal_places=pred_digit_logits_valid.shape[-2] // 2,
-        base=pred_digit_logits_valid.shape[-1],
-    ).squeeze(
-        1
-    )  # (num_valid, num_initial_nodes)
-
-    # Convert target digits to V_mag values for comparison
-    target_V_mag_from_digits = []
-    for i in range(target_digits.shape[0]):
-        target_digits_expanded = target_digits[i : i + 1].unsqueeze(
-            1
-        )  # (1, 1, N, D, base)
-        target_V_mag = DAGExecutor.digits_to_vmag(
-            target_digits_expanded,
-            max_digits=target_digits.shape[-2] // 2,
-            max_decimal_places=target_digits.shape[-2] // 2,
-            base=target_digits.shape[-1],
-        ).squeeze()  # (num_initial_nodes,)
-        target_V_mag_from_digits.append(target_V_mag)
-    target_V_mag_from_digits = torch.stack(
-        target_V_mag_from_digits
-    )  # (num_valid, num_initial_nodes)
-
-    # Compute V_mag loss using robust value loss
-    V_mag_loss = _compute_value_loss(pred_V_mag_from_digits, target_V_mag_from_digits)
+    # Compute V_mag loss using robust value loss (handles digit conversion internally)
+    V_mag_loss = _compute_value_loss(pred_digit_logits_valid, target_digits)
 
     # Sign loss - only on initial nodes (model already outputs tanh-activated values)
     V_sign_loss = F.mse_loss(
@@ -349,46 +402,20 @@ def compute_dag_loss(
 
     # Execution loss (if DAG executor is provided)
     exec_loss = torch.tensor(0.0, device=device)
-    if dag_executor is not None:
-        try:
-            # Add batch and time dimensions back for executor: (num_valid,) -> (num_valid, 1)
-            pred_digit_logits_exec = pred_digit_logits_valid.unsqueeze(
-                1
-            )  # (num_valid, 1, num_initial_nodes, D, base)
-            pred_V_sign_exec = pred_V_sign_valid.unsqueeze(
-                1
-            )  # (num_valid, 1, total_nodes)
-            pred_O_exec = pred_O_valid.unsqueeze(
-                1
-            )  # (num_valid, 1, dag_depth, total_nodes)
-            pred_G_exec = pred_G_valid.unsqueeze(1)  # (num_valid, 1, dag_depth)
-
-            # Execute predicted DAG - executor handles digit conversion internally
-            pred_final_exec = dag_executor(
-                pred_digit_logits_exec, pred_V_sign_exec, pred_O_exec, pred_G_exec
-            )  # (num_valid, 1)
-            pred_final_exec = pred_final_exec.squeeze(1)  # (num_valid,)
-
-            # Check for NaN/Inf in execution results and log problematic cases
-            _log_problematic_dag_executions(
-                pred_final_exec,
-                batch_indices,
-                token_indices,
-                target_final_exec,
-                pred_digit_logits_exec,
-                pred_V_sign_exec,
-                pred_O_exec,
-                pred_G_exec,
-                cfg,
-            )
-
-            # Compute robust execution loss
-            exec_loss = _compute_exec_loss(pred_final_exec, target_final_exec)
-        except Exception:
-            print(
-                f"Execution failed for batch {batch_indices[0].item()}, token {token_indices[0].item()}"
-            )
-            raise
+    enable_exec_loss = getattr(cfg, "enable_exec_loss", True)
+    if dag_executor is not None and enable_exec_loss:
+        exec_loss = _compute_exec_loss(
+            dag_executor,
+            pred_digit_logits_valid,
+            pred_V_sign_valid,
+            pred_O_valid,
+            pred_G_valid,
+            target_final_exec,
+            batch_indices,
+            token_indices,
+            cfg,
+            device,
+        )
 
     # Build total loss from enabled components
     total_loss = torch.tensor(0.0, device=device)
