@@ -64,10 +64,10 @@ check_nans = False  # Check for NaNs in cloud training
 
 
 # Loss component flags
-enable_digit_loss = True
-enable_vmag_loss = True
-enable_vsign_loss = True
-enable_o_loss = True
+enable_digit_loss = False
+enable_vmag_loss = False
+enable_vsign_loss = False
+enable_o_loss = False
 enable_g_loss = True
 enable_exec_loss = False
 exec_loss_weight = 0.01
