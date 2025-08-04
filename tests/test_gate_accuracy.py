@@ -2,9 +2,41 @@
 
 import pytest
 import torch
-import torch.nn.functional as F
 
 from predictor_utils import _compute_g_loss
+
+
+def create_mock_target_O(
+    batch_size: int, dag_depth: int, total_nodes: int = 7
+) -> torch.Tensor:
+    """Create mock target_O that represents real operations (not identity operations).
+
+    Each O_step will have multiple non-zero coefficients, so it sums to != 1,
+    ensuring the operation mask treats these as real operations.
+
+    Args:
+        batch_size: Number of samples
+        dag_depth: Number of operation steps
+        total_nodes: Total number of nodes in the DAG
+
+    Returns:
+        target_O: (batch_size, dag_depth, total_nodes) - Mock operand matrix for real operations
+    """
+    target_O = torch.zeros(batch_size, dag_depth, total_nodes)
+
+    # For each operation step, create a real operation with 2 operands
+    for i in range(dag_depth):
+        # Use coefficients that sum to != 1 (e.g., [1, -1] sums to 0, [2, 1] sums to 3)
+        if i % 2 == 0:
+            # Addition-like: [1, 1] at positions 0,1
+            target_O[:, i, 0] = 1.0
+            target_O[:, i, 1] = 1.0
+        else:
+            # Subtraction-like: [1, -1] at positions 0,1
+            target_O[:, i, 0] = 1.0
+            target_O[:, i, 1] = -1.0
+
+    return target_O
 
 
 def test_gate_accuracy_perfect_predictions():
@@ -15,8 +47,9 @@ def test_gate_accuracy_perfect_predictions():
     pred_logits = torch.tensor(
         [[5.0, 4.0, 6.0]]
     )  # (1, 3) - high logits → sigmoid > 0.5
+    target_O = create_mock_target_O(1, 3)  # Mock real operations
 
-    loss, accuracy = _compute_g_loss(pred_logits, target_G)
+    loss, accuracy = _compute_g_loss(pred_logits, target_G, target_O)
 
     # Sigmoid of high positive values should be > 0.5, so discrete prediction = 1
     # All targets are 1, so accuracy should be 100%
@@ -29,8 +62,9 @@ def test_gate_accuracy_perfect_predictions():
     pred_logits = torch.tensor(
         [[-5.0, -4.0, -6.0]]
     )  # (1, 3) - low logits → sigmoid < 0.5
+    target_O = create_mock_target_O(1, 3)  # Mock real operations
 
-    loss, accuracy = _compute_g_loss(pred_logits, target_G)
+    _, accuracy = _compute_g_loss(pred_logits, target_G, target_O)
 
     # Sigmoid of high negative values should be < 0.5, so discrete prediction = 0
     # All targets are 0, so accuracy should be 100%
@@ -47,8 +81,9 @@ def test_gate_accuracy_terrible_predictions():
     pred_logits = torch.tensor(
         [[-5.0, -4.0, -6.0]]
     )  # (1, 3) - low logits → sigmoid < 0.5
+    target_O = create_mock_target_O(1, 3)  # Mock real operations
 
-    loss, accuracy = _compute_g_loss(pred_logits, target_G)
+    loss, accuracy = _compute_g_loss(pred_logits, target_G, target_O)
 
     # Predictions will be 0 but targets are 1, so accuracy should be 0%
     assert accuracy.item() == pytest.approx(
@@ -60,8 +95,9 @@ def test_gate_accuracy_terrible_predictions():
     pred_logits = torch.tensor(
         [[5.0, 4.0, 6.0]]
     )  # (1, 3) - high logits → sigmoid > 0.5
+    target_O = create_mock_target_O(1, 3)  # Mock real operations
 
-    loss, accuracy = _compute_g_loss(pred_logits, target_G)
+    loss, accuracy = _compute_g_loss(pred_logits, target_G, target_O)
 
     # Predictions will be 1 but targets are 0, so accuracy should be 0%
     assert accuracy.item() == pytest.approx(
@@ -77,8 +113,9 @@ def test_gate_accuracy_mixed_predictions():
     pred_logits = torch.tensor(
         [[5.0, -4.0, 6.0, 2.0]]
     )  # (1, 4) - first 3 correct, last wrong
+    target_O = create_mock_target_O(1, 4)  # Mock real operations
 
-    loss, accuracy = _compute_g_loss(pred_logits, target_G)
+    loss, accuracy = _compute_g_loss(pred_logits, target_G, target_O)
 
     # Sigmoid outputs: [~1, ~0, ~1, ~0.88]
     # Discrete outputs (>0.5): [1, 0, 1, 1]
@@ -99,7 +136,10 @@ def test_gate_accuracy_edge_cases_around_threshold():
     # Logits that produce sigmoid values just above and below 0.5
     pred_logits = torch.tensor([[0.1, -0.1, 0.01, -0.01]])  # (1, 4)
 
-    loss, accuracy = _compute_g_loss(pred_logits, target_G)
+    target_O = create_mock_target_O(
+        pred_logits.shape[0], pred_logits.shape[1]
+    )  # Mock real operations
+    loss, accuracy = _compute_g_loss(pred_logits, target_G, target_O)
 
     # Check the actual sigmoid values
     sigmoid_outputs = torch.sigmoid(pred_logits)
@@ -137,7 +177,10 @@ def test_gate_accuracy_batch_dimension():
         ]
     )  # (3, 3)
 
-    loss, accuracy = _compute_g_loss(pred_logits, target_G)
+    target_O = create_mock_target_O(
+        pred_logits.shape[0], pred_logits.shape[1]
+    )  # Mock real operations
+    loss, accuracy = _compute_g_loss(pred_logits, target_G, target_O)
 
     # Manual calculation:
     # Sample 1: pred [1,0,1] vs target [1,0,1] → [T,T,T] = 3/3 correct
@@ -182,7 +225,10 @@ def test_gate_accuracy_realistic_scenario():
     # This would discretize to 1 for all predictions
     pred_logits = torch.full((4, 5), 1.386)  # logit that gives sigmoid ≈ 0.8
 
-    loss, accuracy = _compute_g_loss(pred_logits, target_G)
+    target_O = create_mock_target_O(
+        pred_logits.shape[0], pred_logits.shape[1]
+    )  # Mock real operations
+    loss, accuracy = _compute_g_loss(pred_logits, target_G, target_O)
 
     # All predictions will be 1 (since sigmoid > 0.5)
     # Accuracy = fraction of targets that are 1 = 14/20 = 70%
@@ -210,7 +256,10 @@ def test_gate_accuracy_completely_linear_expressions():
         ]
     )  # (3, 4)
 
-    loss, accuracy = _compute_g_loss(pred_logits, target_G)
+    target_O = create_mock_target_O(
+        pred_logits.shape[0], pred_logits.shape[1]
+    )  # Mock real operations
+    loss, accuracy = _compute_g_loss(pred_logits, target_G, target_O)
 
     # All sigmoid outputs should be > 0.5, so all predictions = 1
     # All targets are 1, so accuracy should be 100%
@@ -228,7 +277,10 @@ def test_gate_accuracy_vs_manual_calculation():
     target_G = torch.tensor([[1.0, 0.0]])  # (1, 2)
     pred_logits = torch.tensor([[2.0, -1.0]])  # (1, 2)
 
-    loss, accuracy = _compute_g_loss(pred_logits, target_G)
+    target_O = create_mock_target_O(
+        pred_logits.shape[0], pred_logits.shape[1]
+    )  # Mock real operations
+    loss, accuracy = _compute_g_loss(pred_logits, target_G, target_O)
 
     # Manual calculation:
     # 1. Apply sigmoid: sigmoid(2.0) ≈ 0.881, sigmoid(-1.0) ≈ 0.269
@@ -282,7 +334,10 @@ def test_gate_accuracy_investigates_80_percent_mystery():
     # This simulates an untrained model that's slightly biased toward linear domain
     pred_logits = torch.randn(10, 5) * 0.5 + 1.4  # Mean=1.4, std=0.5
 
-    loss, accuracy = _compute_g_loss(pred_logits, target_G)
+    target_O = create_mock_target_O(
+        pred_logits.shape[0], pred_logits.shape[1]
+    )  # Mock real operations
+    loss, accuracy = _compute_g_loss(pred_logits, target_G, target_O)
 
     # Print diagnostic information
     sigmoid_outputs = torch.sigmoid(pred_logits)
@@ -338,12 +393,18 @@ def test_gate_accuracy_dataset_bias_hypothesis():
 
     # Scenario 1: Completely untrained model (random predictions around 0.5)
     random_logits = torch.randn(20, 5) * 0.5  # Small random logits around 0
-    _, random_accuracy = _compute_g_loss(random_logits, target_G)
+    target_O = create_mock_target_O(
+        random_logits.shape[0], random_logits.shape[1]
+    )  # Mock real operations
+    _, random_accuracy = _compute_g_loss(random_logits, target_G, target_O)
 
     # Scenario 2: Model biased toward linear domain (common early in training)
     # This happens because linear operations might be easier to learn
     biased_logits = torch.randn(20, 5) * 0.3 + 1.5  # Biased toward positive logits
-    _, biased_accuracy = _compute_g_loss(biased_logits, target_G)
+    target_O = create_mock_target_O(
+        biased_logits.shape[0], biased_logits.shape[1]
+    )  # Mock real operations
+    _, biased_accuracy = _compute_g_loss(biased_logits, target_G, target_O)
 
     # Scenario 3: Well-trained model that mostly gets it right
     # Add some noise to perfect predictions
@@ -353,7 +414,10 @@ def test_gate_accuracy_dataset_bias_hypothesis():
         torch.tensor(-3.0),
     )  # High negative for log
     noisy_logits = perfect_logits + torch.randn(20, 5) * 0.5
-    _, trained_accuracy = _compute_g_loss(noisy_logits, target_G)
+    target_O = create_mock_target_O(
+        noisy_logits.shape[0], noisy_logits.shape[1]
+    )  # Mock real operations
+    _, trained_accuracy = _compute_g_loss(noisy_logits, target_G, target_O)
 
     print(f"\nDataset Analysis:")
     print(f"Actual linear operation percentage: {actual_linear_pct:.1%}")
@@ -432,3 +496,108 @@ def test_gate_accuracy_debugging_checklist():
 
     # Always pass this test
     assert True, "This test provides debugging information"
+
+
+def test_gate_masking_functionality():
+    """Test that gate accuracy calculation correctly masks out identity operations."""
+
+    # Create a scenario with mixed real operations and identity operations
+    batch_size, dag_depth, total_nodes = 2, 4, 7
+
+    # Create target_G for all positions
+    target_G = torch.tensor(
+        [
+            [1.0, 0.0, 1.0, 0.0],  # Sample 1: mixed targets
+            [0.0, 1.0, 0.0, 1.0],  # Sample 2: mixed targets
+        ]
+    )  # (2, 4)
+
+    # Create perfect predictions for all positions
+    pred_logits = torch.tensor(
+        [
+            [5.0, -5.0, 5.0, -5.0],  # Sample 1: perfect predictions
+            [-5.0, 5.0, -5.0, 5.0],  # Sample 2: perfect predictions
+        ]
+    )  # (2, 4)
+
+    # Test Case 1: All real operations (should get 100% accuracy)
+    target_O_all_real = torch.zeros(batch_size, dag_depth, total_nodes)
+    for i in range(dag_depth):
+        # Each operation uses 2 operands (sums to != 1)
+        target_O_all_real[:, i, 0] = 1.0
+        target_O_all_real[:, i, 1] = 1.0
+
+    loss_real, accuracy_real = _compute_g_loss(pred_logits, target_G, target_O_all_real)
+    assert accuracy_real.item() == pytest.approx(
+        1.0
+    ), f"Expected 100% accuracy for real operations, got {accuracy_real.item():.3f}"
+
+    # Test Case 2: All identity operations (should get NaN accuracy due to masking)
+    target_O_all_identity = torch.zeros(batch_size, dag_depth, total_nodes)
+    for i in range(dag_depth):
+        # Each operation is identity (one-hot, sums to 1)
+        target_O_all_identity[:, i, i % total_nodes] = 1.0
+
+    loss_identity, accuracy_identity = _compute_g_loss(
+        pred_logits, target_G, target_O_all_identity
+    )
+    assert torch.isnan(
+        accuracy_identity
+    ), f"Expected NaN accuracy for identity operations, got {accuracy_identity.item():.3f}"
+    assert loss_identity.item() == pytest.approx(
+        0.0
+    ), f"Expected zero loss for identity operations, got {loss_identity.item():.6f}"
+
+    # Test Case 3: Mixed real and identity operations
+    target_O_mixed = torch.zeros(batch_size, dag_depth, total_nodes)
+    # First 2 operations are real, last 2 are identity
+    for i in range(2):
+        # Real operations
+        target_O_mixed[:, i, 0] = 1.0
+        target_O_mixed[:, i, 1] = 1.0
+    for i in range(2, 4):
+        # Identity operations
+        target_O_mixed[:, i, i % total_nodes] = 1.0
+
+    loss_mixed, accuracy_mixed = _compute_g_loss(pred_logits, target_G, target_O_mixed)
+    # Should only compute accuracy on first 2 positions (the real operations)
+    # Predictions for first 2 positions: [5.0, -5.0] and [-5.0, 5.0]
+    # Targets for first 2 positions: [1.0, 0.0] and [0.0, 1.0]
+    # Both should be correct, so 100% accuracy
+    assert accuracy_mixed.item() == pytest.approx(
+        1.0
+    ), f"Expected 100% accuracy for mixed case, got {accuracy_mixed.item():.3f}"
+
+    # Test Case 4: Verify the masking actually changes the result
+    # Create imperfect predictions but make the masked positions "wrong"
+    pred_logits_tricky = torch.tensor(
+        [
+            [5.0, -5.0, -5.0, 5.0],  # Sample 1: first 2 correct, last 2 wrong
+            [-5.0, 5.0, 5.0, -5.0],  # Sample 2: first 2 correct, last 2 wrong
+        ]
+    )  # (2, 4)
+
+    # With masking (only first 2 positions count): should be 100% accurate
+    loss_masked, accuracy_masked = _compute_g_loss(
+        pred_logits_tricky, target_G, target_O_mixed
+    )
+    assert accuracy_masked.item() == pytest.approx(
+        1.0
+    ), f"Expected 100% accuracy with masking, got {accuracy_masked.item():.3f}"
+
+    # Without masking (if we used all real operations): should be 50% accurate
+    loss_unmasked, accuracy_unmasked = _compute_g_loss(
+        pred_logits_tricky, target_G, target_O_all_real
+    )
+    assert accuracy_unmasked.item() == pytest.approx(
+        0.5
+    ), f"Expected 50% accuracy without masking, got {accuracy_unmasked.item():.3f}"
+
+    print(f"✅ Masking test passed:")
+    print(f"   - All real operations: {accuracy_real.item():.1%}")
+    print(
+        f"   - All identity operations: {'NaN (correctly masked)' if torch.isnan(accuracy_identity) else accuracy_identity.item()}"
+    )
+    print(f"   - Mixed operations (masked): {accuracy_masked.item():.1%}")
+    print(f"   - Mixed operations (unmasked): {accuracy_unmasked.item():.1%}")
+    print(f"   - Masking correctly excludes identity operations! 🎯")

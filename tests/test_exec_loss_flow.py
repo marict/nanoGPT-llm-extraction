@@ -37,7 +37,10 @@ def test_dag_config():
 def dag_executor(test_dag_config):
     """Create a DAGExecutor for testing."""
     return DAGExecutor(
-        dag_depth=test_dag_config["dag_depth"], max_digits=4, max_decimal_places=4
+        dag_depth=test_dag_config["dag_depth"],
+        max_digits=4,
+        max_decimal_places=4,
+        base=10,
     )
 
 

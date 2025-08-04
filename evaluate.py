@@ -7,6 +7,7 @@ for better code organization and separation of concerns.
 import random as _eval_random
 from typing import Dict
 
+import tiktoken
 import torch
 import torch.distributed as dist
 
@@ -19,7 +20,7 @@ def _sharpen_operand_predictions(
 ) -> torch.Tensor:
     """Sharpen operand predictions to discrete {-1, 0, 1} values."""
     sharp_O = torch.zeros_like(pred_O)
-    dag_depth, total_nodes = pred_O.shape
+    dag_depth, _ = pred_O.shape
 
     for step in range(dag_depth):
         step_coeffs = pred_O[step]
@@ -101,6 +102,72 @@ def _execute_dag_prediction(dag_executor, digit_logits, V_sign, O, G) -> float:
     return result[0, 0].item()
 
 
+def _print_token_by_token_breakdown(
+    texts, target_tensors, valid_mask, cfg, batch_idx=0
+):
+    """Print token-by-token breakdown showing what substring the model sees and target expression."""
+    print(f"\n--- Token-by-Token Learning Objective ---")
+
+    text = texts[batch_idx]
+    sample_mask = valid_mask[batch_idx]  # (T,)
+    sample_targets = target_tensors[batch_idx]  # List of target dicts
+
+    # Get encoding to decode tokens back to text
+    enc = tiktoken.get_encoding("gpt2")
+
+    # Tokenize the full text to understand token boundaries
+    token_ids = enc.encode_ordinary(text)
+
+    print(f"Full text: '{text}'")
+    print(f"Tokens: {enc.decode_batch([[tid] for tid in token_ids])}")
+    print(f"Token breakdown:")
+
+    # Track which token positions are valid for DAG prediction
+    valid_positions = torch.where(sample_mask)[0]
+
+    for t in range(len(sample_targets)):
+        if not sample_mask[t]:
+            continue  # Skip invalid positions
+
+        # Decode tokens up to position t+1 to show what model has seen
+        if t + 1 <= len(token_ids):
+            partial_tokens = token_ids[: t + 1]
+            partial_text = enc.decode(partial_tokens)
+        else:
+            partial_text = text  # If we're beyond token length, show full text
+
+        # Get target expression for this position
+        target_dict = sample_targets[t]
+        target_digits = target_dict["target_digits"]
+        target_V_sign = target_dict["target_V_sign"]
+        target_O = target_dict["target_O"]
+        target_G = target_dict["target_G"]
+
+        try:
+            target_expr_sympy = tensor_to_expression(
+                target_digits,
+                target_V_sign,
+                target_O,
+                target_G,
+                max_digits=cfg.max_digits,
+                max_decimal_places=cfg.max_decimal_places,
+            )
+            # Convert to string for display
+            target_expr = str(target_expr_sympy)
+            # Truncate very long expressions for readability
+            if len(target_expr) > 80:
+                target_expr = target_expr[:77] + "..."
+        except Exception as e:
+            target_expr = f"<conversion error: {str(e)[:50]}>"
+
+        print(f"  Token {t:2d}: '{partial_text}' → target: {target_expr}")
+
+    print(f"Valid prediction positions: {len(valid_positions)} / {len(sample_targets)}")
+    print(
+        f"Token count: {len(token_ids)} actual tokens, {len(sample_targets)} target positions"
+    )
+
+
 def print_detailed_validation_sample(
     texts,
     target_tensors,
@@ -136,6 +203,9 @@ def print_detailed_validation_sample(
 
     print(f"\n=== DETAILED VALIDATION SAMPLE (seed={sample_seed}) ===")
     print(f"Expression Text: '{texts[0]}'")
+
+    # Print token-by-token breakdown of learning objective
+    _print_token_by_token_breakdown(texts, target_tensors, valid_mask, cfg, batch_idx=0)
 
     # Get the last valid token position for this sample (complete expression)
     sample_mask = valid_mask[0]  # (T,)

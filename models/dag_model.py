@@ -49,12 +49,11 @@ class DAGExecutor(nn.Module):
     def digits_to_vmag(
         digit_logits: torch.Tensor,
         max_digits: int,
-        max_decimal_places: int,
         base: int = 10,
         temperature: float = 0.01,
     ) -> torch.Tensor:
         """Convert digit logits to magnitude values using vectorized operations."""
-        B, T, num_initial_nodes, D, _ = digit_logits.shape
+        _, _, _, D, _ = digit_logits.shape
         device, dtype = digit_logits.device, digit_logits.dtype
 
         # Convert logits to expected digit values
@@ -122,7 +121,7 @@ class DAGExecutor(nn.Module):
 
         # Convert digit predictions to V_mag for initial nodes using shared method
         initial_V_mag = self.digits_to_vmag(
-            digit_logits, self.max_digits, self.max_decimal_places, self.base
+            digit_logits, self.max_digits, self.base
         )  # (B, T, num_initial_nodes)
 
         # Create full working tensors
