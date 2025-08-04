@@ -7,7 +7,6 @@ for better code organization and separation of concerns.
 import random as _eval_random
 from typing import Dict
 
-import sympy
 import torch
 import torch.distributed as dist
 

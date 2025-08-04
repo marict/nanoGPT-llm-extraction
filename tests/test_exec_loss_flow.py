@@ -7,6 +7,15 @@ from models.dag_model import DAGExecutor
 from predictor_utils import compute_dag_loss
 
 
+class MockConfig:
+    """Minimal config for testing."""
+
+    def __init__(self):
+        self.max_digits = 4
+        self.max_decimal_places = 4
+        self.enable_exec_loss = True
+
+
 @pytest.fixture
 def device():
     """Return the device to use for testing."""
@@ -30,6 +39,12 @@ def dag_executor(test_dag_config):
     return DAGExecutor(
         dag_depth=test_dag_config["dag_depth"], max_digits=4, max_decimal_places=4
     )
+
+
+@pytest.fixture
+def test_config():
+    """Create a test config."""
+    return MockConfig()
 
 
 def create_test_tensors(config, device):
@@ -117,7 +132,9 @@ def create_test_targets(config, device):
     return target_tensors, valid_mask
 
 
-def test_exec_loss_computed_with_dag_executor(test_dag_config, dag_executor, device):
+def test_exec_loss_computed_with_dag_executor(
+    test_dag_config, dag_executor, device, test_config
+):
     """Test that exec loss is computed when dag_executor is provided."""
     pred_digit_logits, pred_V_sign, pred_O, pred_G = create_test_tensors(
         test_dag_config, device
@@ -136,6 +153,7 @@ def test_exec_loss_computed_with_dag_executor(test_dag_config, dag_executor, dev
         target_tensors,
         valid_mask,
         dag_executor=dag_executor,
+        cfg=test_config,
     )
 
     # Compute losses WITHOUT dag_executor
@@ -147,6 +165,7 @@ def test_exec_loss_computed_with_dag_executor(test_dag_config, dag_executor, dev
         target_tensors,
         valid_mask,
         dag_executor=None,
+        cfg=test_config,
     )
 
     # With executor, exec_loss should be non-zero
@@ -169,7 +188,7 @@ def test_exec_loss_computed_with_dag_executor(test_dag_config, dag_executor, dev
     ), "Total loss should be higher when exec loss is included"
 
 
-def test_exec_loss_gradient_flow(test_dag_config, dag_executor, device):
+def test_exec_loss_gradient_flow(test_dag_config, dag_executor, device, test_config):
     """Test that exec loss contributes to gradients of prediction tensors."""
     pred_digit_logits, pred_V_sign, pred_O, pred_G = create_test_tensors(
         test_dag_config, device
@@ -188,6 +207,7 @@ def test_exec_loss_gradient_flow(test_dag_config, dag_executor, device):
         target_tensors,
         valid_mask,
         dag_executor=dag_executor,
+        cfg=test_config,
     )
 
     # Check that exec_loss requires gradients
@@ -234,7 +254,7 @@ def test_exec_loss_gradient_flow(test_dag_config, dag_executor, device):
     ), "Exec loss should be part of computation graph"
 
 
-def test_exec_loss_in_total_loss(test_dag_config, dag_executor, device):
+def test_exec_loss_in_total_loss(test_dag_config, dag_executor, device, test_config):
     """Test that exec loss is properly included in total loss calculation."""
     pred_digit_logits, pred_V_sign, pred_O, pred_G = create_test_tensors(
         test_dag_config, device
@@ -253,6 +273,7 @@ def test_exec_loss_in_total_loss(test_dag_config, dag_executor, device):
         target_tensors,
         valid_mask,
         dag_executor=dag_executor,
+        cfg=test_config,
     )
 
     # Verify that total loss includes all component losses
@@ -286,7 +307,7 @@ def test_exec_loss_in_total_loss(test_dag_config, dag_executor, device):
 
 
 def test_exec_loss_not_cut_off_with_extreme_values(
-    test_dag_config, dag_executor, device
+    test_dag_config, dag_executor, device, test_config
 ):
     """Test that exec loss is not cut off when dealing with extreme execution values."""
     pred_digit_logits, pred_V_sign, pred_O, pred_G = create_test_tensors(
@@ -313,6 +334,7 @@ def test_exec_loss_not_cut_off_with_extreme_values(
         target_tensors,
         valid_mask,
         dag_executor=dag_executor,
+        cfg=test_config,
     )
 
     # Verify exec loss is finite and non-zero
@@ -343,6 +365,7 @@ def test_exec_loss_not_cut_off_with_extreme_values(
         target_tensors,
         valid_mask,
         dag_executor=dag_executor,
+        cfg=test_config,
     )
 
     assert torch.isfinite(
@@ -351,7 +374,9 @@ def test_exec_loss_not_cut_off_with_extreme_values(
     assert losses_small["exec_loss"].item() >= 0.0, "Exec loss should be non-negative"
 
 
-def test_exec_loss_no_valid_positions(test_dag_config, dag_executor, device):
+def test_exec_loss_no_valid_positions(
+    test_dag_config, dag_executor, device, test_config
+):
     """Test that exec loss handling when no valid positions exist."""
     pred_digit_logits, pred_V_sign, pred_O, pred_G = create_test_tensors(
         test_dag_config, device
@@ -374,6 +399,7 @@ def test_exec_loss_no_valid_positions(test_dag_config, dag_executor, device):
         target_tensors,
         valid_mask,
         dag_executor=dag_executor,
+        cfg=test_config,
     )
 
     # All losses should be zero when no valid positions

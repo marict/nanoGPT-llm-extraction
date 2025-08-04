@@ -11,7 +11,6 @@ import torch
 import torch.nn.functional as F
 from tiktoken import get_encoding
 
-from data.dagset.streaming import tensor_to_expression
 from models.dag_model import DAGExecutor
 
 
@@ -34,12 +33,11 @@ def _create_zero_losses(device: torch.device) -> dict[str, torch.Tensor]:
 
 
 def _compute_value_loss(
-    pred_digit_logits: torch.Tensor, target_digits: torch.Tensor
+    pred_digit_logits: torch.Tensor, target_digits: torch.Tensor, cfg
 ) -> torch.Tensor:
     """Compute robust loss for magnitude values using asinh transformation."""
-    # Constants for digit parameters
-    D = pred_digit_logits.shape[-2]
-    max_digits = max_decimal_places = D // 2
+    max_digits = cfg.max_digits
+    max_decimal_places = cfg.max_decimal_places
     base = pred_digit_logits.shape[-1]
 
     # Convert predictions to magnitude values (vectorized)
@@ -130,7 +128,6 @@ def _compute_o_loss(
 def _compute_g_loss(
     pred_G_valid: torch.Tensor,  # (num_valid, dag_depth) - Predicted gate values (raw logits)
     target_G: torch.Tensor,  # (num_valid, dag_depth) - Target gate values
-    device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute domain gate loss and gate accuracy.
 
@@ -175,7 +172,7 @@ def _compute_digit_loss(
         - digit_loss: Scalar tensor with averaged cross-entropy loss
         - digit_accuracy: Scalar tensor with percentage of digits predicted correctly
     """
-    num_valid, N, D, base = pred_digit_logits.shape
+    _, _, D, base = pred_digit_logits.shape
 
     # Sanity checks (matching original implementation)
     if target_digits.shape[-2] != D:
@@ -398,7 +395,7 @@ def compute_dag_loss(
     )
 
     # Compute V_mag loss using robust value loss (handles digit conversion internally)
-    V_mag_loss = _compute_value_loss(pred_digit_logits_valid, target_digits)
+    V_mag_loss = _compute_value_loss(pred_digit_logits_valid, target_digits, cfg)
 
     # Compute V_sign loss and sign accuracy
     V_sign_loss, sign_accuracy = _compute_vsign_loss(
@@ -409,7 +406,7 @@ def compute_dag_loss(
     O_loss, op_accuracy = _compute_o_loss(pred_O_valid, target_O, device)
 
     # Compute domain gate loss and gate accuracy
-    G_loss, gate_accuracy = _compute_g_loss(pred_G_valid, target_G, device)
+    G_loss, gate_accuracy = _compute_g_loss(pred_G_valid, target_G)
 
     # Execution loss (if DAG executor is provided)
     exec_loss = torch.tensor(0.0, device=device)
