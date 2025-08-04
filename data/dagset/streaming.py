@@ -917,14 +917,8 @@ def create_dag_structure_dataloaders(
                 max_decimal_places=max_decimal_places,
             )
 
-            # Get main expression (last one) as string
-            last_expr = expressions[-1] if expressions else ""
-            if last_expr == "not valid":
-                text = (
-                    substrings[-1] if substrings else ""
-                )  # Use raw substring for invalid expressions
-            else:
-                text = str(last_expr)  # Convert sympy expression to string
+            # Always use the original substring to maintain alignment with targets
+            text = substrings[-1]
 
             all_texts.append(text)
             all_target_tensors.append(

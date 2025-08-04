@@ -18,8 +18,11 @@ import pytest
 
 sys.path.append(str(Path(__file__).parent.parent.absolute()))
 
+from data.dagset.expression_to_english import (
+    english_to_expression,
+    expression_to_english,
+)
 from data.dagset.generate_expression import string_to_expression
-from expression_to_english import english_to_expression, expression_to_english
 
 
 class TestExpressionEquivalence:

@@ -105,67 +105,90 @@ def _execute_dag_prediction(dag_executor, digit_logits, V_sign, O, G) -> float:
 def _print_token_by_token_breakdown(
     texts, target_tensors, valid_mask, cfg, batch_idx=0
 ):
-    """Print token-by-token breakdown showing what substring the model sees and target expression."""
+    """Print token-by-token breakdown showing what substring the model sees and target expression.
+
+    Shows the progressive substrings that the model sees during training and the corresponding
+    target expressions. The alignment between model input and targets is now correct.
+    """
     print(f"\n--- Token-by-Token Learning Objective ---")
 
     text = texts[batch_idx]
     sample_mask = valid_mask[batch_idx]  # (T,)
     sample_targets = target_tensors[batch_idx]  # List of target dicts
 
-    # Get encoding to decode tokens back to text
-    enc = tiktoken.get_encoding("gpt2")
-
-    # Tokenize the full text to understand token boundaries
-    token_ids = enc.encode_ordinary(text)
-
-    print(f"Full text: '{text}'")
-    print(f"Tokens: {enc.decode_batch([[tid] for tid in token_ids])}")
-    print(f"Token breakdown:")
+    print(f"\nFinal model input: '{text}'")
 
     # Track which token positions are valid for DAG prediction
     valid_positions = torch.where(sample_mask)[0]
+    print(f"Valid positions: {valid_positions.tolist()}")
 
-    for t in range(len(sample_targets)):
-        if not sample_mask[t]:
-            continue  # Skip invalid positions
+    # Show target positions for meaningful positions only
+    print(f"\nTarget breakdown:")
 
-        # Decode tokens up to position t+1 to show what model has seen
-        if t + 1 <= len(token_ids):
-            partial_tokens = token_ids[: t + 1]
-            partial_text = enc.decode(partial_tokens)
+    # Get tokenization to understand which positions are beyond the actual tokens
+    enc = tiktoken.get_encoding("gpt2")
+    actual_tokens = enc.encode_ordinary(text)
+    actual_token_count = len(actual_tokens)
+
+    positions_shown = 0
+    padding_count = 0
+
+    for pos in range(min(20, len(sample_targets))):  # Show up to 20 positions
+        is_valid = sample_mask[pos].item()
+
+        if pos < actual_token_count:
+            # This is within the actual tokenized text
+            if is_valid:
+                # Get target expression for valid positions
+                target_dict = sample_targets[pos]
+                target_digits = target_dict["target_digits"]
+                target_V_sign = target_dict["target_V_sign"]
+                target_O = target_dict["target_O"]
+                target_G = target_dict["target_G"]
+
+                try:
+                    target_expr_sympy = tensor_to_expression(
+                        target_digits,
+                        target_V_sign,
+                        target_O,
+                        target_G,
+                        max_digits=cfg.max_digits,
+                        max_decimal_places=cfg.max_decimal_places,
+                    )
+                    # Convert to string for display
+                    target_expr = str(target_expr_sympy)
+                    # Truncate very long expressions for readability
+                    if len(target_expr) > 60:
+                        target_expr = target_expr[:57] + "..."
+                except Exception as e:
+                    target_expr = f"<conversion error: {str(e)[:30]}>"
+
+                print(f"  Position {pos:2d}: [VALID] Target = {target_expr}")
+                positions_shown += 1
+            else:
+                print(f"  Position {pos:2d}: [NOT VALID] (invalid substring)")
+                positions_shown += 1
         else:
-            partial_text = text  # If we're beyond token length, show full text
+            # This is padding beyond the actual tokens
+            padding_count += 1
 
-        # Get target expression for this position
-        target_dict = sample_targets[t]
-        target_digits = target_dict["target_digits"]
-        target_V_sign = target_dict["target_V_sign"]
-        target_O = target_dict["target_O"]
-        target_G = target_dict["target_G"]
+    # Count remaining padding if we stopped early
+    if len(sample_targets) > 20:
+        remaining_padding = len(sample_targets) - 20
+        padding_count += remaining_padding
 
-        try:
-            target_expr_sympy = tensor_to_expression(
-                target_digits,
-                target_V_sign,
-                target_O,
-                target_G,
-                max_digits=cfg.max_digits,
-                max_decimal_places=cfg.max_decimal_places,
-            )
-            # Convert to string for display
-            target_expr = str(target_expr_sympy)
-            # Truncate very long expressions for readability
-            if len(target_expr) > 80:
-                target_expr = target_expr[:77] + "..."
-        except Exception as e:
-            target_expr = f"<conversion error: {str(e)[:50]}>"
+    if padding_count > 0:
+        print(f"  ... and {padding_count} tokens of padding")
 
-        print(f"  Token {t:2d}: '{partial_text}' → target: {target_expr}")
+    print(f"\n📊 Summary:")
+    print(f"  • Final text length: {len(text)} characters")
+    print(f"  • Valid prediction positions: {len(valid_positions)}")
+    print(f"  • Total target positions: {len(sample_targets)}")
 
-    print(f"Valid prediction positions: {len(valid_positions)} / {len(sample_targets)}")
     print(
-        f"Token count: {len(token_ids)} actual tokens, {len(sample_targets)} target positions"
+        f"\n✅ NOTE: Target alignment is now correct. The model sees progressive substrings"
     )
+    print(f"   of the same expression that the targets are based on.")
 
 
 def print_detailed_validation_sample(
