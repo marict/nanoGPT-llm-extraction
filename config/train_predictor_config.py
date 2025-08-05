@@ -14,7 +14,7 @@ reload_reset_iters = False
 
 # Model initialization
 # init_from = "/runpod-volume/checkpoints/lnplmuzwx704ja-only_nomag_highg/ckpt_predictor_pretrain_8160_99.99acc.pt"
-# init_from = "scratch"
+init_from = "scratch"
 
 # Dataset configuration
 dataset = "dagset"
