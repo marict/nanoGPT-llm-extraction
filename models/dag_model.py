@@ -57,6 +57,7 @@ class DAGExecutor(nn.Module):
         max_digits: int,
         base: int = 10,
         temperature: float = 0.01,
+        apply_ste: bool = False,
     ) -> torch.Tensor:
         """Convert digit logits to magnitude values using vectorized operations."""
         _, _, _, D, _ = digit_logits.shape
@@ -64,6 +65,17 @@ class DAGExecutor(nn.Module):
 
         # Convert logits to expected digit values
         digit_probs = torch.softmax(digit_logits / temperature, dim=-1)
+
+        if apply_ste:
+            # Apply STE for digits: hard one-hot in forward, soft gradients in backward
+            # Use a small temperature to make argmax more stable
+            hard_probs = torch.softmax(digit_logits / 0.1, dim=-1)
+            digit_one_hot = torch.nn.functional.one_hot(
+                hard_probs.argmax(dim=-1), num_classes=base
+            ).float()
+            # The STE magic: forward uses digit_one_hot, backward uses digit_probs
+            digit_probs = digit_one_hot + (digit_probs - digit_probs.detach())
+
         digit_values = torch.arange(base, dtype=dtype, device=device)
         expected_digits = (digit_probs * digit_values.view(1, 1, 1, 1, -1)).sum(dim=-1)
 
@@ -87,6 +99,11 @@ class DAGExecutor(nn.Module):
         V_mag = torch.clamp(int_part + frac_part, min=MAG_MIN, max=MAG_MAX)
 
         return V_mag
+
+    @staticmethod
+    def ste_round(x: torch.Tensor) -> torch.Tensor:
+        """Straight-through estimator for rounding a tensor to the nearest integer."""
+        return x.round().detach() + (x - x.detach())
 
     def _compute_domain_mixed_result(
         self, working_V_mag, working_V_sign, O_step, G_step
@@ -115,7 +132,7 @@ class DAGExecutor(nn.Module):
         log_mag_result = torch.exp(R_mag_clamped)
         return G_step * linear_mag + (1 - G_step) * log_mag_result
 
-    def forward(self, digit_logits, V_sign, O, G):
+    def forward(self, digit_logits, V_sign, O, G, apply_ste: bool = False):
         """Execute DAG operations using tensor representation."""
         B, T = V_sign.shape[:2]
 
@@ -190,6 +207,7 @@ class DAGPlanPredictor(nn.Module):
 
     def __init__(self, config):
         super().__init__()
+        self.config = config
         self.dag_depth = config.dag_depth
         self.max_digits = config.max_digits
         self.max_decimal_places = config.max_decimal_places
@@ -265,6 +283,23 @@ class DAGPlanPredictor(nn.Module):
 
         # Domain selector: 0=log, 1=linear
         G = torch.sigmoid(self.G_predictor(hidden_state))  # (B, T, dag_depth)
+
+        # Apply STE sharpening if enabled for training
+        if self.config.sharp_training:
+            # Signs: STE to -1 or 1
+            V_sign_hard = torch.where(
+                V_sign >= 0,
+                torch.tensor(1.0, device=V_sign.device),
+                torch.tensor(-1.0, device=V_sign.device),
+            )
+            V_sign = V_sign_hard + (V_sign - V_sign.detach())
+
+            # Operands: STE to nearest integer
+            O = DAGExecutor.ste_round(O)
+
+            # Gates: STE to 0 or 1
+            G_hard = (G > 0.5).float()
+            G = G_hard + (G - G.detach())  # G is already 0-1, so round to 0 or 1.
 
         return digit_logits, V_sign, O, G
 
@@ -354,6 +389,7 @@ class GPTConfig:
     dag_depth: int = 6
     max_digits: int = 4
     max_decimal_places: int = 4
+    sharp_training: bool = False
 
 
 class GPT(BaseGPTModel):
@@ -392,7 +428,10 @@ class GPT(BaseGPTModel):
             )  # (B, T, ...)
 
             # Execute DAG - the executor handles digit conversion internally
-            return self.dag_executor(digit_logits, V_sign, O, G)  # (B, T)
+            # Pass apply_ste based on config.sharp_training
+            return self.dag_executor(
+                digit_logits, V_sign, O, G, apply_ste=self.config.sharp_training
+            )  # (B, T)
         else:
             # No DAG - this shouldn't happen in practice
             raise ValueError("DAG depth is 0, cannot perform DAG computation")

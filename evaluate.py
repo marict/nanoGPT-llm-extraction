@@ -15,6 +15,31 @@ from data.dagset.streaming import digit_onehot_to_float, tensor_to_expression
 from predictor_utils import compute_dag_loss, tokenize_texts
 
 
+def _sharpen_digit_predictions(pred_digit_logits: torch.Tensor) -> torch.Tensor:
+    """Convert raw digit logits to a discrete one-hot representation.
+
+    Args:
+        pred_digit_logits: Tensor of shape (num_nodes, D, base) with raw logits.
+    Returns:
+        Tensor of same shape containing 0/1 one-hot vectors.
+    """
+    # Apply softmax to get probabilities then take argmax
+    digit_indices = torch.argmax(pred_digit_logits, dim=-1)  # (num_nodes, D)
+    sharp = torch.zeros_like(pred_digit_logits)
+    # Scatter 1.0 at argmax positions
+    sharp.scatter_(-1, digit_indices.unsqueeze(-1), 1.0)
+    return sharp
+
+
+def _sharpen_sign_predictions(pred_V_sign: torch.Tensor) -> torch.Tensor:
+    """Sharpen sign predictions to exactly -1 or 1."""
+    return torch.where(
+        pred_V_sign >= 0,
+        torch.tensor(1.0, device=pred_V_sign.device),
+        torch.tensor(-1.0, device=pred_V_sign.device),
+    )
+
+
 def _sharpen_operand_predictions(
     pred_O: torch.Tensor, threshold: float = 0.1
 ) -> torch.Tensor:
@@ -244,9 +269,9 @@ def print_detailed_validation_sample(
     single_O = pred_O[0, last_valid_pos]  # (dag_depth, total_nodes)
     single_G = pred_G[0, last_valid_pos]  # (dag_depth,)
 
-    # Sharpen predictions for cleaner expression display
-    sharp_digit_logits = single_digit_logits.clone()
-    sharp_V_sign = single_V_sign.clone()
+    # Sharpen predictions for cleaner expression display and consistent execution
+    sharp_digit_logits = _sharpen_digit_predictions(single_digit_logits)
+    sharp_V_sign = _sharpen_sign_predictions(single_V_sign)
     sharp_O = _sharpen_operand_predictions(single_O)
     sharp_G = (single_G > 0.5).float()
 
@@ -267,7 +292,7 @@ def print_detailed_validation_sample(
 
     # Execute predicted DAG
     pred_final_exec = _execute_dag_prediction(
-        dag_executor, single_digit_logits, single_V_sign, sharp_O, sharp_G
+        dag_executor, sharp_digit_logits, sharp_V_sign, sharp_O, sharp_G
     )
 
     print(f"\n--- Expression Comparison ---")

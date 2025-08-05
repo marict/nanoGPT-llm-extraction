@@ -32,6 +32,9 @@ class PredictorOnlyConfig:
     max_digits: int = 4
     max_decimal_places: int = 4
 
+    # STE sharpening for training
+    sharp_training: bool = False
+
 
 class PredictorOnlyModel(BaseGPTModel):
     """
