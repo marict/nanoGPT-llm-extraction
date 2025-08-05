@@ -37,7 +37,6 @@ def _compute_value_loss(
 ) -> torch.Tensor:
     """Compute robust loss for magnitude values using asinh transformation."""
     max_digits = cfg.max_digits
-    max_decimal_places = cfg.max_decimal_places
     base = pred_digit_logits.shape[-1]
 
     # Convert predictions to magnitude values (vectorized)
@@ -384,7 +383,7 @@ def compute_dag_loss(
         pred_digit_logits_valid, target_digits
     )
 
-    # Compute V_mag loss using robust value loss (handles digit conversion internally)
+    # Compute V_mag loss
     V_mag_loss = torch.tensor(0.0, device=device)
     if cfg.enable_vmag_loss:
         V_mag_loss = _compute_value_loss(pred_digit_logits_valid, target_digits, cfg)
