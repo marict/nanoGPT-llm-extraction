@@ -62,7 +62,6 @@ compile = True
 keep_alive = False  # Auto-stop by default
 check_nans = False  # Check for NaNs in cloud training
 
-
 # Loss component flags
 enable_digit_loss = True
 enable_vsign_loss = True
