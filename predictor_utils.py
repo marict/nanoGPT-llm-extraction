@@ -99,14 +99,12 @@ def _compute_vsign_loss(
 def _compute_o_loss(
     pred_O_valid: torch.Tensor,  # (num_valid, dag_depth, total_nodes) - Predicted operand selectors
     target_O: torch.Tensor,  # (num_valid, dag_depth, total_nodes) - Target operand selectors
-    device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute operand selector loss and operand accuracy.
 
     Args:
         pred_O_valid: (num_valid, dag_depth, total_nodes) predicted operand selectors
         target_O: (num_valid, dag_depth, total_nodes) target operand selectors
-        device: Device for tensor operations
 
     Returns:
         Tuple of (O_loss, op_accuracy)
@@ -124,54 +122,22 @@ def _compute_o_loss(
 
 
 def _compute_g_loss(
-    pred_G_valid: torch.Tensor,  # (num_valid, dag_depth) - Predicted gate values (raw logits)
-    target_G: torch.Tensor,  # (num_valid, dag_depth) - Target gate values
-    target_O: torch.Tensor,  # (num_valid, dag_depth, total_nodes) - Target operand matrix
+    pred_G_valid: torch.Tensor,  # (num_valid, dag_depth)
+    target_G: torch.Tensor,  # (num_valid, dag_depth)
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute domain gate loss and gate accuracy, masking out identity operations.
+    """Compute domain gate loss and gate accuracy.
 
     Args:
-        pred_G_valid: (num_valid, dag_depth) predicted gate values (raw logits)
+        pred_G_valid: (num_valid, dag_depth) predicted gate values
         target_G: (num_valid, dag_depth) target gate values
-        target_O: (num_valid, dag_depth, total_nodes) target operand selection matrix
 
     Returns:
         Tuple of (G_loss, gate_accuracy)
     """
-    # Create mask for actual operations (not identity/no-ops)
-    # Identity operations have O_step that sums to 1 (one-hot selection)
-    # Real operations have O_step that sums to != 1 (multiple operands)
-    O_step_sums = torch.sum(torch.abs(target_O), dim=-1)  # (num_valid, dag_depth)
-    operation_mask = ~torch.isclose(
-        O_step_sums, torch.ones_like(O_step_sums), atol=1e-6
-    )  # (num_valid, dag_depth)
-
-    # Domain gate loss (L2 on sigmoid-activated predictions)
-    pred_G_sigmoid = torch.sigmoid(pred_G_valid)
-
-    # Apply mask to loss calculation
-    if operation_mask.any():
-        # Only compute loss on actual operations
-        pred_G_masked = pred_G_sigmoid[operation_mask]
-        target_G_masked = target_G[operation_mask]
-        G_loss = F.mse_loss(pred_G_masked, target_G_masked)
-    else:
-        # Fallback: no real operations found, return zero loss
-        G_loss = torch.tensor(0.0, device=pred_G_valid.device)
-
-    # Gate accuracy - G predictions (sigmoid outputs) vs {0, 1} targets
-    # Convert sigmoid outputs to discrete values using 0.5 threshold
-    pred_G_discrete = (pred_G_sigmoid > 0.5).float()
+    G_loss = F.mse_loss(pred_G_valid, target_G)
+    pred_G_discrete = (pred_G_valid > 0.5).float()
     gate_correct = (pred_G_discrete == target_G).float()
-
-    # Apply mask to accuracy calculation
-    if operation_mask.any():
-        # Only compute accuracy on actual operations
-        gate_correct_masked = gate_correct[operation_mask]
-        gate_accuracy = gate_correct_masked.mean()
-    else:
-        # Fallback: no real operations found, return NaN to indicate no meaningful accuracy
-        gate_accuracy = torch.tensor(float("nan"), device=pred_G_valid.device)
+    gate_accuracy = gate_correct.mean()
 
     return G_loss, gate_accuracy
 
@@ -419,7 +385,9 @@ def compute_dag_loss(
     )
 
     # Compute V_mag loss using robust value loss (handles digit conversion internally)
-    V_mag_loss = _compute_value_loss(pred_digit_logits_valid, target_digits, cfg)
+    V_mag_loss = torch.tensor(0.0, device=device)
+    if cfg.enable_vmag_loss:
+        V_mag_loss = _compute_value_loss(pred_digit_logits_valid, target_digits, cfg)
 
     # Compute V_sign loss and sign accuracy
     V_sign_loss, sign_accuracy = _compute_vsign_loss(
@@ -427,15 +395,14 @@ def compute_dag_loss(
     )
 
     # Compute operand selector loss and operand accuracy
-    O_loss, op_accuracy = _compute_o_loss(pred_O_valid, target_O, device)
+    O_loss, op_accuracy = _compute_o_loss(pred_O_valid, target_O)
 
     # Compute domain gate loss and gate accuracy
-    G_loss, gate_accuracy = _compute_g_loss(pred_G_valid, target_G, target_O)
+    G_loss, gate_accuracy = _compute_g_loss(pred_G_valid, target_G)
 
     # Execution loss (if DAG executor is provided)
     exec_loss = torch.tensor(0.0, device=device)
-    enable_exec_loss = cfg.enable_exec_loss
-    if dag_executor is not None and enable_exec_loss:
+    if dag_executor is not None and cfg.enable_exec_loss:
         exec_loss = _compute_exec_loss(
             dag_executor,
             pred_digit_logits_valid,

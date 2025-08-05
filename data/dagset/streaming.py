@@ -348,7 +348,7 @@ def expression_to_tensors(
     # PHASE 1: Collect all initial numeric values
     for node in postorder_traversal(normalized_expr):
         # Handle direct numbers
-        if isNum(node):
+        if isNum(node) and node not in values:
             if step_index >= num_initial_nodes:
                 raise ValueError(
                     f"Expression has too many initial values. Needs dag_depth >= {step_index - 1} (allowing {num_initial_nodes} initial values)"

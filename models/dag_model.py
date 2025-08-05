@@ -25,6 +25,12 @@ LOG_LIM = (
     100.0  # Bound on ln-magnitudes (increased to handle extreme large expressions)
 )
 
+# Magnitude clamping constants
+MAG_MIN = 1e-12  # Minimum magnitude for log operations and intermediate results
+MAG_MAX = 1e28  # Maximum magnitude ceiling to catch overflow bugs
+SIGN_MIN = -1.0  # Minimum sign value
+SIGN_MAX = 1.0  # Maximum sign value
+
 
 class DAGExecutor(nn.Module):
     """New tensor-based DAG execution engine with (dag_depth + 1) + dag_depth node architecture."""
@@ -78,7 +84,7 @@ class DAGExecutor(nn.Module):
         frac_part = (expected_digits[..., max_digits:] * frac_powers).sum(dim=-1)
 
         # Combine and clamp to prevent overflow/underflow
-        V_mag = torch.clamp(int_part + frac_part, min=1e-8, max=1e18)
+        V_mag = torch.clamp(int_part + frac_part, min=MAG_MIN, max=MAG_MAX)
 
         return V_mag
 
@@ -87,7 +93,7 @@ class DAGExecutor(nn.Module):
     ):
         """Compute domain-mixed arithmetic result for one step."""
         signed_values = working_V_sign * working_V_mag
-        log_mag = torch.log(torch.clamp(working_V_mag, min=1e-12))
+        log_mag = torch.log(torch.clamp(working_V_mag, min=MAG_MIN))
         mixed = log_mag * (1 - G_step) + signed_values * G_step
         return torch.sum(O_step * mixed, dim=-1, keepdim=True)
 
@@ -104,7 +110,7 @@ class DAGExecutor(nn.Module):
 
     def _compute_new_magnitude(self, R_mag, G_step):
         """Compute new magnitude using domain mixing."""
-        linear_mag = torch.clamp(torch.abs(R_mag), max=1e18)
+        linear_mag = torch.clamp(torch.abs(R_mag), max=MAG_MAX)
         R_mag_clamped = torch.clamp(R_mag, min=-LOG_LIM, max=LOG_LIM)
         log_mag_result = torch.exp(R_mag_clamped)
         return G_step * linear_mag + (1 - G_step) * log_mag_result
@@ -133,11 +139,14 @@ class DAGExecutor(nn.Module):
         # Copy initial node magnitudes into working tensor (convert dtype if needed)
         working_V_mag[:, :, : self.num_initial_nodes] = initial_V_mag.to(compute_dtype)
 
+        O = O.to(compute_dtype)
+        G = G.to(compute_dtype)
+
         # Execute each intermediate computation step
         for step in range(self.num_intermediate_nodes):
             # Get operand selector and domain gate for this step
-            O_step = O[:, :, step, :].to(compute_dtype)
-            G_step = G[:, :, step].unsqueeze(-1).to(compute_dtype)
+            O_step = O[:, :, step, :]
+            G_step = G[:, :, step].unsqueeze(-1)
 
             # Apply causal mask to prevent using future intermediate results
             valid_positions = self.num_initial_nodes + step
@@ -153,8 +162,8 @@ class DAGExecutor(nn.Module):
             V_mag_new = self._compute_new_magnitude(R_mag, G_step)
 
             # Clamp intermediate results
-            V_mag_new = torch.clamp(V_mag_new, min=1e-12, max=1e18)
-            V_sign_new = torch.clamp(V_sign_new, min=-1.0, max=1.0)
+            V_mag_new = torch.clamp(V_mag_new, min=MAG_MIN, max=MAG_MAX)
+            V_sign_new = torch.clamp(V_sign_new, min=SIGN_MIN, max=SIGN_MAX)
 
             # Update working tensors (use scatter to avoid in-place operations)
             intermediate_idx = self.num_initial_nodes + step
@@ -171,12 +180,6 @@ class DAGExecutor(nn.Module):
         final_mag = working_V_mag[:, :, final_idx]  # (B, T)
         final_sign = working_V_sign[:, :, final_idx]  # (B, T)
         final_value = final_sign * final_mag  # (B, T)
-
-        # Final safety check: replace any NaN/Inf with zero to prevent training crashes
-        # This provides a fallback for any edge cases that slip through the clamping
-        final_value = torch.where(
-            torch.isfinite(final_value), final_value, torch.zeros_like(final_value)
-        )
 
         # Cast back to original dtype
         return final_value.to(original_dtype)
@@ -254,6 +257,7 @@ class DAGPlanPredictor(nn.Module):
         V_sign = torch.tanh(self.V_sign_predictor(hidden_state))  # (B, T, total_nodes)
 
         # Predict operand matrix and reshape
+        # We don't tanh this because we need to have coefficients |x| > 1
         O_flat = self.O_predictor(hidden_state)  # (B, T, dag_depth * total_nodes)
         O = O_flat.view(
             B, T, self.dag_depth, self.total_nodes
