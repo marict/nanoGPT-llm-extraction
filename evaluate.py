@@ -267,7 +267,7 @@ def print_detailed_validation_sample(
 
     # Execute predicted DAG
     pred_final_exec = _execute_dag_prediction(
-        dag_executor, single_digit_logits, single_V_sign, single_O, single_G
+        dag_executor, single_digit_logits, single_V_sign, sharp_O, sharp_G
     )
 
     print(f"\n--- Expression Comparison ---")

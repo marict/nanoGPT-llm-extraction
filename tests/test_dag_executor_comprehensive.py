@@ -20,6 +20,39 @@ from data.dagset.streaming import expressions_to_tensors
 from models.dag_model import DAGExecutor
 
 
+def test_specific_expression_fix():
+    """
+    Test the specific expression that was failing due to the sharpening bug.
+    """
+    depth = 4
+    executor = DAGExecutor(dag_depth=depth, max_digits=8, max_decimal_places=4)
+
+    expression_str = "1.0*(-45.1399*7019.3999 - 5.2659)"
+    expr = sympy.parse_expr(expression_str)
+
+    # Convert expression to tensors
+    target_tensors, valid_mask = expressions_to_tensors(
+        [expr], depth=depth, max_digits=8, max_decimal_places=4
+    )
+    assert valid_mask[0], f"Expression {expr} should be valid"
+
+    target = target_tensors[0]
+    # Add batch/time dimensions for DAGExecutor
+    digit_logits = target["target_digits"].unsqueeze(0).unsqueeze(0)
+    V_sign = target["target_V_sign"].unsqueeze(0).unsqueeze(0)
+    O = target["target_O"].unsqueeze(0).unsqueeze(0)
+    G = target["target_G"].unsqueeze(0).unsqueeze(0)
+
+    # Execute DAG
+    dag_result = executor.forward(digit_logits, V_sign, O, G)
+    dag_value = dag_result[0, 0].item()
+
+    expected_value = float(expr.evalf())
+    assert (
+        abs(dag_value - expected_value) < 1e-2
+    ), f"Expected {expected_value}, but got {dag_value}"
+
+
 def test_dag_executor_simple():
     """
     Simple test with a few basic expressions to verify DAG executor works correctly.
