@@ -11,7 +11,12 @@ import tiktoken
 import torch
 import torch.distributed as dist
 
-from data.dagset.streaming import digit_onehot_to_float, tensor_to_expression
+from data.dagset import heldout_expressions
+from data.dagset.streaming import (
+    digit_onehot_to_float,
+    expression_to_tensors,
+    tensor_to_expression,
+)
 from predictor_utils import compute_dag_loss, tokenize_texts
 
 
@@ -167,6 +172,15 @@ def _print_token_by_token_breakdown(
         print(f"  ... and {padding_count} tokens of padding")
 
 
+# TODO: Implement this
+def print_heldout_expressions_metrics(model):
+    for segment, expressions in heldout_expressions.heldout_segments.items():
+        for str_expr, sympy_expr in expressions:
+            print(f"Evaluating {segment} expression: {str_expr}")
+            target_tensors = expression_to_tensors(str_expr)
+            pass
+
+
 def print_detailed_validation_sample(
     texts,
     target_tensors,
@@ -244,9 +258,9 @@ def print_detailed_validation_sample(
     # Sharpen predictions for cleaner expression display and consistent execution
     # Note: V_sign, O, and G are already sharpened by STE in the predictor forward pass
     sharp_digit_logits = _sharpen_digit_predictions(single_digit_logits)
-    sharp_V_sign = single_V_sign  # Already sharpened by STE
-    sharp_O = single_O  # Already sharpened by STE
-    sharp_G = single_G  # Already sharpened by STE
+    sharp_V_sign = single_V_sign
+    sharp_O = single_O
+    sharp_G = single_G
 
     # Convert predicted tensors to expression string with sharpened values
     pred_expr = tensor_to_expression(
