@@ -20,72 +20,102 @@ sys.path.append(str(Path(__file__).parent.parent))
 import sympy
 
 from checkpoint_manager import CheckpointManager
-from data.dagset.streaming import expressions_to_tensors
+from data.dagset.streaming import digit_onehot_to_float
+from evaluate import (
+    _extract_initial_value,
+    _sharpen_digit_predictions,
+    _sharpen_operand_predictions,
+    _sharpen_sign_predictions,
+)
+
+
+def _execute_dag_prediction(dag_executor, digit_logits, V_sign, O, G) -> float:
+    """Execute DAG with proper dimension handling."""
+    if dag_executor is None:
+        return 0.0
+
+    # Add batch and time dimensions for executor (single sample)
+    pred_digit_logits_exec = digit_logits.unsqueeze(0).unsqueeze(0)
+    pred_V_sign_exec = V_sign.unsqueeze(0).unsqueeze(0)
+    pred_O_exec = O.unsqueeze(0).unsqueeze(0)
+    pred_G_exec = G.unsqueeze(0).unsqueeze(0)
+
+    result = dag_executor(
+        pred_digit_logits_exec, pred_V_sign_exec, pred_O_exec, pred_G_exec
+    )
+    # Take the result from the last position (should be [0, -1] for single sample)
+    return result[0, -1].item()
+
+
+def _print_predicted_initial_values(pred_digit_logits, pred_V_sign, cfg):
+    """Print the predicted initial values for the DAG."""
+    num_initial_nodes = pred_digit_logits.shape[0]
+    print(f"     --- Predicted Initial Values ---")
+
+    for n in range(num_initial_nodes):
+        pred_val = _extract_initial_value(
+            pred_digit_logits[n], pred_V_sign[n].item(), cfg, is_target=False
+        )
+        print(f"     Initial[{n}]: {pred_val:.6f}")
+
+
+def _print_digit_probabilities(pred_digit_logits, node_idx=0):
+    """Print digit probabilities for a given node to show model confidence."""
+    print(f"     --- Digit Probabilities (Node {node_idx}) ---")
+
+    # Get digit probabilities for the specified node
+    node_digit_logits = pred_digit_logits[node_idx]  # (D, base)
+    digit_probs = torch.softmax(node_digit_logits, dim=-1)  # (D, base)
+
+    # Print probabilities for each digit position
+    for digit_pos in range(digit_probs.shape[0]):
+        probs = digit_probs[digit_pos]  # (base,)
+        max_prob = probs.max().item()
+        max_digit = probs.argmax().item()
+
+        print(f"     Digit[{digit_pos}]: max={max_digit} (prob={max_prob:.3f})")
+
+        # Show top 3 probabilities for this digit position
+        top_probs, top_digits = torch.topk(probs, min(3, len(probs)))
+        for i, (prob, digit) in enumerate(zip(top_probs, top_digits)):
+            if i == 0:
+                print(f"       Top: {digit.item()}={prob:.3f}")
+            else:
+                print(f"            {digit.item()}={prob:.3f}")
+
+
+from data.dagset.streaming import expressions_to_tensors, tensor_to_expression
 from models.dag_model import GPT, DAGExecutor, GPTConfig
 from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
 from predictor_utils import tokenize_texts
 
 
-def create_mock_checkpoint():
-    """Create a mock checkpoint for testing."""
-    print("🔄 Creating mock checkpoint for testing...")
-
-    # Create a DAG predictor config matching train_predictor_config.py
-    config = PredictorOnlyConfig(
-        vocab_size=50257,
-        block_size=32,
-        n_layer=2,
-        n_head=4,
-        n_embd=256,  # n_head * 64 = 4 * 64 = 256
-        dropout=0.1,
-        bias=True,
-        dag_depth=4,
-        max_digits=4,
-        max_decimal_places=4,
-    )
-
-    # Create model
-    model = PredictorOnlyModel(config)
-
-    # Create mock checkpoint data
-    checkpoint = {
-        "model": model.state_dict(),
-        "model_args": config,
-        "iter_num": 1000,
-        "best_val_loss": 0.1,
-    }
-
-    print(
-        f"✅ Mock checkpoint created with {sum(p.numel() for p in model.parameters()):,} parameters"
-    )
-    return model, config, checkpoint
-
-
-def load_existing_checkpoint(checkpoint_path: Path = None):
-    """Load an existing checkpoint or try to download from RunPod."""
+def load_checkpoint(checkpoint_path: Path):
+    """Load a checkpoint from a local path or W&B."""
     checkpoint_manager = CheckpointManager()
 
-    # If no checkpoint path provided, try to download from W&B
-    if checkpoint_path is None:
-        print(f"🔄 No checkpoint provided, attempting to download from W&B...")
+    # Check if it's a W&B path (starts with wandb://)
+    if str(checkpoint_path).startswith("wandb://"):
+        print(f"🔄 Downloading checkpoint from W&B: {checkpoint_path}")
         local_dir = Path("wandb_checkpoints")
 
         try:
+            # Extract the W&B path from the wandb:// prefix
+            wandb_path = str(checkpoint_path)[7:]  # Remove "wandb://" prefix
             downloaded_path = checkpoint_manager.download_checkpoint_from_wandb(
-                local_dir=local_dir
+                local_dir=local_dir, run_name=wandb_path
             )
             if downloaded_path and downloaded_path.exists():
                 print(f"✅ Successfully downloaded checkpoint to: {downloaded_path}")
                 checkpoint_path = downloaded_path
             else:
-                print(f"❌ Failed to download from W&B")
                 raise FileNotFoundError("Failed to download checkpoint from W&B")
         except Exception as e:
             print(f"❌ Error downloading from W&B: {e}")
             raise FileNotFoundError(f"Failed to download checkpoint from W&B: {e}")
 
     # Load the checkpoint
-    if checkpoint_path and checkpoint_path.exists():
+    if checkpoint_path.exists():
         print(f"🔄 Loading checkpoint from {checkpoint_path}...")
         try:
             checkpoint = checkpoint_manager.load_checkpoint_from_path(checkpoint_path)
@@ -142,8 +172,8 @@ def load_existing_checkpoint(checkpoint_path: Path = None):
             print(f"❌ Error loading checkpoint: {e}")
             raise e
 
-    # If we get here, no checkpoint was provided and download failed
-    raise FileNotFoundError("No checkpoint provided and download from RunPod failed")
+    # If we get here, the checkpoint file doesn't exist
+    raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
 
 
 def test_dag_examples(model, config):
@@ -211,16 +241,40 @@ def test_dag_examples(model, config):
                     # DAG Predictor - get predictions
                     pred_digit_logits, pred_V_sign, pred_O, pred_G = model(test_input)
 
-                    # Show model outputs
-                    print(f"     - Model produced predictions:")
-                    print(f"       * Digit logits shape: {pred_digit_logits.shape}")
-                    print(f"       * V_sign shape: {pred_V_sign.shape}")
-                    print(f"       * O shape: {pred_O.shape}")
-                    print(f"       * G shape: {pred_G.shape}")
+                    # Get the last token position for the complete expression
+                    last_token_pos = pred_digit_logits.shape[1] - 1
 
-                    # Show some sample values
-                    print(f"       * Sample V_sign: {pred_V_sign[0, 0, :3].tolist()}")
-                    print(f"       * Sample G: {pred_G[0, 0, :3].tolist()}")
+                    # Extract single prediction tensors for the last token
+                    single_digit_logits = pred_digit_logits[
+                        0, last_token_pos
+                    ]  # (num_initial_nodes, D, base)
+                    single_V_sign = pred_V_sign[0, last_token_pos]  # (total_nodes,)
+                    single_O = pred_O[0, last_token_pos]  # (dag_depth, total_nodes)
+                    single_G = pred_G[0, last_token_pos]  # (dag_depth,)
+
+                    # Sharpen predictions for cleaner expression display and consistent execution
+                    sharp_digit_logits = _sharpen_digit_predictions(single_digit_logits)
+                    sharp_V_sign = _sharpen_sign_predictions(single_V_sign)
+                    sharp_O = _sharpen_operand_predictions(single_O)
+                    sharp_G = (single_G > 0.5).float()
+
+                    # Convert predicted tensors to expression string with sharpened values
+                    pred_expr = tensor_to_expression(
+                        sharp_digit_logits,
+                        sharp_V_sign,
+                        sharp_O,
+                        sharp_G,
+                        max_digits=config.max_digits,
+                        max_decimal_places=config.max_decimal_places,
+                    )
+
+                    # Print predicted initial values
+                    _print_predicted_initial_values(
+                        single_digit_logits, single_V_sign, config
+                    )
+
+                    # Print digit probabilities for the first node
+                    _print_digit_probabilities(single_digit_logits, node_idx=0)
 
                     # Try to execute the predicted DAG
                     try:
@@ -231,18 +285,18 @@ def test_dag_examples(model, config):
                         )
 
                         # Execute the predicted DAG
-                        dag_result = executor.forward(
-                            pred_digit_logits, pred_V_sign, pred_O, pred_G
+                        predicted_result = _execute_dag_prediction(
+                            executor, sharp_digit_logits, sharp_V_sign, sharp_O, sharp_G
                         )
-                        predicted_result = dag_result[
-                            0, -1
-                        ].item()  # Take last token position
 
-                        print(f"     - DAG execution successful!")
-                        print(f"     - Predicted result: {predicted_result:.6f}")
+                        print(f"     --- Predicted DAG ---")
+                        print(f"     Input Expression: {expr_str}")
+                        print(f"     Predicted Expression: {str(pred_expr)}")
+                        print(f"     Predicted Result: {predicted_result:.6f}")
 
                     except Exception as e:
-                        print(f"     - DAG execution failed: {e}")
+                        print(f"     - DAG execution failed with exception:")
+                        print(f"       {type(e).__name__}: {e}")
                         predicted_result = 0.0  # Fallback
 
                 else:
@@ -253,25 +307,8 @@ def test_dag_examples(model, config):
                     ].item()  # Take last token position
 
             # Show results
-            print(f"     - Expected: {expected_result:.6f}")
-
-            # Calculate error if we have a prediction
             if predicted_result != 0.0:  # Not the fallback value
-                error = abs(predicted_result - expected_result)
-                error_percent = (
-                    (error / abs(expected_result)) * 100
-                    if expected_result != 0
-                    else float("inf")
-                )
-
-                print(f"     - Error: {error:.6f} ({error_percent:.2f}%)")
-
-                if error < 0.1:
-                    print(f"     ✅ Good prediction!")
-                elif error < 1.0:
-                    print(f"     ⚠️  Moderate error")
-                else:
-                    print(f"     ❌ Large error")
+                print(f"     - DAG execution successful")
             else:
                 print(f"     - Note: DAG execution failed, showing model outputs only")
 
@@ -299,9 +336,32 @@ def test_model_behavior(model, config):
             print(f"   - O: {O.shape}")
             print(f"   - G: {G.shape}")
 
-            # Show some sample values
-            print(f"   - Sample V_sign values: {V_sign[0, 0, :3].tolist()}")
-            print(f"   - Sample G values: {G[0, 0, :3].tolist()}")
+            # Get the last token position for the complete expression
+            last_token_pos = digit_logits.shape[1] - 1
+
+            # Extract single prediction tensors for the last token
+            single_digit_logits = digit_logits[0, last_token_pos]
+            single_V_sign = V_sign[0, last_token_pos]
+            single_O = O[0, last_token_pos]
+            single_G = G[0, last_token_pos]
+
+            # Sharpen predictions
+            sharp_digit_logits = _sharpen_digit_predictions(single_digit_logits)
+            sharp_V_sign = _sharpen_sign_predictions(single_V_sign)
+            sharp_O = _sharpen_operand_predictions(single_O)
+            sharp_G = (single_G > 0.5).float()
+
+            # Convert to expression
+            pred_expr = tensor_to_expression(
+                sharp_digit_logits,
+                sharp_V_sign,
+                sharp_O,
+                sharp_G,
+                max_digits=config.max_digits,
+                max_decimal_places=config.max_decimal_places,
+            )
+
+            print(f"   - Predicted Expression: {str(pred_expr)}")
 
         else:
             dag_results = model(test_input)
@@ -318,13 +378,22 @@ def main():
     print("=" * 50)
 
     # Check if checkpoint path provided
-    checkpoint_path = None
-    if len(sys.argv) > 1:
-        checkpoint_path = Path(sys.argv[1])
-        print(f"📁 Using checkpoint: {checkpoint_path}")
+    if len(sys.argv) < 2:
+        print("❌ Error: Checkpoint path is required")
+        print("Usage: python scripts/test_checkpoint_examples.py <checkpoint_path>")
+        print("")
+        print("Examples:")
+        print(
+            "  python scripts/test_checkpoint_examples.py best_checkpoint/ckpt_predictor_pretrain_best_99.99acc.pt"
+        )
+        print("  python scripts/test_checkpoint_examples.py wandb://my-run-name")
+        sys.exit(1)
 
-    # Load checkpoint (or create mock)
-    model, config, checkpoint = load_existing_checkpoint(checkpoint_path)
+    checkpoint_path = Path(sys.argv[1])
+    print(f"📁 Using checkpoint: {checkpoint_path}")
+
+    # Load checkpoint
+    model, config, checkpoint = load_checkpoint(checkpoint_path)
 
     # Test DAG examples
     test_dag_examples(model, config)
@@ -333,10 +402,6 @@ def main():
     test_model_behavior(model, config)
 
     print(f"\n✅ All tests completed successfully!")
-
-    if checkpoint_path is None:
-        print(f"💡 To test a real checkpoint, run:")
-        print(f"   python scripts/test_checkpoint_examples.py <checkpoint_path>")
 
 
 if __name__ == "__main__":
