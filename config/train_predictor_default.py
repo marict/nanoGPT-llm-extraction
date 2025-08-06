@@ -19,7 +19,7 @@ log_interval = 1
 eval_iters = 1
 eval_once = False
 always_save_checkpoint = False  # Skip checkpointing for speed
-# Remove any stale checkpoints when starting a new run.
+
 clear_previous_checkpoints = True
 
 # Model initialization

@@ -4,7 +4,7 @@ This module centralises a few small pieces of logic that used to be duplicated
 across several entry-point scripts:
 
 * Setting a default `WANDB_DIR` so that local W&B runs are written to /tmp.
-* Detecting CUDA / PyTorch capabilities once (TORCH_2_2_1, CUDA_AVAILABLE).
+* Detecting CUDA / PyTorch capabilities once (CUDA_AVAILABLE).
 
 * Providing a common `CHECKPOINT_DIR` that automatically resolves to the
   correct location when running on RunPod.
@@ -31,7 +31,7 @@ os.environ.setdefault("WANDB_DIR", "/tmp/wandb")
 # --------------------------------------------------------------------------- #
 # Capability flags
 # --------------------------------------------------------------------------- #
-TORCH_2_2_1: bool = torch.__version__ >= "2.2.1"
+
 CUDA_AVAILABLE: bool = torch.cuda.is_available()
 
 

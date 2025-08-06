@@ -20,7 +20,6 @@ sys.path.append(str(Path(__file__).parent.parent))
 import sympy
 
 from checkpoint_manager import CheckpointManager
-from data.dagset.streaming import digit_onehot_to_float
 from evaluate import (
     _extract_initial_value,
     _sharpen_digit_predictions,
@@ -44,7 +43,31 @@ def _execute_dag_prediction(dag_executor, digit_logits, V_sign, O, G) -> float:
         pred_digit_logits_exec, pred_V_sign_exec, pred_O_exec, pred_G_exec
     )
     # Take the result from the last position (should be [0, -1] for single sample)
-    return result[0, -1].item()
+    final_result = result[0, -1].item()
+
+    # Debug: If result is 0.0, show internal state
+    if abs(final_result) < 1e-10:
+        print(f"     🔍 DEBUG: Zero result detected, showing internal state:")
+        print(f"       - Initial V_sign: {V_sign.tolist()}")
+        print(f"       - Initial O (operands): {O.tolist()}")
+        print(f"       - Initial G (gates): {G.tolist()}")
+        print(f"       - Raw result tensor shape: {result.shape}")
+        print(f"       - Raw result values: {result[0, -1].tolist()}")
+
+        # Show the intermediate computation steps
+        with torch.no_grad():
+            # Convert digits to magnitudes
+            initial_V_mag = dag_executor.digits_to_vmag(
+                pred_digit_logits_exec, dag_executor.max_digits, dag_executor.base
+            )
+            print(f"       - Initial V_mag: {initial_V_mag[0, 0].tolist()}")
+
+            # Show what the final computation should be
+            final_idx = dag_executor.total_nodes - 1
+            print(f"       - Final node index: {final_idx}")
+            print(f"       - Total nodes: {dag_executor.total_nodes}")
+
+    return final_result
 
 
 def _print_predicted_initial_values(pred_digit_logits, pred_V_sign, cfg):
@@ -252,14 +275,28 @@ def test_dag_examples(model, config):
                     single_O = pred_O[0, last_token_pos]  # (dag_depth, total_nodes)
                     single_G = pred_G[0, last_token_pos]  # (dag_depth,)
 
+                    # Get raw (unsharpened) predictions
+                    raw_digit_logits = single_digit_logits
+                    raw_V_sign = single_V_sign
+                    raw_O = single_O
+                    raw_G = single_G
+
                     # Sharpen predictions for cleaner expression display and consistent execution
                     sharp_digit_logits = _sharpen_digit_predictions(single_digit_logits)
                     sharp_V_sign = _sharpen_sign_predictions(single_V_sign)
                     sharp_O = _sharpen_operand_predictions(single_O)
                     sharp_G = (single_G > 0.5).float()
 
-                    # Convert predicted tensors to expression string with sharpened values
-                    pred_expr = tensor_to_expression(
+                    # Convert both raw and sharpened tensors to expressions
+                    raw_expr = tensor_to_expression(
+                        raw_digit_logits,
+                        raw_V_sign,
+                        raw_O,
+                        raw_G,
+                        max_digits=config.max_digits,
+                        max_decimal_places=config.max_decimal_places,
+                    )
+                    sharp_expr = tensor_to_expression(
                         sharp_digit_logits,
                         sharp_V_sign,
                         sharp_O,
@@ -276,7 +313,7 @@ def test_dag_examples(model, config):
                     # Print digit probabilities for the first node
                     _print_digit_probabilities(single_digit_logits, node_idx=0)
 
-                    # Try to execute the predicted DAG
+                    # Try to execute both raw and sharpened DAGs
                     try:
                         executor = DAGExecutor(
                             dag_depth=config.dag_depth,
@@ -284,36 +321,32 @@ def test_dag_examples(model, config):
                             max_decimal_places=config.max_decimal_places,
                         )
 
-                        # Execute the predicted DAG
-                        predicted_result = _execute_dag_prediction(
+                        # Execute both raw and sharpened DAGs
+                        raw_result = _execute_dag_prediction(
+                            executor, raw_digit_logits, raw_V_sign, raw_O, raw_G
+                        )
+                        sharp_result = _execute_dag_prediction(
                             executor, sharp_digit_logits, sharp_V_sign, sharp_O, sharp_G
                         )
 
                         print(f"     --- Predicted DAG ---")
                         print(f"     Input Expression: {expr_str}")
-                        print(f"     Predicted Expression: {str(pred_expr)}")
-                        print(f"     Predicted Result: {predicted_result:.6f}")
+                        print(f"     Raw Expression: {str(raw_expr)}")
+                        print(f"     Raw Result: {raw_result:.6f}")
+                        print(f"     Sharpened Expression: {str(sharp_expr)}")
+                        print(f"     Sharpened Result: {sharp_result:.6f}")
 
                     except Exception as e:
                         print(f"     - DAG execution failed with exception:")
-                        print(f"       {type(e).__name__}: {e}")
-                        predicted_result = 0.0  # Fallback
-
+                        raise
                 else:
                     # DAG-GPT model
                     dag_result = model(test_input)
-                    predicted_result = dag_result[
-                        0, -1
-                    ].item()  # Take last token position
+                    _ = dag_result[0, -1].item()  # Take last token position
 
-            # Show results
-            if predicted_result != 0.0:  # Not the fallback value
-                print(f"     - DAG execution successful")
-            else:
-                print(f"     - Note: DAG execution failed, showing model outputs only")
-
-        except Exception as e:
-            print(f"     ❌ Error processing expression: {e}")
+        except Exception as ex:
+            print(f"     ❌ Error processing expression")
+            raise
 
 
 def test_model_behavior(model, config):
@@ -393,7 +426,7 @@ def main():
     print(f"📁 Using checkpoint: {checkpoint_path}")
 
     # Load checkpoint
-    model, config, checkpoint = load_checkpoint(checkpoint_path)
+    model, config, _ = load_checkpoint(checkpoint_path)
 
     # Test DAG examples
     test_dag_examples(model, config)

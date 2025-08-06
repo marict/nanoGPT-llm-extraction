@@ -64,25 +64,25 @@ def generate_uniform_digit_number(
 
     # 3. Generate a random number of decimal places
     num_decimal_places = rng.randint(0, max_decimal_places)
-
-    # 4. Generate random decimal digits for the specified base
     decimal_digits = [rng.randint(0, base - 1) for _ in range(num_decimal_places)]
 
-    # 5. Combine integer and decimal parts using the specified base
+    # 4. Combine integer and decimal parts using the specified base
     int_part = sum(d * (base**i) for i, d in enumerate(reversed(int_digits)))
 
-    # If int_part is 0, and we have decimal places, make sure at least one decimal digit is non-zero
-    # to avoid generating a complete zero when not allowed
-    if int_part == 0 and not allow_zero and num_decimal_places > 0:
-        if all(d == 0 for d in decimal_digits):
+    # 5. Handle zero case
+    if int_part == 0 and not allow_zero:
+        if num_decimal_places == 0:
+            # We have a complete zero, but it's not allowed
+            # Generate a new non-zero integer
+            int_digits = [rng.randint(1, base - 1)]
+            int_part = int_digits[0]
+        elif all(d == 0 for d in decimal_digits):
+            # We have 0.000..., but it's not allowed
             # Replace a random decimal digit with non-zero
             idx = rng.randint(0, len(decimal_digits) - 1)
             decimal_digits[idx] = rng.randint(1, base - 1)
 
-    # Check if the number is a whole number (no decimal places)
-    is_whole_number = num_decimal_places == 0
-
-    # Calculate the actual result as a float initially using the specified base
+    # 6. Calculate the actual result
     if num_decimal_places > 0:
         decimal_part = sum(d * (base ** -(i + 1)) for i, d in enumerate(decimal_digits))
         result = int_part + decimal_part
@@ -92,7 +92,10 @@ def generate_uniform_digit_number(
     # Apply the sign
     result *= sign
 
-    # Convert to integer if it's a whole number and the random probability is met
+    # Check if the result is a whole number (no decimal places or all decimal digits are 0)
+    is_whole_number = num_decimal_places == 0 or all(d == 0 for d in decimal_digits)
+
+    # If it's a whole number, decide whether to return as int or float based on probability
     if is_whole_number and rng.random() < integer_no_decimal_probability:
         return int(result)
 
@@ -186,9 +189,7 @@ def generate_expression(
     # Identities will be added later.
     ops_set_no_identity = [op for op in GENERATION_OPS if op != "identity"]
     # Choose a random number of operations between 0 and depth.
-    # Weight higher depths more heavily.
-    weights = [i + 1 for i in range(depth)]
-    num_ops = rng.choices(range(depth), weights=weights, k=1)[0]
+    num_ops = rng.randint(0, depth - 1)
     # Generate random operations.
     for i in range(num_ops):
         op_name = rng.choice(ops_set_no_identity)
@@ -203,7 +204,7 @@ def generate_expression(
             max_decimal_places=max_decimal_places,
             base=10,  # Always use base 10
             allow_zero=False,
-            integer_no_decimal_probability=0.0,
+            integer_no_decimal_probability=0.5,
         )
         initial_values.append(value)
 

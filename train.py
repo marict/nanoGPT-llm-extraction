@@ -32,7 +32,7 @@ from models.dag_model import GPT, GPTConfig
 from python_version_check import check_python_version
 
 # Centralised runtime constants & env tweaks
-from runtime import CHECKPOINT_DIR, CUDA_AVAILABLE, TORCH_2_2_1
+from runtime import CHECKPOINT_DIR, CUDA_AVAILABLE
 from training_utils import (
     BaseConfig,
     apply_overrides,
@@ -440,14 +440,8 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
         f"[{time.time() - setup_start:.2f}s] Model creation completed in {time.time() - model_start:.2f}s"
     )
 
-    # Different scaler for different torch versions
-    # One for the local version and one for the runpod version
     scalar_enabled = actual_dtype == "float16"
-    scaler = (
-        torch.cuda.amp.GradScaler(enabled=scalar_enabled)
-        if TORCH_2_2_1
-        else torch.amp.GradScaler("cuda", enabled=scalar_enabled)
-    )
+    scaler = torch.cuda.amp.GradScaler(enabled=scalar_enabled)
 
     optimizer_start = time.time()
     print(f"[{time.time() - setup_start:.2f}s] Initializing optimizer")
