@@ -11,10 +11,7 @@ import tiktoken
 import torch
 import torch.distributed as dist
 
-from data.dagset import heldout_expressions
-from data.dagset.heldout_expressions import (
-    heldout_expressions as heldout_expressions_data,
-)
+from data.dagset.heldout_expressions import heldout_segments
 from data.dagset.streaming import (
     digit_onehot_to_float,
     expression_to_tensors,
@@ -189,7 +186,7 @@ def print_and_return_heldout_metrics(model):
     print("\n=== HELDOUT EXPRESSIONS EVALUATION ===")
 
     with torch.no_grad():
-        for segment, expressions in heldout_expressions_data.heldout_segments.items():
+        for segment, expressions in heldout_segments.items():
             segment_metrics[segment] = {
                 "digit_accuracy": 0.0,
                 "sign_accuracy": 0.0,

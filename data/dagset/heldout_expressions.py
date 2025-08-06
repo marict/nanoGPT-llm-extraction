@@ -3,7 +3,14 @@ import sympy
 
 
 def parse_all(expressions):
-    return [(expr, sympy.parse_expr(expr, evaluate=False)) for expr in expressions]
+    parsed = []
+    for expr in expressions:
+        try:
+            parsed.append((expr, sympy.parse_expr(expr, evaluate=False)))
+        except Exception as e:
+            print(f"Error parsing expression: {expr} - {e}")
+            raise
+    return parsed
 
 
 single_expressions = [
@@ -29,7 +36,8 @@ single_expressions = [
 simple_expressions = [
     "1.0 + 1.0",
     "1 + 1",
-    "1 + 1.0" "2.0 * 3.0",
+    "1 + 1.0",
+    "2.0 * 3.0",
     "10.0 - 5.0",
     "15.0 / 3.0",
     "-2.0 + 5.0",
@@ -162,22 +170,3 @@ heldout_segments = {
     "deeply_nested": parse_all(deeply_nested_expressions),
     "realistic_complex": parse_all(realistic_complex_expressions),
 }
-
-heldout_expressions = [
-    *single_expressions,
-    *simple_expressions,
-    *complex_expressions,
-    *parentheses_expressions,
-    *very_complex_expressions,
-    *small_numbers_expressions,
-    *large_numbers_expressions,
-    *division_edge_cases_expressions,
-    *integer_results_expressions,
-    *zero_handling_expressions,
-    *negative_number_combinations_expressions,
-    *mixed_integer_decimal_expressions,
-    *deeply_nested_expressions,
-    *realistic_complex_expressions,
-]
-
-heldout_expressions = parse_all(heldout_expressions)
