@@ -21,7 +21,7 @@ gradient_accumulation_steps = 1
 batch_size = 2  # Minimal batch size
 block_size = 8  # Minimal block size
 clear_previous_checkpoints = True
-sharp_training = False
+
 
 # DAG dataset parameters - minimal for speed
 max_dag_depth = 2  # Minimal depth

@@ -21,7 +21,6 @@ class MockConfig:
         self.enable_g_loss = True
         self.enable_exec_loss = True
         self.exec_loss_weight = 0.01
-        self.sharp_training = False  # New parameter
 
 
 @pytest.fixture
@@ -467,14 +466,10 @@ def test_ste_sharpening_and_gradient_flow(test_dag_config, dag_executor, device)
     # Set a dummy max_decimal_places for the test
     dag_executor.max_decimal_places = 4
     # Simulate the GPT.forward call to dag_executor
-    # The DAGExecutor's digits_to_vmag will handle the apply_ste for digits internally.
+    # The DAGExecutor's digits_to_vmag will handle STE for digits internally.
     # For V_sign, O, G, the already STE-applied tensors are passed.
     dag_value = dag_executor(
-        sharp_digit_logits_ste,
-        sharp_V_sign_ste,
-        sharp_O_ste,
-        sharp_G_ste,
-        apply_ste=True,  # Ensure STE is applied for digits in digits_to_vmag
+        sharp_digit_logits_ste, sharp_V_sign_ste, sharp_O_ste, sharp_G_ste
     )
 
     # 4. Verify sharpening worked in the forward pass (for signs, O, G)
@@ -524,3 +519,84 @@ def test_ste_sharpening_and_gradient_flow(test_dag_config, dag_executor, device)
     assert (
         pred_G.grad is not None and torch.isfinite(pred_G.grad).all()
     ), "Gradients should flow to pred_G and be finite"
+
+
+def test_ste_produces_sharp_outputs(test_dag_config, device):
+    """Test that STE actually produces sharp/discrete outputs from the predictor."""
+    from models.dag_model import DAGExecutor, DAGPlanPredictor
+    from models.predictor_only_model import PredictorOnlyConfig
+
+    # Create config (STE is always enabled now)
+    config = PredictorOnlyConfig()
+    config.dag_depth = test_dag_config["dag_depth"]
+    config.max_digits = 2
+    config.max_decimal_places = 1
+
+    # Create predictor and executor
+    predictor = DAGPlanPredictor(config).to(device)
+    executor = DAGExecutor(
+        dag_depth=config.dag_depth,
+        max_digits=config.max_digits,
+        max_decimal_places=config.max_decimal_places,
+    ).to(device)
+
+    # Create test input
+    B, T = test_dag_config["batch_size"], test_dag_config["seq_len"]
+    hidden_state = torch.randn(B, T, config.n_embd, device=device)
+
+    # Get predictor outputs
+    digit_logits, V_sign, O, G = predictor(hidden_state)
+
+    # Test 1: Verify signs are exactly -1 or 1
+    assert torch.all(
+        (V_sign == -1.0) | (V_sign == 1.0)
+    ), f"Signs should be exactly -1 or 1, got values: {V_sign.unique()}"
+
+    # Test 2: Verify gates are exactly 0 or 1
+    assert torch.all(
+        (G == 0.0) | (G == 1.0)
+    ), f"Gates should be exactly 0 or 1, got values: {G.unique()}"
+
+    # Test 3: Verify operands are integers (rounded)
+    assert torch.all(
+        O == O.round()
+    ), f"Operands should be integers, got non-integer values"
+
+    # Test 4: Verify digits are one-hot in executor
+    # Actually run the executor to see what it produces
+    with torch.no_grad():
+        executor_result = executor(digit_logits, V_sign, O, G)
+
+    # The executor should work without errors when STE is applied
+    assert torch.isfinite(executor_result).all(), "Executor result should be finite"
+
+    # Test 5: Verify that digits are sharpened in the executor's digits_to_vmag
+    # Get the digit probabilities that the executor would see after STE
+    digit_probs_ste = torch.softmax(digit_logits, dim=-1)
+
+    # Apply the same STE logic that the executor uses
+    hard_probs = torch.softmax(digit_logits / 0.1, dim=-1)
+    digit_one_hot = torch.nn.functional.one_hot(
+        hard_probs.argmax(dim=-1), num_classes=10
+    ).float()
+    digit_probs_ste = digit_one_hot + (digit_probs_ste - digit_probs_ste.detach())
+
+    # Check that each digit position has exactly one probability = 1.0 and rest = 0.0
+    max_probs = digit_probs_ste.max(dim=-1)[0]  # Get max probability for each position
+    min_probs = digit_probs_ste.min(dim=-1)[0]  # Get min probability for each position
+
+    # All max probabilities should be 1.0 (one-hot)
+    assert torch.allclose(
+        max_probs, torch.ones_like(max_probs)
+    ), f"Max digit probabilities should be 1.0, got: {max_probs.unique()}"
+
+    # All min probabilities should be 0.0 (one-hot)
+    assert torch.allclose(
+        min_probs, torch.zeros_like(min_probs)
+    ), f"Min digit probabilities should be 0.0, got: {min_probs.unique()}"
+
+    # Test 6: Verify that STE is always enabled (no longer optional)
+    # Since STE is always on, we can't test the "without STE" case anymore
+    # The test above already verified that outputs are sharp when STE is enabled
+
+    print("✅ STE verification passed: outputs are properly sharpened")

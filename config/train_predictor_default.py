@@ -71,6 +71,5 @@ compile = False  # Skip compilation overhead
 keep_alive = False
 check_nans = False
 
-sharp_training = True
 # Random seeds
 seed = 42

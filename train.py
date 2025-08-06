@@ -670,6 +670,10 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
 
                             if master_process:
                                 print(f"Saving checkpoint: {checkpoint_filename}")
+                                # Clean up previous best checkpoints to save disk space
+                                checkpoint_manager.clean_previous_best_checkpoints(
+                                    cfg.name
+                                )
                                 checkpoint_manager.save_checkpoint(
                                     ckpt, checkpoint_filename
                                 )

@@ -35,6 +35,14 @@ try:
 except ImportError:
     _HAVE_RUNPOD = False
 
+# Optional runpod for API access
+try:
+    import runpod
+
+    _HAVE_RUNPOD_API = True
+except ImportError:
+    _HAVE_RUNPOD_API = False
+
 # Checkpoint directory
 CHECKPOINT_DIR = (
     "/runpod-volume/checkpoints" if os.path.exists("/runpod-volume") else "checkpoints"
@@ -217,7 +225,10 @@ class CheckpointManager:
 
         # Try to load the checkpoint
         try:
-            checkpoint = torch.load(checkpoint_path, map_location=device)
+            # First try with weights_only=False for PyTorch 2.6+ compatibility
+            checkpoint = torch.load(
+                checkpoint_path, map_location=device, weights_only=False
+            )
             print(f"Successfully loaded checkpoint from: {checkpoint_path}")
         except Exception as e:
             error_msg = f"Failed to load checkpoint from {checkpoint_path}: {e}"
@@ -458,6 +469,181 @@ class CheckpointManager:
             print(
                 f"Removed {removed_count} previous {self.checkpoint_type} checkpoint(s)"
             )
+
+    def clean_previous_best_checkpoints(self, config_name: str) -> None:
+        """Remove previous 'best' checkpoint files for this config name, keeping only the latest best."""
+        if not self.checkpoint_dir.exists():
+            return
+
+        patterns = self._get_checkpoint_patterns(config_name)
+        best_checkpoints = []
+
+        # Find all best checkpoints
+        for pattern in patterns:
+            # Look for checkpoints with 'best' in the name
+            best_pattern = pattern.replace("_*.", "_best*.")
+            for ckpt_file in self.checkpoint_dir.rglob(best_pattern):
+                best_checkpoints.append(ckpt_file)
+
+        if len(best_checkpoints) <= 1:
+            return  # No cleanup needed
+
+        # Sort by modification time, keep the most recent
+        best_checkpoints.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        checkpoints_to_remove = best_checkpoints[1:]  # Remove all but the most recent
+
+        removed_count = 0
+        for ckpt_file in checkpoints_to_remove:
+            try:
+                ckpt_file.unlink()
+                removed_count += 1
+                print(f"Removed previous best checkpoint: {ckpt_file.name}")
+            except Exception as e:
+                print(f"Warning: Could not remove {ckpt_file}: {e}")
+
+        if removed_count > 0:
+            print(f"Cleaned up {removed_count} previous best checkpoint(s)")
+
+    def check_runpod_api_available(self) -> bool:
+        """Check if RunPod API is available and configured."""
+        if not _HAVE_RUNPOD_API:
+            return False
+
+        api_key = os.getenv("RUNPOD_API_KEY")
+        return api_key is not None
+
+    def check_runpod_ssh_available(self) -> bool:
+        """Check if RunPod SSH access is available."""
+        pod_id = os.getenv("RUNPOD_POD_ID")
+        return pod_id is not None
+
+    def download_checkpoint_from_runpod(
+        self, source_path: str, local_dir: Path = None, force: bool = False
+    ) -> Path | None:
+        """Download checkpoint from RunPod volume to local directory.
+
+        Args:
+            source_path: Path to checkpoint on RunPod volume
+            local_dir: Local directory to save checkpoint (defaults to current checkpoint_dir)
+            force: Force re-download even if file exists
+
+        Returns:
+            Path to downloaded checkpoint, or None if failed
+        """
+        source_path = Path(source_path)
+        local_dir = local_dir or self.checkpoint_dir
+        local_dir.mkdir(parents=True, exist_ok=True)
+
+        # Extract filename from source path
+        filename = source_path.name
+        local_path = local_dir / filename
+
+        # Check if already exists
+        if local_path.exists() and not force:
+            size_mb = local_path.stat().st_size / (1024 * 1024)
+            print(
+                f"✅ Checkpoint already exists locally: {local_path} ({size_mb:.2f} MB)"
+            )
+            return local_path
+
+        print(f"🔄 Downloading checkpoint from RunPod...")
+        print(f"   Source: {source_path}")
+        print(f"   Destination: {local_path}")
+
+        # Try different download methods
+        success = False
+
+        # Method 1: Direct copy (if on RunPod instance)
+        if source_path.exists():
+            try:
+                import shutil
+
+                shutil.copy2(source_path, local_path)
+                success = True
+                print(f"✅ Successfully copied checkpoint from RunPod volume")
+            except Exception as e:
+                print(f"❌ Direct copy failed: {e}")
+
+        # Method 2: SSH download (if SSH is available)
+        if not success and self.check_runpod_ssh_available():
+            success = self._download_via_ssh(source_path, local_path)
+
+        # Method 3: API download (if API is available)
+        if not success and self.check_runpod_api_available():
+            success = self._download_via_api(source_path, local_path)
+
+        if success:
+            # Get file size
+            size_bytes = local_path.stat().st_size
+            size_mb = size_bytes / (1024 * 1024)
+            print(f"📊 Checkpoint size: {size_mb:.2f} MB ({size_bytes:,} bytes)")
+            return local_path
+        else:
+            print(f"❌ All download methods failed")
+            self._provide_manual_download_instructions(source_path, local_path)
+            return None
+
+    def _download_via_ssh(self, source_path: Path, local_path: Path) -> bool:
+        """Attempt to download checkpoint via SSH."""
+        print(f"🔄 Attempting SSH download...")
+
+        pod_id = os.getenv("RUNPOD_POD_ID")
+        if not pod_id:
+            print("❌ No pod ID available for SSH")
+            return False
+
+        try:
+            # This would require actual SSH connection details
+            # which are typically provided in the RunPod web interface
+            print(f"🔄 SSH access to pod {pod_id} not implemented")
+            print("   SSH access is typically provided via the RunPod web interface")
+            return False
+
+        except Exception as e:
+            print(f"❌ SSH download failed: {e}")
+            return False
+
+    def _download_via_api(self, source_path: Path, local_path: Path) -> bool:
+        """Attempt to download checkpoint via RunPod API."""
+        print(f"🔄 Attempting API download...")
+
+        try:
+            # The standard RunPod API doesn't support direct file downloads
+            print("❌ RunPod API file download not implemented")
+            print("   The standard RunPod API doesn't support direct file downloads")
+            return False
+
+        except Exception as e:
+            print(f"❌ API download failed: {e}")
+            return False
+
+    def _provide_manual_download_instructions(
+        self, source_path: Path, local_path: Path
+    ) -> None:
+        """Provide manual instructions for downloading the checkpoint."""
+        print(f"\n📋 Manual Download Instructions:")
+        print("=" * 50)
+
+        print("1. **Via RunPod Web Interface:**")
+        print("   - Log into your RunPod account")
+        print("   - Navigate to your pod")
+        print("   - Use the file browser to navigate to:")
+        print(f"     {source_path.parent}")
+        print(f"   - Download: {source_path.name}")
+
+        print("\n2. **Via SSH (if enabled):**")
+        print("   - Enable SSH in your RunPod pod settings")
+        print("   - Get SSH connection details from the web interface")
+        print("   - Use scp to download:")
+        print(f"     scp runpod:{source_path} {local_path}")
+
+        print("\n3. **Via RunPod CLI (if available):**")
+        print("   - Install RunPod CLI")
+        print(f"   - Use: runpod download <pod_id> {source_path}")
+
+        print(f"\n📁 Expected file location after download:")
+        print(f"   {local_path}")
+        print("   Size: ~55.6 MB")
 
     def _all_tensors(self, state):
         """Return True if every leaf value in state dict is a torch.Tensor."""

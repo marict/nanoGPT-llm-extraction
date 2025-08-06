@@ -334,6 +334,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                                 f"[{time.time() - setup_start:.2f}s] 🎯 BEST validation loss: {best_val_loss:.6f} "
                                 f"(iter {iter_num}) - saving checkpoint: {checkpoint_filename}"
                             )
+                            # Clean up previous best checkpoints to save disk space
+                            checkpoint_manager.clean_previous_best_checkpoints(cfg.name)
 
                         checkpoint_manager.save_checkpoint(
                             checkpoint_data, checkpoint_filename
