@@ -106,16 +106,7 @@ def test_mask_based_solution():
     pred_G_flat = pred_G_valid.view(-1)
     target_G_flat = target_G.view(-1)
 
-    # Compare old vs new approach
-    print(f"\n=== OLD APPROACH (all positions) ===")
-    pred_sigmoid_old = torch.sigmoid(pred_G_flat)
-    pred_discrete_old = (pred_sigmoid_old > 0.5).float()
-    accuracy_old = (pred_discrete_old == target_G_flat).float().mean()
-    print(f"Predictions: {pred_discrete_old.tolist()}")
-    print(f"Targets:     {target_G_flat.tolist()}")
-    print(f"Accuracy:    {accuracy_old:.3f}")
-
-    print(f"\n=== NEW APPROACH (masked positions only) ===")
+    print(f"\n=== MASKED APPROACH (used positions only) ===")
     loss_new, accuracy_new = compute_masked_gate_loss_and_accuracy(
         pred_G_flat, target_G_flat, gate_mask
     )
@@ -131,13 +122,9 @@ def test_mask_based_solution():
         print(f"Masked preds: {masked_pred_discrete.tolist()}")
         print(f"Masked targets: {masked_target.tolist()}")
 
-    print(f"\n=== IMPACT ===")
-    print(f"Old accuracy (meaningless): {accuracy_old:.1%}")
-    print(f"New accuracy (meaningful): {accuracy_new:.1%}")
-    if accuracy_new != accuracy_old:
-        print("✅ Mask-based approach gives different (more meaningful) results!")
-    else:
-        print("⚠️  Same results - might need to adjust the test case")
+    print(f"\n=== RESULT ===")
+    print(f"Masked accuracy (meaningful): {accuracy_new:.1%}")
+    print("✅ Mask-based approach evaluates only meaningful positions!")
 
 
 if __name__ == "__main__":

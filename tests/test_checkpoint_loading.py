@@ -11,6 +11,7 @@ import pytest
 import torch
 
 from checkpoint_manager import CheckpointLoadError, CheckpointManager
+from train import TrainConfig
 from train_predictor import DAGTrainConfig
 from training_utils import BaseConfig, get_checkpoint_filename
 
@@ -406,7 +407,6 @@ class TestCheckpointLoadingIntegration:
 
     def test_train_config_compatibility(self):
         """Test that checkpoint loading works with actual training configs."""
-        from train import TrainConfig
 
         cfg = TrainConfig()
         cfg.init_from = "scratch"
@@ -441,7 +441,6 @@ class TestCheckpointLoadingIntegration:
     @patch("runpod_service.stop_runpod")
     def test_runpod_integration(self, mock_stop_runpod):
         """Test checkpoint loading behavior in a realistic scenario."""
-        from train import TrainConfig
 
         cfg = TrainConfig()
         cfg.init_from = "/nonexistent/checkpoint.pt"

@@ -21,8 +21,9 @@ import sympy
 
 from checkpoint_manager import CheckpointManager
 from data.dagset.streaming import expressions_to_tensors
-from models.dag_model import GPT, GPTConfig
+from models.dag_model import GPT, DAGExecutor, GPTConfig
 from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
+from predictor_utils import tokenize_texts
 
 
 def create_mock_checkpoint():
@@ -64,21 +65,24 @@ def load_existing_checkpoint(checkpoint_path: Path = None):
     """Load an existing checkpoint or try to download from RunPod."""
     checkpoint_manager = CheckpointManager()
 
-    # If no checkpoint path provided, try to download from RunPod
+    # If no checkpoint path provided, try to download from W&B
     if checkpoint_path is None:
-        print(f"🔄 No checkpoint provided, attempting to download from RunPod...")
-        runpod_path = "/runpod-volume/checkpoints/rhfuok9btu6t8m-pretrained_sharp/ckpt_predictor_pretrain_8600_99.98acc.pt"
-        local_dir = Path("runpod_checkpoints")
+        print(f"🔄 No checkpoint provided, attempting to download from W&B...")
+        local_dir = Path("wandb_checkpoints")
 
-        downloaded_path = checkpoint_manager.download_checkpoint_from_runpod(
-            runpod_path, local_dir
-        )
-        if downloaded_path and downloaded_path.exists():
-            print(f"✅ Successfully downloaded checkpoint to: {downloaded_path}")
-            checkpoint_path = downloaded_path
-        else:
-            print(f"❌ Failed to download from RunPod")
-            raise FileNotFoundError("Failed to download checkpoint from RunPod")
+        try:
+            downloaded_path = checkpoint_manager.download_checkpoint_from_wandb(
+                local_dir=local_dir
+            )
+            if downloaded_path and downloaded_path.exists():
+                print(f"✅ Successfully downloaded checkpoint to: {downloaded_path}")
+                checkpoint_path = downloaded_path
+            else:
+                print(f"❌ Failed to download from W&B")
+                raise FileNotFoundError("Failed to download checkpoint from W&B")
+        except Exception as e:
+            print(f"❌ Error downloading from W&B: {e}")
+            raise FileNotFoundError(f"Failed to download checkpoint from W&B: {e}")
 
     # Load the checkpoint
     if checkpoint_path and checkpoint_path.exists():
@@ -148,16 +152,31 @@ def test_dag_examples(model, config):
 
     model.eval()
 
-    # Test examples
+    # Test examples - use expressions that match the training data format
     test_expressions = [
+        # Single expressions
+        "1.0",
+        "2.0",
+        "3.0",
+        "4.0",
+        "5.0",
+        "6.0",
+        # Simple expressions
         "1.0 + 1.0",
         "2.0 * 3.0",
         "10.0 - 5.0",
         "15.0 / 3.0",
-        "1.5 + 2.5",
-        "3.0 * 4.0",
-        "8.0 - 2.0",
-        "12.0 / 4.0",
+        # More complex expressions like training data
+        "-2.0 + 5.0",
+        "69.919 - 7.211",
+        "-907.0 + 7.211",
+        "2.0 * 3.0 + 4.0",
+        "10.0 - 5.0 / 2.0",
+        "1.5 * 2.0 + 3.0",
+        "8.0 / 2.0 - 1.0",
+        # Very complex expressions
+        "-1487.475/(-2.0*69.919 + 5.0)",
+        "-2.0 + (69.919 + (-907.0 + 7.211))",
     ]
 
     print(f"📝 Testing {len(test_expressions)} expressions:")
@@ -184,14 +203,8 @@ def test_dag_examples(model, config):
 
             target = target_tensors[0]
 
-            # For testing, we'll create a simple input that the model can process
-            # The model expects token IDs, not the DAG tensors directly
-            # Let's create a simple test input and just show the model outputs
-
-            # Create a simple token sequence input
-            test_input = torch.randint(
-                0, 1000, (1, 10)
-            )  # batch_size=1, sequence_length=10
+            # Create a simple test input using the actual expression
+            test_input = tokenize_texts([expr_str], config.block_size, "cpu")
 
             with torch.no_grad():
                 if isinstance(model, PredictorOnlyModel):
@@ -211,8 +224,6 @@ def test_dag_examples(model, config):
 
                     # Try to execute the predicted DAG
                     try:
-                        from models.dag_model import DAGExecutor
-
                         executor = DAGExecutor(
                             dag_depth=config.dag_depth,
                             max_digits=config.max_digits,
@@ -223,7 +234,9 @@ def test_dag_examples(model, config):
                         dag_result = executor.forward(
                             pred_digit_logits, pred_V_sign, pred_O, pred_G
                         )
-                        predicted_result = dag_result[0, 0].item()
+                        predicted_result = dag_result[
+                            0, -1
+                        ].item()  # Take last token position
 
                         print(f"     - DAG execution successful!")
                         print(f"     - Predicted result: {predicted_result:.6f}")
@@ -235,7 +248,9 @@ def test_dag_examples(model, config):
                 else:
                     # DAG-GPT model
                     dag_result = model(test_input)
-                    predicted_result = dag_result[0, 0].item()
+                    predicted_result = dag_result[
+                        0, -1
+                    ].item()  # Take last token position
 
             # Show results
             print(f"     - Expected: {expected_result:.6f}")
@@ -270,8 +285,8 @@ def test_model_behavior(model, config):
 
     model.eval()
 
-    # Create a simple test input - use token IDs format
-    test_input = torch.randint(0, 1000, (1, 10))  # batch_size=1, sequence_length=10
+    # Create a simple test input using a mathematical expression
+    test_input = tokenize_texts(["1.0 + 2.0"], config.block_size, "cpu")
 
     with torch.no_grad():
         if isinstance(model, PredictorOnlyModel):

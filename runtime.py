@@ -5,7 +5,7 @@ across several entry-point scripts:
 
 * Setting a default `WANDB_DIR` so that local W&B runs are written to /tmp.
 * Detecting CUDA / PyTorch capabilities once (TORCH_2_2_1, CUDA_AVAILABLE).
-* Detecting whether the `safetensors` package is available.
+
 * Providing a common `CHECKPOINT_DIR` that automatically resolves to the
   correct location when running on RunPod.
 
@@ -34,13 +34,6 @@ os.environ.setdefault("WANDB_DIR", "/tmp/wandb")
 TORCH_2_2_1: bool = torch.__version__ >= "2.2.1"
 CUDA_AVAILABLE: bool = torch.cuda.is_available()
 
-# Optional safetensors for pure-tensor checkpoints
-try:
-    import safetensors.torch as _st  # type: ignore
-
-    _HAVE_ST = True
-except ModuleNotFoundError:  # pragma: no cover – safe fallback
-    _HAVE_ST = False
 
 # --------------------------------------------------------------------------- #
 # Paths

@@ -3,6 +3,7 @@ import os
 import re
 import shlex
 import subprocess
+from pathlib import Path
 
 import requests
 import runpod
@@ -89,7 +90,6 @@ def _resolve_gpu_id(gpu_type: str) -> str:
 
 def _extract_config_name(config_path: str) -> str:
     """Extract the 'name' field from a training config file."""
-    from pathlib import Path
 
     config_file = Path(config_path)
     if not config_file.exists():

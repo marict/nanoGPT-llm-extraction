@@ -22,7 +22,7 @@ from data.dagset.expression_to_english import (
     english_to_expression,
     expression_to_english,
 )
-from data.dagset.generate_expression import string_to_expression
+from data.dagset.generate_expression import generate_expression, string_to_expression
 
 
 class TestExpressionEquivalence:
@@ -261,8 +261,6 @@ class TestGeneratedExpressions(TestExpressionEquivalence):
         # Import the expression generator
         import tiktoken
 
-        from data.dagset.generate_expression import generate_expression
-
         tokenizer = tiktoken.get_encoding("gpt2")
 
         # Generate several expressions and test them
@@ -320,8 +318,6 @@ class TestRoundTripStability:
 
                 # Evaluate and track numerical stability
                 try:
-                    from data.dagset.generate_expression import string_to_expression
-
                     expr_obj = string_to_expression(converted)
                     value = float(expr_obj)
                     values.append(value)

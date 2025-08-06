@@ -9,39 +9,19 @@ predictor training (train_predictor.py).
 from __future__ import annotations
 
 import os
+import re
+import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 
-# Optional safetensors for pure-tensor checkpoints
-try:
-    import safetensors.torch as _st  # type: ignore
-
-    _HAVE_ST = True
-except ModuleNotFoundError:
-    _HAVE_ST = False
+import wandb
 
 # Import model classes for initialization
 from models.dag_model import GPT, GPTConfig
 from models.predictor_only_model import PredictorOnlyConfig, PredictorOnlyModel
-
-# Optional runpod service for instance management
-try:
-    import runpod_service
-
-    _HAVE_RUNPOD = True
-except ImportError:
-    _HAVE_RUNPOD = False
-
-# Optional runpod for API access
-try:
-    import runpod
-
-    _HAVE_RUNPOD_API = True
-except ImportError:
-    _HAVE_RUNPOD_API = False
 
 # Checkpoint directory
 CHECKPOINT_DIR = (
@@ -83,7 +63,6 @@ class CheckpointManager:
 
         patterns = [
             f"ckpt_{safe_name}_*.pt",
-            f"ckpt_{safe_name}_*.safetensors",
         ]
 
         return patterns
@@ -99,7 +78,7 @@ class CheckpointManager:
             patterns = self._get_checkpoint_patterns(config_name)
         else:
             # List all checkpoints (both regular and DAG use same pattern)
-            patterns = ["ckpt_*.pt", "ckpt_*.safetensors"]
+            patterns = ["ckpt_*.pt"]
 
         checkpoint_files = []
         for pattern in patterns:
@@ -137,7 +116,7 @@ class CheckpointManager:
             return None
 
         if any_run:
-            patterns = ["ckpt_*.pt", "ckpt_*.safetensors"]
+            patterns = ["ckpt_*.pt"]
             checkpoint_files = []
             for pattern in patterns:
                 checkpoint_files.extend(self.checkpoint_dir.rglob(pattern))
@@ -225,7 +204,7 @@ class CheckpointManager:
 
         # Try to load the checkpoint
         try:
-            # First try with weights_only=False for PyTorch 2.6+ compatibility
+            # Use weights_only=False to allow loading custom config objects
             checkpoint = torch.load(
                 checkpoint_path, map_location=device, weights_only=False
             )
@@ -407,47 +386,93 @@ class CheckpointManager:
     def save_checkpoint(
         self, checkpoint_data: Dict, filename: str, retries: int = 1
     ) -> None:
-        """Save checkpoint with retry logic."""
-        checkpoint_path = self.checkpoint_dir / filename
-        # Ensure that the destination directory exists (handles optional
-        # per-run sub-directories such as a folder named after the wandb
-        # run). This lets callers pass paths like "<run_name>/ckpt_x.pt".
-        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = checkpoint_path.with_suffix(".tmp")
+        """Save checkpoint to W&B artifacts with retry logic."""
+
+        if wandb.run is None:
+            raise CheckpointSaveError(
+                "W&B run is not initialized. Make sure to call wandb.init() before saving checkpoints."
+            )
 
         for attempt in range(retries + 1):
             try:
-                # Use safetensors for pure tensor data, otherwise use torch.save
-                if _HAVE_ST and self._all_tensors(checkpoint_data):
-                    final_path = checkpoint_path.with_suffix(".safetensors")
-                    _st.save_file(checkpoint_data, str(tmp_path))
-                else:
-                    final_path = checkpoint_path.with_suffix(".pt")
-                    torch.save(
-                        checkpoint_data, tmp_path, _use_new_zipfile_serialization=False
-                    )
+                # Save to temporary file first
+                with tempfile.NamedTemporaryFile(
+                    suffix=f"-{Path(filename).name}",
+                    delete=False,
+                ) as tmp_file:
+                    torch.save(checkpoint_data, tmp_file.name)
+                    tmp_path = tmp_file.name
 
-                try:
-                    # Perform atomic rename
-                    tmp_path.rename(final_path)
-                    print(f"Saved checkpoint: {final_path}")
-                    return
-                except Exception as exc:
-                    if attempt >= retries:
-                        raise CheckpointSaveError(
-                            f"Failed to rename temporary checkpoint {tmp_path} to {final_path}: {exc}"
-                        ) from exc
-                    print(
-                        f"Retrying checkpoint rename ({attempt+1}/{retries}) due to error: {exc}"
-                    )
+                # Upload to W&B
+                self._save_checkpoint_to_wandb(tmp_path, filename, checkpoint_data)
+
+                # Clean up temporary file
+                os.unlink(tmp_path)
+                print(f"✅ Checkpoint saved to W&B: {filename}")
+                return
+
             except Exception as exc:
+                # Clean up temporary file if it exists
+                if "tmp_path" in locals():
+                    try:
+                        os.unlink(tmp_path)
+                    except:
+                        pass
+
                 if attempt >= retries:
                     raise CheckpointSaveError(
-                        f"Failed to save checkpoint {checkpoint_path}: {exc}"
+                        f"Failed to save checkpoint {filename}: {exc}"
                     ) from exc
                 print(
                     f"Retrying checkpoint save ({attempt+1}/{retries}) due to error: {exc}"
                 )
+
+    def _save_checkpoint_to_wandb(
+        self, tmp_path: str, filename: str, checkpoint_data: Dict
+    ) -> None:
+        """Save checkpoint as W&B artifact."""
+        try:
+            # Sanitize run name for artifact naming (only alphanumeric, dashes, underscores, dots)
+            run_name = wandb.run.name if wandb.run.name else "unknown"
+            sanitized_run_name = re.sub(r"[^a-zA-Z0-9._-]", "_", run_name)
+
+            # Create artifact name based on checkpoint type
+            if "best" in filename.lower():
+                artifact_name = f"{sanitized_run_name}-best"
+                artifact_type = "best_model"
+            else:
+                # Extract iteration number for regular checkpoints
+                artifact_name = f"{sanitized_run_name}-iter-{checkpoint_data.get('iter_num', 'unknown')}"
+                artifact_type = "checkpoint"
+
+            # Create artifact
+            artifact = wandb.Artifact(
+                name=artifact_name,
+                type=artifact_type,
+                description=f"Model checkpoint: {filename}",
+                metadata={
+                    "filename": filename,
+                    "iteration": checkpoint_data.get("iter_num", None),
+                    "best_val_loss": checkpoint_data.get("best_val_loss", None),
+                    "model_type": (
+                        type(checkpoint_data.get("model_args", None)).__name__
+                        if checkpoint_data.get("model_args")
+                        else None
+                    ),
+                    "run_name": run_name,
+                    "checkpoint_type": self.checkpoint_type,
+                },
+            )
+
+            # Add the checkpoint file to the artifact
+            artifact.add_file(tmp_path, name=filename)
+
+            # Log the artifact
+            wandb.log_artifact(artifact)
+            print(f"📦 Uploaded checkpoint to W&B as {artifact_name}")
+
+        except Exception as e:
+            raise CheckpointSaveError(f"Failed to save checkpoint to W&B: {e}") from e
 
     def clean_previous_checkpoints(self, config_name: str) -> None:
         """Remove previous checkpoint files for this config name."""
@@ -504,156 +529,117 @@ class CheckpointManager:
         if removed_count > 0:
             print(f"Cleaned up {removed_count} previous best checkpoint(s)")
 
-    def check_runpod_api_available(self) -> bool:
-        """Check if RunPod API is available and configured."""
-        if not _HAVE_RUNPOD_API:
-            return False
-
-        api_key = os.getenv("RUNPOD_API_KEY")
-        return api_key is not None
-
-    def check_runpod_ssh_available(self) -> bool:
-        """Check if RunPod SSH access is available."""
-        pod_id = os.getenv("RUNPOD_POD_ID")
-        return pod_id is not None
-
-    def download_checkpoint_from_runpod(
-        self, source_path: str, local_dir: Path = None, force: bool = False
+    def download_checkpoint_from_wandb(
+        self,
+        run_name: str = None,
+        artifact_name: str = None,
+        local_dir: Path = None,
+        force: bool = False,
     ) -> Path | None:
-        """Download checkpoint from RunPod volume to local directory.
+        """Download checkpoint from W&B artifacts.
 
         Args:
-            source_path: Path to checkpoint on RunPod volume
-            local_dir: Local directory to save checkpoint (defaults to current checkpoint_dir)
+            run_name: W&B run name (if None, uses current run)
+            artifact_name: Specific artifact name (if None, downloads latest best model)
+            local_dir: Local directory to save checkpoint
             force: Force re-download even if file exists
 
         Returns:
             Path to downloaded checkpoint, or None if failed
         """
-        source_path = Path(source_path)
-        local_dir = local_dir or self.checkpoint_dir
-        local_dir.mkdir(parents=True, exist_ok=True)
 
-        # Extract filename from source path
-        filename = source_path.name
-        local_path = local_dir / filename
-
-        # Check if already exists
-        if local_path.exists() and not force:
-            size_mb = local_path.stat().st_size / (1024 * 1024)
+        # Check if W&B is properly configured
+        if not wandb.run and not os.getenv("WANDB_API_KEY"):
             print(
-                f"✅ Checkpoint already exists locally: {local_path} ({size_mb:.2f} MB)"
+                "❌ W&B not configured. Set WANDB_API_KEY environment variable or run wandb login"
             )
-            return local_path
-
-        print(f"🔄 Downloading checkpoint from RunPod...")
-        print(f"   Source: {source_path}")
-        print(f"   Destination: {local_path}")
-
-        # Try different download methods
-        success = False
-
-        # Method 1: Direct copy (if on RunPod instance)
-        if source_path.exists():
-            try:
-                import shutil
-
-                shutil.copy2(source_path, local_path)
-                success = True
-                print(f"✅ Successfully copied checkpoint from RunPod volume")
-            except Exception as e:
-                print(f"❌ Direct copy failed: {e}")
-
-        # Method 2: SSH download (if SSH is available)
-        if not success and self.check_runpod_ssh_available():
-            success = self._download_via_ssh(source_path, local_path)
-
-        # Method 3: API download (if API is available)
-        if not success and self.check_runpod_api_available():
-            success = self._download_via_api(source_path, local_path)
-
-        if success:
-            # Get file size
-            size_bytes = local_path.stat().st_size
-            size_mb = size_bytes / (1024 * 1024)
-            print(f"📊 Checkpoint size: {size_mb:.2f} MB ({size_bytes:,} bytes)")
-            return local_path
-        else:
-            print(f"❌ All download methods failed")
-            self._provide_manual_download_instructions(source_path, local_path)
             return None
 
-    def _download_via_ssh(self, source_path: Path, local_path: Path) -> bool:
-        """Attempt to download checkpoint via SSH."""
-        print(f"🔄 Attempting SSH download...")
-
-        pod_id = os.getenv("RUNPOD_POD_ID")
-        if not pod_id:
-            print("❌ No pod ID available for SSH")
-            return False
-
         try:
-            # This would require actual SSH connection details
-            # which are typically provided in the RunPod web interface
-            print(f"🔄 SSH access to pod {pod_id} not implemented")
-            print("   SSH access is typically provided via the RunPod web interface")
-            return False
+            local_dir = local_dir or Path("wandb_checkpoints")
+            local_dir.mkdir(parents=True, exist_ok=True)
+
+            # Initialize W&B API with timeout
+            print("🔄 Initializing W&B API...")
+            api = wandb.Api(timeout=30)  # 30 second timeout
+
+            # Determine run name
+            if run_name is None:
+                if wandb.run is not None:
+                    run_name = wandb.run.name
+                else:
+                    print("❌ No run name provided and no active W&B run")
+                    print(
+                        "   Please provide a run_name parameter or run wandb.init() first"
+                    )
+                    return None
+
+            # Get entity and project from current run or environment
+            entity = wandb.run.entity if wandb.run else os.getenv("WANDB_ENTITY")
+            project = wandb.run.project if wandb.run else os.getenv("WANDB_PROJECT")
+
+            if not entity or not project:
+                print("❌ W&B entity/project not configured")
+                print("   Set WANDB_ENTITY and WANDB_PROJECT environment variables")
+                return None
+
+            # Find the run with timeout
+            print(f"🔄 Looking for W&B run: {entity}/{project}/{run_name}")
+            try:
+                run = api.run(f"{entity}/{project}/{run_name}")
+            except Exception as e:
+                print(f"❌ Run not found: {entity}/{project}/{run_name}")
+                print(f"   Error: {e}")
+                return None
+
+            # Look for artifacts
+            print("🔄 Fetching artifacts...")
+            artifacts = run.logged_artifacts()
+
+            if artifact_name is None:
+                # Look for best model artifact
+                best_artifacts = [a for a in artifacts if a.type == "best_model"]
+                if not best_artifacts:
+                    print("❌ No best model artifacts found")
+                    print(
+                        "   Available artifact types: "
+                        + ", ".join(set(a.type for a in artifacts))
+                    )
+                    return None
+                artifact = best_artifacts[-1]  # Get latest
+            else:
+                # Look for specific artifact
+                matching_artifacts = [a for a in artifacts if artifact_name in a.name]
+                if not matching_artifacts:
+                    print(f"❌ No artifacts found matching '{artifact_name}'")
+                    print(
+                        "   Available artifacts: "
+                        + ", ".join(a.name for a in artifacts)
+                    )
+                    return None
+                artifact = matching_artifacts[-1]  # Get latest
+
+            print(f"📦 Found artifact: {artifact.name}")
+
+            # Download the artifact with timeout
+            print("🔄 Downloading artifact...")
+            artifact_dir = artifact.download(root=str(local_dir))
+
+            # Find the checkpoint file
+            checkpoint_files = list(Path(artifact_dir).rglob("*.pt"))
+
+            if not checkpoint_files:
+                print("❌ No checkpoint files found in artifact")
+                return None
+
+            checkpoint_path = checkpoint_files[0]
+            print(f"✅ Downloaded checkpoint: {checkpoint_path}")
+
+            return checkpoint_path
 
         except Exception as e:
-            print(f"❌ SSH download failed: {e}")
-            return False
-
-    def _download_via_api(self, source_path: Path, local_path: Path) -> bool:
-        """Attempt to download checkpoint via RunPod API."""
-        print(f"🔄 Attempting API download...")
-
-        try:
-            # The standard RunPod API doesn't support direct file downloads
-            print("❌ RunPod API file download not implemented")
-            print("   The standard RunPod API doesn't support direct file downloads")
-            return False
-
-        except Exception as e:
-            print(f"❌ API download failed: {e}")
-            return False
-
-    def _provide_manual_download_instructions(
-        self, source_path: Path, local_path: Path
-    ) -> None:
-        """Provide manual instructions for downloading the checkpoint."""
-        print(f"\n📋 Manual Download Instructions:")
-        print("=" * 50)
-
-        print("1. **Via RunPod Web Interface:**")
-        print("   - Log into your RunPod account")
-        print("   - Navigate to your pod")
-        print("   - Use the file browser to navigate to:")
-        print(f"     {source_path.parent}")
-        print(f"   - Download: {source_path.name}")
-
-        print("\n2. **Via SSH (if enabled):**")
-        print("   - Enable SSH in your RunPod pod settings")
-        print("   - Get SSH connection details from the web interface")
-        print("   - Use scp to download:")
-        print(f"     scp runpod:{source_path} {local_path}")
-
-        print("\n3. **Via RunPod CLI (if available):**")
-        print("   - Install RunPod CLI")
-        print(f"   - Use: runpod download <pod_id> {source_path}")
-
-        print(f"\n📁 Expected file location after download:")
-        print(f"   {local_path}")
-        print("   Size: ~55.6 MB")
-
-    def _all_tensors(self, state):
-        """Return True if every leaf value in state dict is a torch.Tensor."""
-        for v in state.values():
-            if isinstance(v, dict):
-                if not self._all_tensors(v):
-                    return False
-            elif not isinstance(v, torch.Tensor):
-                return False
-        return True
+            print(f"❌ Error downloading from W&B: {e}")
+            return None
 
     def initialize_model(
         self,

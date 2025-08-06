@@ -3,7 +3,8 @@
 import pytest
 import torch
 
-from models.dag_model import DAGExecutor
+from models.dag_model import DAGExecutor, DAGPlanPredictor
+from models.predictor_only_model import PredictorOnlyConfig
 from predictor_utils import compute_dag_loss
 
 
@@ -523,8 +524,6 @@ def test_ste_sharpening_and_gradient_flow(test_dag_config, dag_executor, device)
 
 def test_ste_produces_sharp_outputs(test_dag_config, device):
     """Test that STE actually produces sharp/discrete outputs from the predictor."""
-    from models.dag_model import DAGExecutor, DAGPlanPredictor
-    from models.predictor_only_model import PredictorOnlyConfig
 
     # Create config (STE is always enabled now)
     config = PredictorOnlyConfig()
