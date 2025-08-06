@@ -23,8 +23,6 @@ from checkpoint_manager import CheckpointManager
 from evaluate import (
     _extract_initial_value,
     _sharpen_digit_predictions,
-    _sharpen_operand_predictions,
-    _sharpen_sign_predictions,
 )
 
 
@@ -124,7 +122,7 @@ def load_checkpoint(checkpoint_path: Path):
 
         try:
             # Extract the W&B path from the wandb:// prefix
-            wandb_path = str(checkpoint_path)[7:]  # Remove "wandb://" prefix
+            wandb_path = str(checkpoint_path)[7:]
             downloaded_path = checkpoint_manager.download_checkpoint_from_wandb(
                 local_dir=local_dir, run_name=wandb_path
             )
@@ -282,10 +280,11 @@ def test_dag_examples(model, config):
                     raw_G = single_G
 
                     # Sharpen predictions for cleaner expression display and consistent execution
+                    # Note: V_sign, O, and G are already sharpened by STE in the predictor forward pass
                     sharp_digit_logits = _sharpen_digit_predictions(single_digit_logits)
-                    sharp_V_sign = _sharpen_sign_predictions(single_V_sign)
-                    sharp_O = _sharpen_operand_predictions(single_O)
-                    sharp_G = (single_G > 0.5).float()
+                    sharp_V_sign = single_V_sign  # Already sharpened by STE
+                    sharp_O = single_O  # Already sharpened by STE
+                    sharp_G = single_G  # Already sharpened by STE
 
                     # Convert both raw and sharpened tensors to expressions
                     raw_expr = tensor_to_expression(
@@ -379,10 +378,11 @@ def test_model_behavior(model, config):
             single_G = G[0, last_token_pos]
 
             # Sharpen predictions
+            # Note: V_sign, O, and G are already sharpened by STE in the predictor forward pass
             sharp_digit_logits = _sharpen_digit_predictions(single_digit_logits)
-            sharp_V_sign = _sharpen_sign_predictions(single_V_sign)
-            sharp_O = _sharpen_operand_predictions(single_O)
-            sharp_G = (single_G > 0.5).float()
+            sharp_V_sign = single_V_sign  # Already sharpened by STE
+            sharp_O = single_O  # Already sharpened by STE
+            sharp_G = single_G  # Already sharpened by STE
 
             # Convert to expression
             pred_expr = tensor_to_expression(

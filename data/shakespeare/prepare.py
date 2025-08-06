@@ -31,7 +31,7 @@ def prepare(
     Returns:
         Tuple of (train_tokens, val_tokens)
     """
-    # Initialize DataPrep with dataset-specific subfolder
+
     prep = DataPrep(data_dir, dataset_name="shakespeare")
     subset = prep.validate_subset(subset)
 

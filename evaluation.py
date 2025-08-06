@@ -268,7 +268,6 @@ def load_checkpoint(ckpt_path: str, device: str):
     config = GPTConfig(**model_args)
     model = GPT(config)
 
-    # Remove unwanted prefix from state dict keys
     state_dict = ckpt["model"]
     unwanted_prefix = "_orig_mod."
     for k in list(state_dict.keys()):

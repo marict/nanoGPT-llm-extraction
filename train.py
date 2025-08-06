@@ -135,8 +135,6 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     )
 
     checkpoint_manager = CheckpointManager("regular")
-    # Placeholder for per-run directory; will be overwritten on the master
-    # process once the wandb run is created.
     safe_run_name: str = "default_run"
     # Always clean previous checkpoints if enabled (no backwards compatibility)
     if cfg.clear_previous_checkpoints:
@@ -274,7 +272,6 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
     # --------------------------------------------------------------------- #
     data_start = time.time()
     print(f"[{time.time() - setup_start:.2f}s] Loading data")
-    # Look for data in dataset-specific subfolder
     data_dir = Path("data") / cfg.dataset / cfg.dataset
 
     # -------------------------------------------------------------
@@ -299,7 +296,6 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
             print(
                 f"[{time.time() - setup_start:.2f}s] Dataset prepared. Train: {train_tokens:,}, Val: {val_tokens:,}"
             )
-            # Update data_dir to point to the newly created dataset-specific folder
             data_dir = Path("data") / cfg.dataset
 
     print(f"[{time.time() - setup_start:.2f}s] Loading meta")

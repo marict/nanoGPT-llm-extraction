@@ -31,34 +31,6 @@ def _sharpen_digit_predictions(pred_digit_logits: torch.Tensor) -> torch.Tensor:
     return sharp
 
 
-def _sharpen_sign_predictions(pred_V_sign: torch.Tensor) -> torch.Tensor:
-    """Sharpen sign predictions to exactly -1 or 1."""
-    return torch.where(
-        pred_V_sign >= 0,
-        torch.tensor(1.0, device=pred_V_sign.device),
-        torch.tensor(-1.0, device=pred_V_sign.device),
-    )
-
-
-def _sharpen_operand_predictions(
-    pred_O: torch.Tensor, threshold: float = 0.1
-) -> torch.Tensor:
-    """Sharpen operand predictions to discrete {-1, 0, 1} values."""
-    sharp_O = torch.zeros_like(pred_O)
-    dag_depth, _ = pred_O.shape
-
-    for step in range(dag_depth):
-        step_coeffs = pred_O[step]
-        significant_mask = torch.abs(step_coeffs) > threshold
-        significant_indices = torch.where(significant_mask)[0]
-
-        for idx in significant_indices:
-            coeff_val = step_coeffs[idx].item()
-            sharp_O[step, idx] = 1.0 if coeff_val > 0 else -1.0
-
-    return sharp_O
-
-
 def _extract_initial_value(digit_data, sign, cfg, is_target: bool = True) -> float:
     """Extract initial value from digit data (target or predicted)."""
     if is_target:
@@ -270,10 +242,11 @@ def print_detailed_validation_sample(
     single_G = pred_G[0, last_valid_pos]  # (dag_depth,)
 
     # Sharpen predictions for cleaner expression display and consistent execution
+    # Note: V_sign, O, and G are already sharpened by STE in the predictor forward pass
     sharp_digit_logits = _sharpen_digit_predictions(single_digit_logits)
-    sharp_V_sign = _sharpen_sign_predictions(single_V_sign)
-    sharp_O = _sharpen_operand_predictions(single_O)
-    sharp_G = (single_G > 0.5).float()
+    sharp_V_sign = single_V_sign  # Already sharpened by STE
+    sharp_O = single_O  # Already sharpened by STE
+    sharp_G = single_G  # Already sharpened by STE
 
     # Convert predicted tensors to expression string with sharpened values
     pred_expr = tensor_to_expression(
