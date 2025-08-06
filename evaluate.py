@@ -12,6 +12,9 @@ import torch
 import torch.distributed as dist
 
 from data.dagset import heldout_expressions
+from data.dagset.heldout_expressions import (
+    heldout_expressions as heldout_expressions_data,
+)
 from data.dagset.streaming import (
     digit_onehot_to_float,
     expression_to_tensors,
@@ -85,9 +88,6 @@ def _print_initial_values_comparison(
 
 
 def _execute_dag_prediction(dag_executor, digit_logits, V_sign, O, G) -> float:
-    """Execute DAG with proper dimension handling."""
-    if dag_executor is None:
-        return 0.0
 
     # Add batch and time dimensions for executor (single sample)
     pred_digit_logits_exec = digit_logits.unsqueeze(0).unsqueeze(0)
@@ -172,13 +172,138 @@ def _print_token_by_token_breakdown(
         print(f"  ... and {padding_count} tokens of padding")
 
 
-# TODO: Implement this
-def print_heldout_expressions_metrics(model):
-    for segment, expressions in heldout_expressions.heldout_segments.items():
-        for str_expr, sympy_expr in expressions:
-            print(f"Evaluating {segment} expression: {str_expr}")
-            target_tensors = expression_to_tensors(str_expr)
-            pass
+def print_and_return_heldout_metrics(model):
+    """Evaluate model on heldout expressions and compute accuracy metrics."""
+
+    model.eval()
+
+    segment_metrics = {}
+    total_metrics = {
+        "digit_accuracy": 0.0,
+        "sign_accuracy": 0.0,
+        "op_accuracy": 0.0,
+        "gate_accuracy": 0.0,
+        "total_expressions": 0,
+    }
+
+    print("\n=== HELDOUT EXPRESSIONS EVALUATION ===")
+
+    with torch.no_grad():
+        for segment, expressions in heldout_expressions_data.heldout_segments.items():
+            segment_metrics[segment] = {
+                "digit_accuracy": 0.0,
+                "sign_accuracy": 0.0,
+                "op_accuracy": 0.0,
+                "gate_accuracy": 0.0,
+                "count": 0,
+            }
+
+            print(f"\n--- {segment.upper()} ---")
+
+            for str_expr, sympy_expr in expressions:
+                # Get target tensors
+                target_V_mag, target_V_sign, target_O, target_G = expression_to_tensors(
+                    sympy_expr, model.cfg.dag_depth
+                )
+
+                # Create target dict format expected by compute_dag_loss
+                target_dict = {
+                    "target_V_mag": target_V_mag,
+                    "target_V_sign": target_V_sign,
+                    "target_O": target_O,
+                    "target_G": target_G,
+                }
+                target_tensors = [[target_dict]]  # Batch format
+
+                # Get predictions
+                tokens = tokenize_texts([str_expr], model.cfg.block_size, model.device)
+                hidden_states = model.forward_hidden(tokens)
+                pred_digit_logits, pred_V_sign, pred_O, pred_G = model.dag_predictor(
+                    hidden_states
+                )
+
+                # Create valid mask (single valid token)
+                valid_mask = torch.tensor(
+                    [[True]], dtype=torch.bool, device=model.device
+                )
+
+                # Compute accuracies
+                losses = compute_dag_loss(
+                    pred_digit_logits,
+                    pred_V_sign,
+                    pred_O,
+                    pred_G,
+                    target_tensors,
+                    valid_mask,
+                    model.dag_executor,
+                    model.cfg,
+                )
+
+                # Extract accuracies
+                digit_acc = losses["digit_accuracy"].item()
+                sign_acc = losses["sign_accuracy"].item()
+                op_acc = losses["op_accuracy"].item()
+                gate_acc = losses["gate_accuracy"].item()
+
+                # Print per-expression results
+                print(
+                    f"  {str_expr:<25} | Digits: {digit_acc:.1%} | Signs: {sign_acc:.1%} | Ops: {op_acc:.1%} | Gates: {gate_acc:.1%}"
+                )
+
+                # Accumulate segment metrics
+                segment_metrics[segment]["digit_accuracy"] += digit_acc
+                segment_metrics[segment]["sign_accuracy"] += sign_acc
+                segment_metrics[segment]["op_accuracy"] += op_acc
+                segment_metrics[segment]["gate_accuracy"] += gate_acc
+                segment_metrics[segment]["count"] += 1
+
+                # Accumulate total metrics
+                total_metrics["digit_accuracy"] += digit_acc
+                total_metrics["sign_accuracy"] += sign_acc
+                total_metrics["op_accuracy"] += op_acc
+                total_metrics["gate_accuracy"] += gate_acc
+                total_metrics["total_expressions"] += 1
+
+    # Print segment averages
+    print(f"\n--- SEGMENT AVERAGES ---")
+    for segment, metrics in segment_metrics.items():
+        if metrics["count"] > 0:
+            avg_digit = metrics["digit_accuracy"] / metrics["count"]
+            avg_sign = metrics["sign_accuracy"] / metrics["count"]
+            avg_op = metrics["op_accuracy"] / metrics["count"]
+            avg_gate = metrics["gate_accuracy"] / metrics["count"]
+
+            print(
+                f"{segment:<15} | Digits: {avg_digit:.1%} | Signs: {avg_sign:.1%} | Ops: {avg_op:.1%} | Gates: {avg_gate:.1%}"
+            )
+
+    # Print overall average
+    if total_metrics["total_expressions"] > 0:
+        overall_digit = (
+            total_metrics["digit_accuracy"] / total_metrics["total_expressions"]
+        )
+        overall_sign = (
+            total_metrics["sign_accuracy"] / total_metrics["total_expressions"]
+        )
+        overall_op = total_metrics["op_accuracy"] / total_metrics["total_expressions"]
+        overall_gate = (
+            total_metrics["gate_accuracy"] / total_metrics["total_expressions"]
+        )
+
+        print(f"\n--- OVERALL AVERAGE ---")
+        print(
+            f"All Expressions | Digits: {overall_digit:.1%} | Signs: {overall_sign:.1%} | Ops: {overall_op:.1%} | Gates: {overall_gate:.1%}"
+        )
+        print(f"Total expressions evaluated: {total_metrics['total_expressions']}")
+
+        return {
+            "digit_accuracy": overall_digit,
+            "sign_accuracy": overall_sign,
+            "op_accuracy": overall_op,
+            "gate_accuracy": overall_gate,
+        }
+    else:
+        raise ValueError("No expressions evaluated")
 
 
 def print_detailed_validation_sample(
@@ -348,122 +473,112 @@ def evaluate_dag_model(
             if i >= eval_iters:
                 break
 
-            try:
+            for seq_targets in target_tensors:
+                for target_dict in seq_targets:
+                    for key, tensor in target_dict.items():
+                        if isinstance(tensor, torch.Tensor):
+                            target_dict[key] = tensor.to(device)
 
-                for seq_targets in target_tensors:
-                    for target_dict in seq_targets:
-                        for key, tensor in target_dict.items():
-                            if isinstance(tensor, torch.Tensor):
-                                target_dict[key] = tensor.to(device)
+            valid_mask = valid_mask.to(device)
 
-                valid_mask = valid_mask.to(device)
+            # Inputs
+            input_tokens = tokenize_texts(texts, cfg.block_size, device)
 
-                # Inputs
-                input_tokens = tokenize_texts(texts, cfg.block_size, device)
+            # Model forward pass with DAG model
+            with ctx:
 
-                # Model forward pass with DAG model
-                with ctx:
+                hidden_states = model.forward_hidden(input_tokens)
 
-                    hidden_states = model.forward_hidden(input_tokens)
+                dag_predictor = model.dag_predictor
+                if dag_predictor is None:
+                    raise RuntimeError("Model has no DAG predictor (dag_depth=0)")
 
-                    dag_predictor = model.dag_predictor
-                    if dag_predictor is None:
-                        raise RuntimeError("Model has no DAG predictor (dag_depth=0)")
-
-                    pred_digit_logits, pred_V_sign, pred_O, pred_G = dag_predictor(
-                        hidden_states
-                    )
-
-                # Compute loss using DAG tensor loss function
-                dag_executor = getattr(model, "dag_executor", None)
-                losses = compute_dag_loss(
-                    pred_digit_logits,
-                    pred_V_sign,
-                    pred_O,
-                    pred_G,
-                    target_tensors,
-                    valid_mask,
-                    dag_executor=dag_executor,
-                    cfg=cfg,
+                pred_digit_logits, pred_V_sign, pred_O, pred_G = dag_predictor(
+                    hidden_states
                 )
 
-                # Accumulate losses
-                for key in total_losses.keys():
-                    total_losses[key] += losses[key].item()
+            # Compute loss using DAG tensor loss function
+            dag_executor = getattr(model, "dag_executor", None)
+            losses = compute_dag_loss(
+                pred_digit_logits,
+                pred_V_sign,
+                pred_O,
+                pred_G,
+                target_tensors,
+                valid_mask,
+                dag_executor=dag_executor,
+                cfg=cfg,
+            )
 
-                # Accumulate metrics (including accuracy metrics)
-                for key in losses.keys():
-                    if key in total_metrics:
-                        total_metrics[key] += losses[key].item()
+            # Accumulate losses
+            for key in total_losses.keys():
+                total_losses[key] += losses[key].item()
 
-                # Compute per-token metrics
-                valid_tokens_count = valid_mask.sum().item()
+            # Accumulate metrics (including accuracy metrics)
+            for key in losses.keys():
+                if key in total_metrics:
+                    total_metrics[key] += losses[key].item()
 
-                # Calculate expression-level valid rate (excluding padding)
-                batch_size, seq_len = valid_mask.shape
-                expression_valid_tokens = 0
-                expression_total_tokens = 0
+            # Compute per-token metrics
+            valid_tokens_count = valid_mask.sum().item()
 
-                for b in range(batch_size):
-                    # Find the last non-padding token (expression length)
-                    sequence_mask = valid_mask[b]  # (seq_len,)
+            # Calculate expression-level valid rate (excluding padding)
+            batch_size, seq_len = valid_mask.shape
+            expression_valid_tokens = 0
+            expression_total_tokens = 0
 
-                    # Find expression length by looking for the transition to padding
-                    # Padding is always False values at the end
-                    expression_length = seq_len
-                    for i in range(seq_len - 1, -1, -1):
-                        if (
-                            i == 0
-                            or sequence_mask[i]
-                            or (i < seq_len - 1 and sequence_mask[i + 1])
-                        ):
-                            expression_length = i + 1
-                            break
+            for b in range(batch_size):
+                # Find the last non-padding token (expression length)
+                sequence_mask = valid_mask[b]  # (seq_len,)
 
-                    # Count valid tokens within the expression (before padding)
-                    expression_tokens = sequence_mask[:expression_length]
-                    expression_valid_tokens += expression_tokens.sum().item()
-                    expression_total_tokens += expression_length
+                # Find expression length by looking for the transition to padding
+                # Padding is always False values at the end
+                expression_length = seq_len
+                for i in range(seq_len - 1, -1, -1):
+                    if (
+                        i == 0
+                        or sequence_mask[i]
+                        or (i < seq_len - 1 and sequence_mask[i + 1])
+                    ):
+                        expression_length = i + 1
+                        break
 
-                if expression_total_tokens > 0:
-                    total_metrics["expression_valid_rate"] += (
-                        expression_valid_tokens / expression_total_tokens
+                # Count valid tokens within the expression (before padding)
+                expression_tokens = sequence_mask[:expression_length]
+                expression_valid_tokens += expression_tokens.sum().item()
+                expression_total_tokens += expression_length
+
+            if expression_total_tokens > 0:
+                total_metrics["expression_valid_rate"] += (
+                    expression_valid_tokens / expression_total_tokens
+                )
+
+            num_batches += 1
+
+            if master_process:
+                sample_text = texts[0] if texts else "N/A"
+                sample_valid_rate = (
+                    valid_mask[0].float().mean().item() if len(valid_mask) > 0 else 0.0
+                )
+                print(
+                    f'[val] batch {i}: "{sample_text[:50]}...", valid_rate={sample_valid_rate:.1%}'
+                )
+
+                # Display detailed validation for every batch during validation sessions
+                if valid_tokens_count > 0 and len(texts) > 0:
+                    print_detailed_validation_sample(
+                        texts=texts,
+                        target_tensors=target_tensors,
+                        valid_mask=valid_mask,
+                        pred_digit_logits=pred_digit_logits,
+                        pred_V_sign=pred_V_sign,
+                        pred_O=pred_O,
+                        pred_G=pred_G,
+                        dag_executor=dag_executor,
+                        cfg=cfg,
+                        seed=seed,
+                        batch_idx=i,
                     )
-
-                num_batches += 1
-
-                if master_process:
-                    sample_text = texts[0] if texts else "N/A"
-                    sample_valid_rate = (
-                        valid_mask[0].float().mean().item()
-                        if len(valid_mask) > 0
-                        else 0.0
-                    )
-                    print(
-                        f'[val] batch {i}: "{sample_text[:50]}...", valid_rate={sample_valid_rate:.1%}'
-                    )
-
-                    # Display detailed validation for every batch during validation sessions
-                    if valid_tokens_count > 0 and len(texts) > 0:
-                        print_detailed_validation_sample(
-                            texts=texts,
-                            target_tensors=target_tensors,
-                            valid_mask=valid_mask,
-                            pred_digit_logits=pred_digit_logits,
-                            pred_V_sign=pred_V_sign,
-                            pred_O=pred_O,
-                            pred_G=pred_G,
-                            dag_executor=dag_executor,
-                            cfg=cfg,
-                            seed=seed,
-                            batch_idx=i,
-                        )
-
-            except Exception as e:
-                # Fail fast on ALL exceptions during evaluation - no skipping
-                if master_process:
-                    print(f"Error in evaluation batch {i+1}/{eval_iters}: {e}")
-                raise
 
             if num_batches >= eval_iters:
                 break

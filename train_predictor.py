@@ -19,7 +19,7 @@ import training_utils as _tu
 import wandb
 from checkpoint_manager import CheckpointManager
 from data.dagset.streaming import create_dag_structure_dataloaders
-from evaluate import evaluate_dag_model
+from evaluate import evaluate_dag_model, print_and_return_heldout_metrics
 from predictor_config import DAGTrainConfig
 from predictor_utils import (
     compute_dag_loss,
@@ -253,6 +253,9 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 )
                 eval_time_ms = (time.time() - eval_start_time) * 1000 / cfg.eval_iters
 
+                # Run heldout expressions evaluation
+                heldout_metrics = print_and_return_heldout_metrics(raw_model)
+
                 if master_process:
                     eval_msg = (
                         f"[val] iter {iter_num}: total_loss {eval_losses['total_loss']:.4f}, "
@@ -289,6 +292,17 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                             "expression_valid_rate", 0.0
                         ),
                         "val/time_per_iter_ms": eval_time_ms,
+                        # Heldout metrics
+                        "heldout/digit_accuracy": heldout_metrics.get(
+                            "digit_accuracy", 0.0
+                        ),
+                        "heldout/sign_accuracy": heldout_metrics.get(
+                            "sign_accuracy", 0.0
+                        ),
+                        "heldout/op_accuracy": heldout_metrics.get("op_accuracy", 0.0),
+                        "heldout/gate_accuracy": heldout_metrics.get(
+                            "gate_accuracy", 0.0
+                        ),
                     }
                     # Store validation metrics for combined logging with training metrics
                     pending_val_metrics = val_log_dict
