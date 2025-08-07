@@ -773,8 +773,9 @@ def expressions_to_tensors(
         raise ValueError(
             f"max_tokens must be greater than or equal to the number of expressions: {max_tokens} < {len(expressions)}"
         )
+    total_nodes = (depth + 1) + depth
 
-    valid_mask = []
+    valid_mask_list = []
     target_digits_list = []
     target_V_sign_list = []
     target_O_list = []
@@ -784,12 +785,12 @@ def expressions_to_tensors(
     base = 10  # Default base
     # Zero DAG for invalid token position
     target_digits_invalid = torch.zeros(
-        1, depth + 1, max_digits + max_decimal_places, base
+        1, 1, depth + 1, max_digits + max_decimal_places, base
     )
     target_digits_invalid[:, :, 0, 0] = 1.0
-    target_V_sign_invalid = torch.ones(1, (depth + 1) + depth)
-    target_O_invalid = torch.zeros(1, depth, (depth + 1) + depth)
-    target_G_invalid = torch.ones(1, depth)
+    target_V_sign_invalid = torch.ones(1, 1, total_nodes)
+    target_O_invalid = torch.zeros(1, 1, depth, total_nodes)
+    target_G_invalid = torch.ones(1, 1, depth)
     valid_mask_invalid = torch.zeros(1, 1, dtype=torch.bool)
     target_final_exec_invalid = torch.zeros(1, 1)
 
@@ -818,7 +819,7 @@ def expressions_to_tensors(
             target_final_exec_list.append(
                 torch.tensor(target_final_exec_value).unsqueeze(0)
             )
-            valid_mask.append(valid_mask)
+            valid_mask_list.append(valid_mask)
 
         except:
             string_expr = expressions[i] if i < len(expressions) else "not valid"
@@ -835,7 +836,8 @@ def expressions_to_tensors(
     target_O = torch.stack(target_O_list, dim=1)
     target_G = torch.stack(target_G_list, dim=1)
     target_final_exec = torch.stack(target_final_exec_list, dim=1)
-    valid_mask = torch.stack(valid_mask, dim=1)
+    valid_mask = torch.stack(valid_mask_list, dim=1)
+    total_expressions = torch.tensor(len(expressions)).unsqueeze(0)
 
     tensors = {
         "target_digits": target_digits,
@@ -844,6 +846,7 @@ def expressions_to_tensors(
         "target_G": target_G,
         "valid_mask": valid_mask,
         "target_final_exec": target_final_exec,
+        "total_expressions": total_expressions,
     }
 
     return tensors

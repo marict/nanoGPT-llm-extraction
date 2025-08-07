@@ -470,26 +470,22 @@ def evaluate_dag_model(
         master_process = True  # Default to showing details
 
     with torch.no_grad():
-        for i, (texts, target_tensors, valid_mask) in enumerate(val_loader):
+        for i, (texts, target_tensors) in enumerate(val_loader):
             if i >= eval_iters:
                 break
 
-            for seq_targets in target_tensors:
-                for target_dict in seq_targets:
-                    for key, tensor in target_dict.items():
-                        if isinstance(tensor, torch.Tensor):
-                            target_dict[key] = tensor.to(device)
+            for key, tensor in target_tensors.items():
+                if isinstance(tensor, torch.Tensor):
+                    target_tensors[key] = tensor.to(device)
 
-            valid_mask = valid_mask.to(device)
+            valid_mask = target_tensors["valid_mask"]
 
             # Inputs
             input_tokens = tokenize_texts(texts, cfg.block_size, device)
 
             # Model forward pass with DAG model
             with ctx:
-
                 hidden_states = model.forward_hidden(input_tokens)
-
                 dag_predictor = model.dag_predictor
                 if dag_predictor is None:
                     raise RuntimeError("Model has no DAG predictor (dag_depth=0)")
@@ -519,34 +515,9 @@ def evaluate_dag_model(
                 if key in total_metrics:
                     total_metrics[key] += losses[key].item()
 
-            # Compute per-token metrics
-            valid_tokens_count = valid_mask.sum().item()
-
             # Calculate expression-level valid rate (excluding padding)
-            batch_size, seq_len = valid_mask.shape
-            expression_valid_tokens = 0
-            expression_total_tokens = 0
-
-            for b in range(batch_size):
-                # Find the last non-padding token (expression length)
-                sequence_mask = valid_mask[b]  # (seq_len,)
-
-                # Find expression length by looking for the transition to padding
-                # Padding is always False values at the end
-                expression_length = seq_len
-                for i in range(seq_len - 1, -1, -1):
-                    if (
-                        i == 0
-                        or sequence_mask[i]
-                        or (i < seq_len - 1 and sequence_mask[i + 1])
-                    ):
-                        expression_length = i + 1
-                        break
-
-                # Count valid tokens within the expression (before padding)
-                expression_tokens = sequence_mask[:expression_length]
-                expression_valid_tokens += expression_tokens.sum().item()
-                expression_total_tokens += expression_length
+            expression_valid_tokens = valid_mask.sum().item()
+            expression_total_tokens = target_tensors["total_expressions"].sum().item()
 
             if expression_total_tokens > 0:
                 total_metrics["expression_valid_rate"] += (
@@ -565,7 +536,7 @@ def evaluate_dag_model(
                 )
 
                 # Display detailed validation for every batch during validation sessions
-                if valid_tokens_count > 0 and len(texts) > 0:
+                if len(texts) > 0:
                     print_detailed_validation_sample(
                         texts=texts,
                         target_tensors=target_tensors,
@@ -583,9 +554,17 @@ def evaluate_dag_model(
             if num_batches >= eval_iters:
                 break
 
+        import pdb
+
+        pdb.set_trace()
+
         # Run heldout expressions evaluations
         # NOTE: This is disabled for now because it's not working.
-        # heldout_metrics = print_and_return_heldout_metrics(model, device)
+        heldout_metrics = print_and_return_heldout_metrics(model, device)
+
+        import pdb
+
+        pdb.set_trace()
 
     # Average metrics over successful batches
     if num_batches > 0:
