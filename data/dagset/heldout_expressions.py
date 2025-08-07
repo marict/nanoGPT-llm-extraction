@@ -149,7 +149,6 @@ deeply_nested_expressions = [
 realistic_complex_expressions = [
     "3.14159 * 2.0 + 1.41421",
     "(2.71828 + 1.61803) * 3.0",
-    "sqrt(16.0) + sqrt(9.0)",
     "(1.0 / 3.0) * 9.0",
     "(2.0 / 3.0) * 6.0",
 ]

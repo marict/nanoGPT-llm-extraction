@@ -150,8 +150,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
     elif cfg.dtype == "bfloat16" and not torch.cuda.is_bf16_supported():
         actual_dtype = "float16"
 
-    ctx = nullcontext()
-
     train_loader = None
     # Load checkpoint (if any) to resume training and obtain iteration/metrics
     expected_keys = [
@@ -248,7 +246,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 eval_start_time = time.time()
 
                 eval_metrics = evaluate_dag_model(
-                    raw_model, val_loader, device, ctx, cfg, cfg.eval_iters, seed
+                    raw_model, val_loader, device, cfg, cfg.eval_iters, seed
                 )
                 eval_time_ms = (time.time() - eval_start_time) * 1000 / cfg.eval_iters
 
@@ -352,8 +350,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
             # Forward and backward pass
             optimizer.zero_grad(set_to_none=True)
             texts, target_tensors = next(train_loader)
-            for tensor in target_tensors.values():
-                tensor = tensor.to(device)
+            for key in target_tensors:
+                target_tensors[key] = target_tensors[key].to(device)
 
             loss_accum = _empty_metrics()
 
@@ -363,32 +361,29 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         micro_step == cfg.gradient_accumulation_steps - 1
                     )
 
-                with ctx:
-                    # Tokenize texts properly using the mathematical expressions
-                    input_tokens = tokenize_texts(texts, cfg.block_size, device)
+                # Tokenize texts properly using the mathematical expressions
+                input_tokens = tokenize_texts(texts, cfg.block_size, device)
 
-                    hidden_states = raw_model.forward_hidden(
-                        input_tokens
-                    )  # (B, T, n_embd)
+                hidden_states = raw_model.forward_hidden(input_tokens)  # (B, T, n_embd)
 
-                    assert (
-                        raw_model.dag_predictor is not None
-                    ), "DAG models should always have dag_predictor"
-                    pred_digit_logits, pred_V_sign, pred_O, pred_G = (
-                        raw_model.dag_predictor(hidden_states)
-                    )
+                assert (
+                    raw_model.dag_predictor is not None
+                ), "DAG models should always have dag_predictor"
+                pred_digit_logits, pred_V_sign, pred_O, pred_G = (
+                    raw_model.dag_predictor(hidden_states)
+                )
 
-                    dag_executor = getattr(raw_model, "dag_executor", None)
-                    losses = compute_dag_loss(
-                        pred_digit_logits,
-                        pred_V_sign,
-                        pred_O,
-                        pred_G,
-                        target_tensors,
-                        dag_executor=dag_executor,
-                        cfg=cfg,
-                    )
-                    loss = losses["total_loss"] / cfg.gradient_accumulation_steps
+                dag_executor = getattr(raw_model, "dag_executor", None)
+                losses = compute_dag_loss(
+                    pred_digit_logits,
+                    pred_V_sign,
+                    pred_O,
+                    pred_G,
+                    target_tensors,
+                    dag_executor=dag_executor,
+                    cfg=cfg,
+                )
+                loss = losses["total_loss"] / cfg.gradient_accumulation_steps
 
                 for key, value in losses.items():
                     if isinstance(value, torch.Tensor):
@@ -399,6 +394,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 # Add per-token training metrics (OUTSIDE the loss accumulation loop)
                 # ------------------------------------------------------------------ #
                 # Calculate expression-level valid rate (excluding padding)
+                valid_mask = target_tensors["valid_mask"]
                 batch_size, seq_len = valid_mask.shape
                 expression_valid_tokens = 0
                 expression_total_tokens = 0

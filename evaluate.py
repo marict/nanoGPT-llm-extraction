@@ -13,6 +13,8 @@ import torch.distributed as dist
 
 from data.dagset.heldout_expressions import heldout_segments
 from data.dagset.streaming import (
+    TooManyInitialValuesError,
+    ValueMagnitudeError,
     digit_onehot_to_float,
     expressions_to_tensors,
     tensor_to_expression,
@@ -194,6 +196,7 @@ def print_and_return_heldout_metrics(model, device):
         "op_accuracy": 0.0,
         "gate_accuracy": 0.0,
         "count": 0,
+        "total_expressions": 0,
     }
 
     print("\n=== HELDOUT EXPRESSIONS EVALUATION ===")
@@ -228,9 +231,23 @@ def print_and_return_heldout_metrics(model, device):
                         max_digits=model.config.max_digits,
                         max_decimal_places=model.config.max_decimal_places,
                     )
+                except ValueMagnitudeError as e:
+                    print(
+                        f"Expression {str_expr} cannot be represented in the model's range, skipping..."
+                    )
+                    continue
+                except TooManyInitialValuesError as e:
+                    print(
+                        f"Expression {str_expr} has too many initial values, skipping..."
+                    )
+                    continue
                 except Exception as e:
                     print(f"Error when converting expression: {str_expr}")
                     raise
+
+                # Place target tensors on the same device as the model
+                for key in target_tensors:
+                    target_tensors[key] = target_tensors[key].to(device)
 
                 # Get predictions
                 hidden_states = model.forward_hidden(tokens)
@@ -367,15 +384,12 @@ def print_detailed_validation_sample(
         raise ValueError(f"No valid tokens found in validation sample: '{texts[0]}'")
     last_valid_pos = valid_positions[-1].item()
 
-    # Get target and prediction for the final/complete expression
-    target_dict = target_tensors[0][last_valid_pos]
-
     # Target DAG tensors - convert from digit targets
-    target_digits = target_dict["target_digits"]  # (num_initial_nodes, D, base)
-    target_V_sign = target_dict["target_V_sign"]  # (total_nodes,)
-    target_O = target_dict["target_O"]  # (dag_depth, total_nodes)
-    target_G = target_dict["target_G"]  # (dag_depth,)
-    target_final_exec = target_dict["target_final_exec"]
+    target_digits = target_tensors["target_digits"][0, last_valid_pos]
+    target_V_sign = target_tensors["target_V_sign"][0, last_valid_pos]
+    target_O = target_tensors["target_O"][0, last_valid_pos]
+    target_G = target_tensors["target_G"][0, last_valid_pos]
+    target_final_exec = target_tensors["target_final_exec"][0, last_valid_pos]
 
     # Convert target tensors to expression string
     target_expr = tensor_to_expression(
@@ -395,7 +409,7 @@ def print_detailed_validation_sample(
     single_O = pred_O[0, last_valid_pos]  # (dag_depth, total_nodes)
     single_G = pred_G[0, last_valid_pos]  # (dag_depth,)
 
-    # Sharpen predictions for cleaner expression display and consistent execution
+    # Sharpen predictions for cleaner expression display
     # Note: V_sign, O, and G are already sharpened by STE in the predictor forward pass
     sharp_digit_logits = _sharpen_digit_predictions(single_digit_logits)
 
@@ -438,7 +452,6 @@ def evaluate_dag_model(
     model: torch.nn.Module,
     val_loader,
     device: str,
-    ctx,
     cfg,
     eval_iters: int,
     seed: int,
@@ -491,15 +504,14 @@ def evaluate_dag_model(
             input_tokens = tokenize_texts(texts, cfg.block_size, device)
 
             # Model forward pass with DAG model
-            with ctx:
-                hidden_states = model.forward_hidden(input_tokens)
-                dag_predictor = model.dag_predictor
-                if dag_predictor is None:
-                    raise RuntimeError("Model has no DAG predictor (dag_depth=0)")
+            hidden_states = model.forward_hidden(input_tokens)
+            dag_predictor = model.dag_predictor
+            if dag_predictor is None:
+                raise RuntimeError("Model has no DAG predictor (dag_depth=0)")
 
-                pred_digit_logits, pred_V_sign, pred_O, pred_G = dag_predictor(
-                    hidden_states
-                )
+            pred_digit_logits, pred_V_sign, pred_O, pred_G = dag_predictor(
+                hidden_states
+            )
 
             # Compute loss using DAG tensor loss function
             dag_executor = getattr(model, "dag_executor", None)

@@ -23,6 +23,14 @@ sys.path.append(str(Path(__file__).parent.parent))
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 
+class ValueMagnitudeError(Exception):
+    pass
+
+
+class TooManyInitialValuesError(Exception):
+    pass
+
+
 # Custom SymPy operations we use to track the DAG structure
 # Since for these operations we only need to change the
 # selector coefficients and do not need to add a +-1 initial
@@ -115,7 +123,8 @@ def float_to_digit_onehot(
         One-hot tensor of shape (max_digits + max_decimal_places, base)
 
     Raises:
-        ValueError: If inputs are invalid, value magnitude exceeds representable range, or conversion fails
+        ValueError: If inputs are invalid
+        ValueMagnitudeError: If value magnitude exceeds representable range
     """
     # Validate inputs
     if not isinstance(value, (int, float)):
@@ -139,7 +148,7 @@ def float_to_digit_onehot(
     limit = base**max_digits - base ** (-max_decimal_places)
     abs_val = abs(value)
     if abs_val > limit:
-        raise ValueError(
+        raise ValueMagnitudeError(
             f"Value magnitude {abs_val} exceeds maximum representable value {limit} "
             f"for {max_digits} digits and {max_decimal_places} decimal places in base {base}"
         )
@@ -355,7 +364,7 @@ def expression_to_tensors(
         # Handle direct numbers
         if isNum(node) and node not in values:
             if step_index >= num_initial_nodes:
-                raise ValueError(
+                raise TooManyInitialValuesError(
                     f"Expression has too many initial values. Needs dag_depth >= {step_index - 1} (allowing {num_initial_nodes} initial values)"
                 )
 
@@ -369,8 +378,10 @@ def expression_to_tensors(
                 V_sign[0, 0, step_index] = 1 if val >= 0 else -1
                 values.append(node)
                 step_index += 1
-            except (TypeError, ValueError):
-                raise ValueError(f"Cannot convert {node} to float")
+            except:
+                print(f"Cannot convert {node} to float")
+                raise
+
         # Error checks
         elif isUnnormalizedNegation(node):
             raise ValueError(
@@ -805,8 +816,8 @@ def expressions_to_tensors(
 
             if i < len(expressions) and expressions[i] != "not valid":
                 expr = expressions[i]
-                target_digits, V_sign, target_O, target_G = expression_to_tensors(
-                    expr, depth, max_digits, max_decimal_places
+                target_digits, target_V_sign, target_O, target_G = (
+                    expression_to_tensors(expr, depth, max_digits, max_decimal_places)
                 )
                 target_final_exec = (
                     torch.tensor(float(expr.evalf())).unsqueeze(0).unsqueeze(0)
@@ -815,7 +826,7 @@ def expressions_to_tensors(
 
             # Assign to lists
             target_digits_list.append(target_digits)
-            target_V_sign_list.append(V_sign)
+            target_V_sign_list.append(target_V_sign)
             target_O_list.append(target_O)
             target_G_list.append(target_G)
             target_final_exec_list.append(target_final_exec)
