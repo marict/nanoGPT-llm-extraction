@@ -808,7 +808,9 @@ def expressions_to_tensors(
                 target_digits, V_sign, target_O, target_G = expression_to_tensors(
                     expr, depth, max_digits, max_decimal_places
                 )
-                target_final_exec_value = float(expr.evalf())
+                target_final_exec = (
+                    torch.tensor(float(expr.evalf())).unsqueeze(0).unsqueeze(0)
+                )
                 valid_mask = torch.ones(1, 1, dtype=torch.bool)
 
             # Assign to lists
@@ -816,9 +818,7 @@ def expressions_to_tensors(
             target_V_sign_list.append(V_sign)
             target_O_list.append(target_O)
             target_G_list.append(target_G)
-            target_final_exec_list.append(
-                torch.tensor(target_final_exec_value).unsqueeze(0)
-            )
+            target_final_exec_list.append(target_final_exec)
             valid_mask_list.append(valid_mask)
 
         except:
@@ -830,13 +830,13 @@ def expressions_to_tensors(
             print(f"Other format: {string_expr3}")
             raise
 
-    # Stack the lists on token dimension (1)
-    target_digits = torch.stack(target_digits_list, dim=1)
-    target_V_sign = torch.stack(target_V_sign_list, dim=1)
-    target_O = torch.stack(target_O_list, dim=1)
-    target_G = torch.stack(target_G_list, dim=1)
-    target_final_exec = torch.stack(target_final_exec_list, dim=1)
-    valid_mask = torch.stack(valid_mask_list, dim=1)
+    # Cat the lists on token dimension (1)
+    target_digits = torch.cat(target_digits_list, dim=1)
+    target_V_sign = torch.cat(target_V_sign_list, dim=1)
+    target_O = torch.cat(target_O_list, dim=1)
+    target_G = torch.cat(target_G_list, dim=1)
+    target_final_exec = torch.cat(target_final_exec_list, dim=1)
+    valid_mask = torch.cat(valid_mask_list, dim=1)
     total_expressions = torch.tensor(len(expressions)).unsqueeze(0)
 
     tensors = {
@@ -905,11 +905,11 @@ def create_dag_structure_dataloaders(
             all_texts.append(text)
             all_target_tensors.append(target_tensors)
 
-        # Stack target tensors along batch dimension (dim=0)
+        # Cat target tensors along batch dimension (dim=0)
         batched_target_tensors = {}
         for key in target_tensors.keys():
             tensors = [tensor[key] for tensor in all_target_tensors]
-            batched_target_tensors[key] = torch.stack(tensors, dim=0)
+            batched_target_tensors[key] = torch.cat(tensors, dim=0)
         return all_texts, batched_target_tensors
 
     def train_loader():

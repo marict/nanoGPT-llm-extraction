@@ -112,7 +112,11 @@ def _print_token_by_token_breakdown(
 
     text = texts[batch_idx]
     sample_mask = valid_mask[batch_idx]  # (T,)
-    sample_targets = target_tensors[batch_idx]  # List of target dicts
+    sample_targets = {}
+
+    # Index into the batch dimension for each target tensor
+    for key in target_tensors:
+        sample_targets[key] = target_tensors[key][batch_idx]
 
     print(f"\nFinal model input: '{text}'")
 
@@ -146,13 +150,16 @@ def _print_token_by_token_breakdown(
             is_valid = sample_mask[pos].item()
 
             if is_valid:
-                # Get target expression for valid positions
-                target_dict = sample_targets[pos]
+
+                target_digits = sample_targets["target_digits"][pos]
+                target_V_sign = sample_targets["target_V_sign"][pos]
+                target_O = sample_targets["target_O"][pos]
+                target_G = sample_targets["target_G"][pos]
                 target_expr_sympy = tensor_to_expression(
-                    target_dict["target_digits"],
-                    target_dict["target_V_sign"],
-                    target_dict["target_O"],
-                    target_dict["target_G"],
+                    target_digits,
+                    target_V_sign,
+                    target_O,
+                    target_G,
                     max_digits=cfg.max_digits,
                     max_decimal_places=cfg.max_decimal_places,
                 )
@@ -554,17 +561,9 @@ def evaluate_dag_model(
             if num_batches >= eval_iters:
                 break
 
-        import pdb
-
-        pdb.set_trace()
-
         # Run heldout expressions evaluations
         # NOTE: This is disabled for now because it's not working.
         heldout_metrics = print_and_return_heldout_metrics(model, device)
-
-        import pdb
-
-        pdb.set_trace()
 
     # Average metrics over successful batches
     if num_batches > 0:

@@ -298,7 +298,7 @@ def compute_dag_loss(
     pred_V_sign: torch.Tensor,
     pred_O: torch.Tensor,
     pred_G: torch.Tensor,
-    target_tensors: list[list[dict[str, torch.Tensor]]],
+    target_tensors: dict[str, torch.Tensor],
     dag_executor=None,
     cfg=None,
 ) -> dict[str, torch.Tensor]:
@@ -320,29 +320,18 @@ def compute_dag_loss(
     if "valid_mask" not in target_tensors:
         raise ValueError("valid_mask not found in target_tensors")
     valid_mask = target_tensors["valid_mask"]
-    valid_positions = valid_mask.nonzero(as_tuple=False)
-    if valid_positions.numel() == 0:
-        return _create_zero_losses(device)
+    b_valid_idx, t_valid_idx = torch.where(valid_mask)  # shapes: [N_valid], [N_valid]
 
-    batch_indices, token_indices = valid_positions[:, 0], valid_positions[:, 1]
+    pred_digit_logits_valid = pred_digit_logits[b_valid_idx, t_valid_idx]
+    pred_V_sign_valid = pred_V_sign[b_valid_idx, t_valid_idx]
+    pred_O_valid = pred_O[b_valid_idx, t_valid_idx]
+    pred_G_valid = pred_G[b_valid_idx, t_valid_idx]
 
-    # Extract predictions for valid positions
-    pred_digit_logits_valid = pred_digit_logits[
-        batch_indices, token_indices
-    ]  # (num_valid, num_initial_nodes, D, base)
-    pred_V_sign_valid = pred_V_sign[
-        batch_indices, token_indices
-    ]  # (num_valid, total_nodes)
-    pred_O_valid = pred_O[
-        batch_indices, token_indices
-    ]  # (num_valid, dag_depth, total_nodes)
-    pred_G_valid = pred_G[batch_indices, token_indices]  # (num_valid, dag_depth)
-
-    target_digits = target_tensors["target_digits"]
-    target_V_sign = target_tensors["target_V_sign"]
-    target_O = target_tensors["target_O"]
-    target_G = target_tensors["target_G"]
-    target_final_exec = target_tensors["target_final_exec"]
+    target_digits = target_tensors["target_digits"][b_valid_idx, t_valid_idx]
+    target_V_sign = target_tensors["target_V_sign"][b_valid_idx, t_valid_idx]
+    target_O = target_tensors["target_O"][b_valid_idx, t_valid_idx]
+    target_G = target_tensors["target_G"][b_valid_idx, t_valid_idx]
+    target_final_exec = target_tensors["target_final_exec"][b_valid_idx, t_valid_idx]
 
     # Determine node counts from tensor shapes
     total_nodes = pred_V_sign_valid.shape[-1]
@@ -366,6 +355,7 @@ def compute_dag_loss(
     G_loss, gate_accuracy = _compute_g_loss(pred_G_valid, target_G)
 
     # Execution loss (if DAG executor is provided)
+    # NOTE: This might be broken now because of the new indexing
     exec_loss = torch.tensor(0.0, device=device)
     if dag_executor is not None and cfg.enable_exec_loss:
         exec_loss = _compute_exec_loss(
@@ -375,8 +365,8 @@ def compute_dag_loss(
             pred_O_valid,
             pred_G_valid,
             target_final_exec,
-            batch_indices,
-            token_indices,
+            b_valid_idx,
+            t_valid_idx,
             cfg,
             device,
         )
@@ -411,12 +401,12 @@ def compute_dag_loss(
         "digit_loss": digit_loss,
         "digit_accuracy": digit_accuracy,
         "V_sign_loss": V_sign_loss,
-        "O_loss": O_loss,
-        "G_loss": G_loss * g_loss_weight,
-        "exec_loss": exec_loss * exec_loss_weight,
         "sign_accuracy": sign_accuracy,
+        "O_loss": O_loss,
         "op_accuracy": op_accuracy,
+        "G_loss": G_loss * g_loss_weight,
         "gate_accuracy": gate_accuracy,
+        "exec_loss": exec_loss * exec_loss_weight,
     }
 
 
