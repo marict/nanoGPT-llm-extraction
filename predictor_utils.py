@@ -11,8 +11,6 @@ import torch
 import torch.nn.functional as F
 from tiktoken import get_encoding
 
-from models.dag_model import DAGExecutor
-
 
 def _create_zero_losses(device: torch.device) -> dict[str, torch.Tensor]:
     """Create dictionary of zero losses/accuracies for edge cases."""
@@ -21,7 +19,6 @@ def _create_zero_losses(device: torch.device) -> dict[str, torch.Tensor]:
         "total_loss": zero,
         "digit_loss": zero,
         "digit_accuracy": zero,
-        "V_mag_loss": zero,
         "V_sign_loss": zero,
         "O_loss": zero,
         "G_loss": zero,
@@ -30,31 +27,6 @@ def _create_zero_losses(device: torch.device) -> dict[str, torch.Tensor]:
         "op_accuracy": zero,
         "gate_accuracy": zero,
     }
-
-
-def _compute_value_loss(
-    pred_digit_logits: torch.Tensor, target_digits: torch.Tensor, cfg
-) -> torch.Tensor:
-    """Compute robust loss for magnitude values using asinh transformation."""
-    max_digits = cfg.max_digits
-    base = pred_digit_logits.shape[-1]
-
-    # Convert predictions to magnitude values (vectorized)
-    pred_expanded = pred_digit_logits.unsqueeze(1)
-    pred_V_mag = DAGExecutor.digits_to_vmag(pred_expanded, max_digits, base).squeeze(1)
-
-    # Convert targets to magnitude values (vectorized)
-    target_expanded = target_digits.unsqueeze(1)
-    target_V_mag = DAGExecutor.digits_to_vmag(
-        target_expanded, max_digits, base
-    ).squeeze(1)
-
-    # Handle NaN/Inf with penalty
-    if torch.any(~torch.isfinite(pred_V_mag)):
-        return torch.tensor(100.0, device=pred_digit_logits.device, requires_grad=True)
-
-    # Robust loss in asinh space
-    return F.mse_loss(torch.asinh(pred_V_mag), torch.asinh(target_V_mag))
 
 
 def _compute_vsign_loss(
@@ -108,6 +80,8 @@ def _compute_o_loss(
     Returns:
         Tuple of (O_loss, op_accuracy)
     """
+    # Tensors should already be in correct shape (num_valid, dag_depth, total_nodes) from compute_dag_loss
+
     # Operand selector loss (L2)
     O_loss = F.mse_loss(pred_O_valid, target_O)
 
@@ -133,6 +107,7 @@ def _compute_g_loss(
     Returns:
         Tuple of (G_loss, gate_accuracy)
     """
+
     G_loss = F.mse_loss(pred_G_valid, target_G)
     pred_G_discrete = (pred_G_valid > 0.5).float()
     gate_correct = (pred_G_discrete == target_G).float()
@@ -187,19 +162,28 @@ def _compute_digit_loss(
         target_flat = target_digits.reshape(-1, base)
         row_sums = target_flat.sum(dim=-1)
 
-        # Strict validation: every row must be a valid one-hot distribution (matching original)
-        if (row_sums == 0).any():
-            offending = torch.nonzero(row_sums == 0).flatten()[:5].tolist()
-            raise ValueError(
-                "Encountered target digit rows with all zeros (invalid one-hot). "
-                f"Example flat indices: {offending}. This indicates a bug in the "
-                "dataset generation pipeline."
+        # Only compute loss on rows that have valid one-hot distributions
+        # Unused initial nodes will have zero rows and should be skipped
+        valid_rows = row_sums > 0
+        if not valid_rows.any():
+            # If no valid rows at all, return zero loss and accuracy
+            return torch.tensor(0.0, device=logits_flat.device), torch.tensor(
+                0.0, device=logits_flat.device
             )
 
-        # Allow tiny numerical tolerance when checking that rows sum to 1.0
-        if not torch.allclose(row_sums, torch.ones_like(row_sums), atol=1e-6):
+        # Filter to only valid rows
+        logits_valid = logits_flat[valid_rows]  # (num_valid_rows, base)
+        target_flat_valid = target_flat[valid_rows]  # (num_valid_rows, base)
+
+        # Allow tiny numerical tolerance when checking that valid rows sum to 1.0
+        row_sums_valid = target_flat_valid.sum(dim=-1)
+        if not torch.allclose(
+            row_sums_valid, torch.ones_like(row_sums_valid), atol=1e-6
+        ):
             bad = torch.nonzero(
-                ~torch.isclose(row_sums, torch.ones_like(row_sums), atol=1e-6)
+                ~torch.isclose(
+                    row_sums_valid, torch.ones_like(row_sums_valid), atol=1e-6
+                )
             )
             first_bad = bad.flatten()[:5].tolist()
             raise ValueError(
@@ -207,15 +191,15 @@ def _compute_digit_loss(
                 f"Found rows that sum to values != 1. Example flat indices: {first_bad}."
             )
 
-        target_idx = target_flat.argmax(dim=-1)  # (num_valid*N*D,)
+        target_idx = target_flat_valid.argmax(dim=-1)  # (num_valid_rows,)
 
         # Standard cross-entropy over raw logits - bounded loss prevents NaN
-        digit_loss = F.cross_entropy(logits_flat, target_idx, reduction="mean")
+        digit_loss = F.cross_entropy(logits_valid, target_idx, reduction="mean")
 
         # Compute digit accuracy - percentage of digits predicted correctly
-        pred_idx = torch.argmax(logits_flat, dim=-1)  # (num_valid * N * D,)
+        pred_idx = torch.argmax(logits_valid, dim=-1)  # (num_valid_rows,)
         correct_digits = (pred_idx == target_idx).float()
-        digit_accuracy = correct_digits.mean()  # Average over all digit positions
+        digit_accuracy = correct_digits.mean()  # Average over all valid digit positions
 
     return digit_loss, digit_accuracy
 
@@ -315,7 +299,6 @@ def compute_dag_loss(
     pred_O: torch.Tensor,
     pred_G: torch.Tensor,
     target_tensors: list[list[dict[str, torch.Tensor]]],
-    valid_mask: torch.Tensor,
     dag_executor=None,
     cfg=None,
 ) -> dict[str, torch.Tensor]:
@@ -324,11 +307,20 @@ def compute_dag_loss(
     Returns dictionary with losses (digit, V_mag, V_sign, O, G, exec) and
     accuracies (sign, op, gate) for all valid positions.
     """
+
+    # Add in batch dimension if needed
+    if pred_V_sign.dim() == 1:
+        pred_V_sign = pred_V_sign.unsqueeze(0)  # (1, total_nodes)
+    if pred_O.dim() == 2:
+        pred_O = pred_O.unsqueeze(0)  # (1, dag_depth, total_nodes)
+    if pred_G.dim() == 1:
+        pred_G = pred_G.unsqueeze(0)  # (1, dag_depth)
+
     device = pred_digit_logits.device
-
-    # Get valid positions
-    valid_positions = valid_mask.nonzero(as_tuple=False)  # (num_valid, 2)
-
+    if "valid_mask" not in target_tensors:
+        raise ValueError("valid_mask not found in target_tensors")
+    valid_mask = target_tensors["valid_mask"]
+    valid_positions = valid_mask.nonzero(as_tuple=False)
     if valid_positions.numel() == 0:
         return _create_zero_losses(device)
 
@@ -346,32 +338,11 @@ def compute_dag_loss(
     ]  # (num_valid, dag_depth, total_nodes)
     pred_G_valid = pred_G[batch_indices, token_indices]  # (num_valid, dag_depth)
 
-    # Extract targets for valid positions
-    valid_targets = []
-    for batch_idx, token_idx in zip(batch_indices, token_indices):
-        target_dict = target_tensors[batch_idx.item()][token_idx.item()]
-        valid_targets.append(target_dict)
-
-    # Stack targets from all valid positions
-    target_digits = torch.stack([t["target_digits"] for t in valid_targets]).to(
-        device
-    )  # (num_valid, num_initial_nodes, D, base)
-    target_V_sign = torch.stack([t["target_V_sign"] for t in valid_targets]).to(
-        device
-    )  # (num_valid, total_nodes)
-    target_O = torch.stack([t["target_O"] for t in valid_targets]).to(
-        device
-    )  # (num_valid, dag_depth, total_nodes)
-    target_G = torch.stack([t["target_G"] for t in valid_targets]).to(
-        device
-    )  # (num_valid, dag_depth)
-    target_final_exec = torch.tensor(
-        [t["target_final_exec"] for t in valid_targets],
-        device=device,
-        dtype=torch.float32,
-    )  # (num_valid,)
-
-    # Compute losses
+    target_digits = target_tensors["target_digits"]
+    target_V_sign = target_tensors["target_V_sign"]
+    target_O = target_tensors["target_O"]
+    target_G = target_tensors["target_G"]
+    target_final_exec = target_tensors["target_final_exec"]
 
     # Determine node counts from tensor shapes
     total_nodes = pred_V_sign_valid.shape[-1]
@@ -382,11 +353,6 @@ def compute_dag_loss(
     digit_loss, digit_accuracy = _compute_digit_loss(
         pred_digit_logits_valid, target_digits
     )
-
-    # Compute V_mag loss
-    V_mag_loss = torch.tensor(0.0, device=device)
-    if cfg.enable_vmag_loss:
-        V_mag_loss = _compute_value_loss(pred_digit_logits_valid, target_digits, cfg)
 
     # Compute V_sign loss and sign accuracy
     V_sign_loss, sign_accuracy = _compute_vsign_loss(
@@ -418,9 +384,8 @@ def compute_dag_loss(
     # Build total loss from enabled components
     total_loss = torch.tensor(0.0, device=device)
 
-    # Use cfg flags directly (no backwards compatibility)
+    # Use cfg flags directly
     enable_digit_loss = cfg.enable_digit_loss
-    enable_vmag_loss = cfg.enable_vmag_loss
     enable_vsign_loss = cfg.enable_vsign_loss
     enable_o_loss = cfg.enable_o_loss
     enable_g_loss = cfg.enable_g_loss
@@ -432,8 +397,6 @@ def compute_dag_loss(
 
     if enable_digit_loss:
         total_loss = total_loss + digit_loss
-    if enable_vmag_loss:
-        total_loss = total_loss + V_mag_loss
     if enable_vsign_loss:
         total_loss = total_loss + V_sign_loss
     if enable_o_loss:
@@ -447,7 +410,6 @@ def compute_dag_loss(
         "total_loss": total_loss,
         "digit_loss": digit_loss,
         "digit_accuracy": digit_accuracy,
-        "V_mag_loss": V_mag_loss,
         "V_sign_loss": V_sign_loss,
         "O_loss": O_loss,
         "G_loss": G_loss * g_loss_weight,
@@ -462,7 +424,6 @@ __all__ = [
     "tokenize_texts",
     "compute_dag_loss",
 ]
-
 
 # --------------------------------------------------------------------------- #
 # Tokenisation

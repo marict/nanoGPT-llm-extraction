@@ -5,7 +5,7 @@ Test to verify that expression generation is fully deterministic with no random 
 import pytest
 from tiktoken import get_encoding
 
-from data.dagset.generate_expression import generate_expression
+from data.dagset.generate_expression import generate_expressions
 
 
 def test_expression_generation_determinism():
@@ -30,7 +30,7 @@ def test_expression_generation_determinism():
         # Generate expressions multiple times with the same seed
         all_results = []
         for generation_round in range(num_generations):
-            expressions, substrings, valid_mask = generate_expression(
+            expressions, substrings, valid_mask = generate_expressions(
                 depth=depth,
                 seed=seed,  # Same seed every time
                 max_digits=max_digits,
@@ -97,7 +97,7 @@ def test_different_seeds_produce_different_results():
     all_results = []
 
     for seed in seeds:
-        expressions, substrings, valid_mask = generate_expression(
+        expressions, substrings, valid_mask = generate_expressions(
             depth=depth,
             seed=seed,
             max_digits=max_digits,

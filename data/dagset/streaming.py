@@ -6,15 +6,17 @@ On-the-fly DAG dataset generation for training.
 
 import sys
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Iterator, Tuple
 
 import sympy
 import torch
-from num2words import num2words
 from sympy import postorder_traversal
 from tiktoken import get_encoding
+
+from .generate_expression import (
+    generate_expressions,
+)
 
 # Add parent directories to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
@@ -318,13 +320,13 @@ def digit_onehot_to_float(
 
 
 def expression_to_tensors(
-    expr: sympy.Basic, dag_depth: int
+    expr: sympy.Basic, dag_depth: int, max_digits: int = 4, max_decimal_places: int = 4
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Convert a SymPy expression to DAG tensor representation.
 
     Returns:
-        V_mag: (1, 1, total_nodes) - magnitudes of all nodes (initial + intermediate)
+        target_digits: (1, 1, num_initial_nodes, D, base) - digit one-hot encodings for initial nodes
         V_sign: (1, 1, total_nodes) - signs of all nodes
         O: (1, 1, dag_depth, total_nodes) - operand selection matrix
         G: (1, 1, dag_depth) - domain selector (0=log, 1=linear)
@@ -335,8 +337,11 @@ def expression_to_tensors(
     num_initial_nodes = dag_depth + 1
     num_intermediate_nodes = dag_depth
     total_nodes = num_initial_nodes + num_intermediate_nodes
+    D = max_digits + max_decimal_places
+    base = 10  # Default base
 
-    V_mag = torch.zeros(1, 1, total_nodes)
+    # Initialize target_digits tensor for initial nodes only
+    target_digits = torch.zeros(1, 1, num_initial_nodes, D, base)
     V_sign = torch.ones(1, 1, total_nodes)  # Initialize to all 1s
     O = torch.zeros(1, 1, dag_depth, total_nodes)
     G = torch.ones(1, 1, dag_depth)  # Initialize to all 1s (linear domain)
@@ -356,7 +361,11 @@ def expression_to_tensors(
 
             try:
                 val = float(node.evalf())
-                V_mag[0, 0, step_index] = abs(val)
+                # Convert to digit one-hot encoding
+                digit_onehot = float_to_digit_onehot(
+                    abs(val), max_digits, max_decimal_places, base
+                )
+                target_digits[0, 0, step_index] = digit_onehot
                 V_sign[0, 0, step_index] = 1 if val >= 0 else -1
                 values.append(node)
                 step_index += 1
@@ -469,7 +478,9 @@ def expression_to_tensors(
         for remaining_step in range(0, dag_depth):
             O[0, 0, remaining_step, 0] = 1
 
-    return V_mag, V_sign, O, G
+    # This is for one batch element and one token element.
+    # Hence the [0, 0, ...] indices.
+    return target_digits, V_sign, O, G
 
 
 def tensor_to_expression(
@@ -677,11 +688,6 @@ def tensor_to_expression(
     return node_expressions[0] if node_expressions else sympy.Integer(0)
 
 
-# Import expression generation functionality
-from .generate_expression import (
-    generate_expression,
-)
-
 # ============================================================================
 # GENERATION SYSTEM: Separation between Generation and State Operations
 # ============================================================================
@@ -729,43 +735,23 @@ class DAGValExample(DAGExample):
     full_expr: sympy.Basic | None = None  # The final complete expression
 
     def __str__(self):
-        V_mag_shape = self.structure_dict["target_V_mag"].shape
+        target_digits_shape = self.structure_dict["target_digits"].shape
         V_sign_shape = self.structure_dict["target_V_sign"].shape
         O_shape = self.structure_dict["target_O"].shape
         G_shape = self.structure_dict["target_G"].shape
         final_value_exec = self.structure_dict["target_final_exec"]
-        return f"DAGValExample(seed={self.seed}, text={self.text}, depth={self.depth}, V_mag={V_mag_shape}, V_sign={V_sign_shape}, O={O_shape}, G={G_shape}, full_operations_named={self.full_operations_named}, final_value_sympy={self.final_value_sympy}, final_value_exec={final_value_exec}, full_expr={self.full_expr})"
-
-
-def expression_to_string(expr: sympy.Basic) -> str:
-    """Convert a sympy expression to string."""
-    return str(expr)
-
-
-def convert_number_to_english(number: float, max_decimal_places: int = 6) -> str:
-    """Convert *number* to its English word equivalent using *num2words*.
-
-    The value is first rounded (half-up) to *max_decimal_places* decimal digits to
-    avoid extremely long fractional strings, then converted.  Negatives are
-    rendered with the "negative" prefix to preserve the previous output style.
-    """
-    # Quantise using Decimal to avoid floating-point surprises (e.g. 0.1+0.2)
-    quantised = Decimal(str(number)).quantize(
-        Decimal(10) ** -max_decimal_places, rounding=ROUND_HALF_UP
-    )
-
-    words = num2words(abs(quantised))
-    return f"negative {words}" if quantised < 0 else words
+        return f"DAGValExample(seed={self.seed}, text={self.text}, depth={self.depth}, target_digits={target_digits_shape}, V_sign={V_sign_shape}, O={O_shape}, G={G_shape}, full_operations_named={self.full_operations_named}, final_value_sympy={self.final_value_sympy}, final_value_exec={final_value_exec}, full_expr={self.full_expr})"
 
 
 def expressions_to_tensors(
     expressions: list[sympy.Basic | str],
+    max_tokens: int,
     *,
     depth: int,
     max_digits: int = 4,
     max_decimal_places: int = 4,
 ) -> tuple[list[dict[str, torch.Tensor]], list[bool]]:
-    """Convert a list of sympy expressions to structure tensors for the digit prediction system.
+    """Convert a list of sympy expressions to structure tensors for the digit prediction system. Will pad with zero DAGs to max_tokens.
 
     This converts SymPy expressions to DAG tensor format:
     - Uses digit prediction, V_sign, O, G tensor representation
@@ -778,84 +764,64 @@ def expressions_to_tensors(
         max_decimal_places: Maximum number of decimal places
 
     Returns:
-        Tuple of (tensor_list, valid_mask) where:
-        - tensor_list: Contains T tensors (one per token position, including zero DAGs)
-        - valid_mask: Boolean list indicating which positions were valid
-
-    Tensor shapes:
-        - target_digits: (num_initial_nodes, D, base)
-        - target_V_sign: (total_nodes,)
-        - target_O: (dag_depth, total_nodes)
-        - target_G: (dag_depth,)
+        Dictionary with tensors for each target type, and a valid mask.
+        The tensors are stacked along the token dimension (1).
+        The valid mask is a boolean tensor of shape (B, T) indicating which token positions are valid.
     """
-    tensor_results = []
+
+    if max_tokens < len(expressions):
+        raise ValueError(
+            f"max_tokens must be greater than or equal to the number of expressions: {max_tokens} < {len(expressions)}"
+        )
+
     valid_mask = []
-    for expr in expressions:
+    target_digits_list = []
+    target_V_sign_list = []
+    target_O_list = []
+    target_G_list = []
+    target_final_exec_list = []
+
+    base = 10  # Default base
+    # Zero DAG for invalid token position
+    target_digits_invalid = torch.zeros(
+        1, depth + 1, max_digits + max_decimal_places, base
+    )
+    target_digits_invalid[:, :, 0, 0] = 1.0
+    target_V_sign_invalid = torch.ones(1, (depth + 1) + depth)
+    target_O_invalid = torch.zeros(1, depth, (depth + 1) + depth)
+    target_G_invalid = torch.ones(1, depth)
+    valid_mask_invalid = torch.zeros(1, 1, dtype=torch.bool)
+    target_final_exec_invalid = torch.zeros(1, 1)
+
+    for i in range(max_tokens):
         try:
-            if expr == "not valid":
-                # Create zero DAG for invalid token position with new architecture
-                num_initial_nodes = depth + 1
-                total_nodes = (depth + 1) + depth
-                D = max_digits + max_decimal_places
+            target_digits = target_digits_invalid
+            target_V_sign = target_V_sign_invalid
+            target_O = target_O_invalid
+            target_G = target_G_invalid
+            target_final_exec = target_final_exec_invalid
+            valid_mask = valid_mask_invalid
 
-                # Create zero digit targets (proper one-hot for digit 0)
-                base = 10  # Default base
-                zero_digits = torch.zeros(num_initial_nodes, D, base)
-                # Set all digit positions to represent 0 (valid one-hot)
-                zero_digits[:, :, 0] = 1.0
-
-                zero_tensor_dict = {
-                    "target_digits": zero_digits,
-                    "target_V_sign": torch.ones(total_nodes),
-                    "target_O": torch.zeros(depth, total_nodes),
-                    "target_G": torch.ones(depth),
-                    "target_final_exec": 0.0,
-                }
-                tensor_results.append(zero_tensor_dict)
-                valid_mask.append(False)
-            else:
-                # Convert SymPy expression directly to DAG tensor format
-                V_mag, V_sign, O, G = expression_to_tensors(expr, depth)
-
-                # Compute the actual target execution value by evaluating the SymPy expression
+            if i < len(expressions) and expressions[i] != "not valid":
+                expr = expressions[i]
+                target_digits, V_sign, target_O, target_G = expression_to_tensors(
+                    expr, depth, max_digits, max_decimal_places
+                )
                 target_final_exec_value = float(expr.evalf())
+                valid_mask = torch.ones(1, 1, dtype=torch.bool)
 
-                # Convert V_mag values to digit targets for initial nodes only
-                num_initial_nodes = depth + 1
-                D = max_digits + max_decimal_places
-                base = 10  # Default base
-                target_digits = torch.zeros(num_initial_nodes, D, base)
+            # Assign to lists
+            target_digits_list.append(target_digits)
+            target_V_sign_list.append(V_sign)
+            target_O_list.append(target_O)
+            target_G_list.append(target_G)
+            target_final_exec_list.append(
+                torch.tensor(target_final_exec_value).unsqueeze(0)
+            )
+            valid_mask.append(valid_mask)
 
-                # Extract V_mag values and convert to digits for initial nodes
-                V_mag_squeezed = V_mag.squeeze(0).squeeze(0)  # (total_nodes,)
-                V_sign_squeezed = V_sign.squeeze(0).squeeze(0)  # (total_nodes,)
-
-                for n in range(num_initial_nodes):
-                    mag_value = V_mag_squeezed[n].item()
-                    sign_value = V_sign_squeezed[n].item()
-
-                    # Reconstruct the actual float value (mag * sign)
-                    actual_value = mag_value * sign_value
-
-                    # Convert to digit one-hot representation
-                    digit_onehot = float_to_digit_onehot(
-                        actual_value, max_digits, max_decimal_places, base
-                    )
-                    target_digits[n] = digit_onehot
-
-                # Convert to target format for training
-                # Remove batch and time dimensions (convert from (1,1,X) to (X))
-                target_dict = {
-                    "target_digits": target_digits,  # (num_initial_nodes, D, base)
-                    "target_V_sign": V_sign_squeezed,  # (total_nodes,)
-                    "target_O": O.squeeze(0).squeeze(0),  # (dag_depth, total_nodes)
-                    "target_G": G.squeeze(0).squeeze(0),  # (dag_depth,)
-                    "target_final_exec": target_final_exec_value,  # Actual execution result
-                }
-                tensor_results.append(target_dict)
-                valid_mask.append(True)
         except:
-            string_expr = str(expr)
+            string_expr = expressions[i] if i < len(expressions) else "not valid"
             print(f"Conversion failed for expression: {string_expr}")
             string_expr2 = str(sympy.sympify(string_expr, evaluate=False))
             print(f"Other format: {string_expr2}")
@@ -863,7 +829,24 @@ def expressions_to_tensors(
             print(f"Other format: {string_expr3}")
             raise
 
-    return tensor_results, valid_mask
+    # Stack the lists on token dimension (1)
+    target_digits = torch.stack(target_digits_list, dim=1)
+    target_V_sign = torch.stack(target_V_sign_list, dim=1)
+    target_O = torch.stack(target_O_list, dim=1)
+    target_G = torch.stack(target_G_list, dim=1)
+    target_final_exec = torch.stack(target_final_exec_list, dim=1)
+    valid_mask = torch.stack(valid_mask, dim=1)
+
+    tensors = {
+        "target_digits": target_digits,
+        "target_V_sign": target_V_sign,
+        "target_O": target_O,
+        "target_G": target_G,
+        "valid_mask": valid_mask,
+        "target_final_exec": target_final_exec,
+    }
+
+    return tensors
 
 
 # ============================================================================
@@ -886,9 +869,6 @@ def create_dag_structure_dataloaders(
 
     Returns:
         Tuple of (train_loader, val_loader) that yield:
-        - texts: List[str]
-        - target_tensors: List[Dict[str, torch.Tensor]]
-        - valid_masks: torch.Tensor (B, T)
     """
 
     def generate_batch(batch_size: int, training_seed: int):
@@ -897,11 +877,10 @@ def create_dag_structure_dataloaders(
 
         all_texts = []
         all_target_tensors = []
-        all_valid_masks = []
 
         for i in range(batch_size):
             # Generate expressions
-            expressions, substrings, _ = generate_expression(
+            expressions, substrings, _ = generate_expressions(
                 depth=max_depth,
                 seed=training_seed + i,
                 max_digits=max_digits,
@@ -910,74 +889,40 @@ def create_dag_structure_dataloaders(
             )
 
             # Convert to tensors
-            target_tensors, tensor_valid_mask = expressions_to_tensors(
+            target_tensors = expressions_to_tensors(
                 expressions,
                 depth=max_depth,
                 max_digits=max_digits,
                 max_decimal_places=max_decimal_places,
+                max_tokens=block_size,
             )
 
-            # Always use the original substring to maintain alignment with targets
+            # Always use the full expression substring to maintain alignment with targets
             text = substrings[-1]
-
             all_texts.append(text)
-            all_target_tensors.append(
-                target_tensors
-            )  # Keep as list of lists (batch structure)
-            all_valid_masks.append(tensor_valid_mask)
+            all_target_tensors.append(target_tensors)
 
-        # Pad valid masks to block_size (not just max within batch)
-        batched_valid_masks = []
-        for mask in all_valid_masks:
-            # Truncate or pad to block_size to match model expectations
-            if len(mask) > block_size:
-                padded = mask[:block_size]  # Truncate if too long
-            else:
-                padded = mask + [False] * (block_size - len(mask))  # Pad with False
-            batched_valid_masks.append(padded)
-
-        valid_masks_tensor = torch.tensor(batched_valid_masks, dtype=torch.bool)
-
-        # Pad target tensors to block_size as well
-        padded_target_tensors = []
-        for target_tensors in all_target_tensors:
-            # Create zero DAG for padding positions using new tensor format
-            total_nodes = (max_depth + 1) + max_depth
-            zero_tensor_dict = {
-                "target_V_mag": torch.zeros(total_nodes),
-                "target_V_sign": torch.ones(total_nodes),
-                "target_O": torch.zeros(max_depth, total_nodes),
-                "target_G": torch.ones(max_depth),
-                "target_final_exec": 0.0,
-            }
-
-            # Truncate or pad to block_size
-            if len(target_tensors) > block_size:
-                padded_tensors = target_tensors[:block_size]  # Truncate if too long
-            else:
-                padded_tensors = target_tensors + [zero_tensor_dict] * (
-                    block_size - len(target_tensors)
-                )
-            padded_target_tensors.append(padded_tensors)
-
-        return all_texts, padded_target_tensors, valid_masks_tensor
+        # Stack target tensors along batch dimension (dim=0)
+        batched_target_tensors = {}
+        for key in target_tensors.keys():
+            tensors = [tensor[key] for tensor in all_target_tensors]
+            batched_target_tensors[key] = torch.stack(tensors, dim=0)
+        return all_texts, batched_target_tensors
 
     def train_loader():
         counter = 0
         while True:
-            texts, target_tensors, valid_masks = generate_batch(
-                train_batch_size, seed + counter
-            )
+            texts, target_tensors = generate_batch(train_batch_size, seed + counter)
             counter += train_batch_size
-            yield texts, target_tensors, valid_masks
+            yield texts, target_tensors
 
     def val_loader():
         counter = 0
         while True:
-            texts, target_tensors, valid_masks = generate_batch(
+            texts, target_tensors = generate_batch(
                 val_batch_size, seed + counter + 10000
             )
             counter += val_batch_size
-            yield texts, target_tensors, valid_masks
+            yield texts, target_tensors
 
     return train_loader(), val_loader()

@@ -48,7 +48,6 @@ def _empty_metrics() -> dict[str, float]:
     return {
         "total_loss": 0.0,
         "digit_loss": 0.0,
-        "V_mag_loss": 0.0,
         "V_sign_loss": 0.0,
         "O_loss": 0.0,
         "G_loss": 0.0,
@@ -248,61 +247,53 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 model.eval()
                 eval_start_time = time.time()
 
-                eval_losses = evaluate_dag_model(
+                eval_metrics = evaluate_dag_model(
                     raw_model, val_loader, device, ctx, cfg, cfg.eval_iters, seed
                 )
                 eval_time_ms = (time.time() - eval_start_time) * 1000 / cfg.eval_iters
 
-                # Run heldout expressions evaluation
-                heldout_metrics = print_and_return_heldout_metrics(raw_model)
-
                 if master_process:
                     eval_msg = (
-                        f"[val] iter {iter_num}: total_loss {eval_losses['total_loss']:.4f}, "
-                        f"digit_loss {eval_losses.get('digit_loss', 0.0):.4f}, "
-                        f"digit_acc {eval_losses.get('digit_accuracy', 0.0):.1%}, "
-                        f"V_mag_loss {eval_losses.get('V_mag_loss', 0.0):.4f}, "
-                        f"V_sign_loss {eval_losses.get('V_sign_loss', 0.0):.4f}, "
-                        f"sign_acc {eval_losses.get('sign_accuracy', 0.0):.1%}, "
-                        f"O_loss {eval_losses.get('O_loss', 0.0):.4f}, "
-                        f"op_acc {eval_losses.get('op_accuracy', 0.0):.1%}, "
-                        f"G_loss {eval_losses.get('G_loss', 0.0):.4f}, "
-                        f"gate_acc {eval_losses.get('gate_accuracy', 0.0):.1%}, "
-                        f"exec_loss {eval_losses.get('exec_loss', 0.0):.4f}, "
-                        f"valid_rate {eval_losses.get('expression_valid_rate', 0.0):.1%}, "
+                        f"[val] iter {iter_num}: total_loss {eval_metrics['total_loss']:.4f}, "
+                        f"digit_loss {eval_metrics.get('digit_loss', 0.0):.4f}, "
+                        f"digit_acc {eval_metrics.get('digit_accuracy', 0.0):.1%}, "
+                        f"V_sign_loss {eval_metrics.get('V_sign_loss', 0.0):.4f}, "
+                        f"sign_acc {eval_metrics.get('sign_accuracy', 0.0):.1%}, "
+                        f"O_loss {eval_metrics.get('O_loss', 0.0):.4f}, "
+                        f"op_acc {eval_metrics.get('op_accuracy', 0.0):.1%}, "
+                        f"G_loss {eval_metrics.get('G_loss', 0.0):.4f}, "
+                        f"gate_acc {eval_metrics.get('gate_accuracy', 0.0):.1%}, "
+                        f"exec_loss {eval_metrics.get('exec_loss', 0.0):.4f}, "
+                        f"valid_rate {eval_metrics.get('expression_valid_rate', 0.0):.1%}, "
                         f"time {eval_time_ms:.1f}ms"
                     )
                     print(eval_msg)
 
                 # Log validation metrics to wandb
-                if run is not None and eval_losses is not None:
+                if run is not None and eval_metrics is not None:
                     val_log_dict = {
                         "iter": iter_num,
-                        "val/total_loss": eval_losses["total_loss"],
-                        "val/digit_loss": eval_losses.get("digit_loss", 0.0),
-                        "val/digit_accuracy": eval_losses.get("digit_accuracy", 0.0),
-                        "val/V_sign_loss": eval_losses.get("V_sign_loss", 0.0),
-                        "val/sign_accuracy": eval_losses.get("sign_accuracy", 0.0),
-                        "val/O_loss": eval_losses.get("O_loss", 0.0),
-                        "val/op_accuracy": eval_losses.get("op_accuracy", 0.0),
-                        "val/G_loss": eval_losses.get("G_loss", 0.0),
-                        "val/gate_accuracy": eval_losses.get("gate_accuracy", 0.0),
-                        "val/exec_loss": eval_losses.get("exec_loss", 0.0),
-                        "val/expression_valid_rate": eval_losses.get(
+                        "val/total_loss": eval_metrics["total_loss"],
+                        "val/digit_loss": eval_metrics.get("digit_loss", 0.0),
+                        "val/digit_accuracy": eval_metrics.get("digit_accuracy", 0.0),
+                        "val/V_sign_loss": eval_metrics.get("V_sign_loss", 0.0),
+                        "val/sign_accuracy": eval_metrics.get("sign_accuracy", 0.0),
+                        "val/O_loss": eval_metrics.get("O_loss", 0.0),
+                        "val/op_accuracy": eval_metrics.get("op_accuracy", 0.0),
+                        "val/G_loss": eval_metrics.get("G_loss", 0.0),
+                        "val/gate_accuracy": eval_metrics.get("gate_accuracy", 0.0),
+                        "val/exec_loss": eval_metrics.get("exec_loss", 0.0),
+                        "val/expression_valid_rate": eval_metrics.get(
                             "expression_valid_rate", 0.0
                         ),
                         "val/time_per_iter_ms": eval_time_ms,
                         # Heldout metrics
-                        "heldout/digit_accuracy": heldout_metrics.get(
+                        "heldout/digit_accuracy": eval_metrics.get(
                             "digit_accuracy", 0.0
                         ),
-                        "heldout/sign_accuracy": heldout_metrics.get(
-                            "sign_accuracy", 0.0
-                        ),
-                        "heldout/op_accuracy": heldout_metrics.get("op_accuracy", 0.0),
-                        "heldout/gate_accuracy": heldout_metrics.get(
-                            "gate_accuracy", 0.0
-                        ),
+                        "heldout/sign_accuracy": eval_metrics.get("sign_accuracy", 0.0),
+                        "heldout/op_accuracy": eval_metrics.get("op_accuracy", 0.0),
+                        "heldout/gate_accuracy": eval_metrics.get("gate_accuracy", 0.0),
                     }
                     # Store validation metrics for combined logging with training metrics
                     pending_val_metrics = val_log_dict
@@ -310,11 +301,11 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     pending_val_metrics = None
 
                 is_new_best = (
-                    eval_losses is not None
-                    and eval_losses["total_loss"] < best_val_loss
+                    eval_metrics is not None
+                    and eval_metrics["total_loss"] < best_val_loss
                 )
                 if is_new_best:
-                    best_val_loss = eval_losses["total_loss"]
+                    best_val_loss = eval_metrics["total_loss"]
 
                 if iter_num > 0:
                     checkpoint_data = {
@@ -328,7 +319,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     # Default behavior: only save on new best validation loss
                     # Override: always save if always_save_checkpoint is enabled
                     if cfg.always_save_checkpoint or is_new_best:
-                        val_acc = eval_losses.get("op_accuracy", None)
+                        val_acc = eval_metrics.get("op_accuracy", None)
 
                         # Always use unique checkpoint names (no backwards compatibility)
                         rel_name = checkpoint_manager.generate_checkpoint_filename(
@@ -350,27 +341,19 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         checkpoint_manager.save_checkpoint(
                             checkpoint_data, checkpoint_filename
                         )
-
+                if cfg.eval_once:
+                    print(
+                        "🎯 EVAL_ONCE: Evaluation completed. Exiting after single evaluation run."
+                    )
+                    break
                 model.train()
 
-            # Eval once
-            if iter_num == 0 and cfg.eval_once:
-                print(
-                    "🎯 EVAL_ONCE: Evaluation completed. Exiting after single evaluation run."
-                )
-                break
-
+            # Training:
             # Forward and backward pass
             optimizer.zero_grad(set_to_none=True)
-
-            texts, target_tensors, valid_mask = next(train_loader)
-            for seq_targets in target_tensors:
-                for target_dict in seq_targets:
-                    for key, tensor in target_dict.items():
-                        if isinstance(tensor, torch.Tensor):
-                            target_dict[key] = tensor.to(device)
-
-            valid_mask = valid_mask.to(device)
+            texts, target_tensors = next(train_loader)
+            for tensor in target_tensors.values():
+                tensor = tensor.to(device)
 
             loss_accum = _empty_metrics()
 
@@ -402,7 +385,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         pred_O,
                         pred_G,
                         target_tensors,
-                        valid_mask,
                         dag_executor=dag_executor,
                         cfg=cfg,
                     )
@@ -487,7 +469,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                 # Display losses for DAG model
                 digit_loss_val = loss_accum.get("digit_loss", 0.0)
                 digit_accuracy_val = loss_accum.get("digit_accuracy", 0.0)
-                V_mag_loss_val = loss_accum.get("V_mag_loss", 0.0)
                 V_sign_loss_val = loss_accum.get("V_sign_loss", 0.0)
                 O_loss_val = loss_accum.get("O_loss", 0.0)
                 G_loss_val = loss_accum.get("G_loss", 0.0)
@@ -501,7 +482,6 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     f"iter {iter_num}: loss {loss_accum['total_loss']:.4f}, "
                     f"digit {digit_loss_val:.4f}, "
                     f"digit_acc {digit_accuracy_val:.1%}, "
-                    f"V_mag {V_mag_loss_val:.4f}, "
                     f"V_sign {V_sign_loss_val:.4f}, "
                     f"sign_acc {sign_accuracy_val:.1%}, "
                     f"O {O_loss_val:.4f}, "

@@ -15,7 +15,7 @@ import sympy
 import tqdm
 from tiktoken import get_encoding
 
-from data.dagset.generate_expression import generate_expression
+from data.dagset.generate_expression import generate_expressions
 from data.dagset.streaming import expressions_to_tensors
 from models.dag_model import DAGExecutor
 
@@ -149,7 +149,7 @@ def test_dag_executor_comprehensive():
     for i in tqdm.tqdm(
         range(num_expressions), total=num_expressions, desc="Generating expressions"
     ):
-        expressions, _, _ = generate_expression(
+        expressions, _, _ = generate_expressions(
             depth=depth,
             seed=i,
             max_digits=max_digits,

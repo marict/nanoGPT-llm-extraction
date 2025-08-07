@@ -32,6 +32,14 @@ class PredictorOnlyConfig:
     max_digits: int = 4
     max_decimal_places: int = 4
 
+    # Loss configuration (for compatibility with compute_dag_loss)
+    enable_digit_loss: bool = True
+    enable_vsign_loss: bool = True
+    enable_o_loss: bool = True
+    enable_g_loss: bool = True
+    enable_exec_loss: bool = True
+    exec_loss_weight: float = 0.01
+
 
 class PredictorOnlyModel(BaseGPTModel):
     """

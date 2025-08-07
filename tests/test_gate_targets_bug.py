@@ -15,7 +15,7 @@ def test_gate_targets_unused_positions():
 
     # Case 1: Single addition (uses only 1 operation slot)
     expr1 = sympy.parse_expr("3 + 5")
-    V_mag1, V_sign1, O1, G1 = expression_to_tensors(expr1, dag_depth)
+    target_digits1, V_sign1, O1, G1 = expression_to_tensors(expr1, dag_depth)
 
     print(f"\nExpression: {expr1}")
     print(f"Gate tensor G: {G1.squeeze()}")  # Remove batch/time dims for readability
@@ -25,7 +25,7 @@ def test_gate_targets_unused_positions():
 
     # Case 2: Single multiplication (uses only 1 operation slot)
     expr2 = sympy.parse_expr("3 * 5")
-    V_mag2, V_sign2, O2, G2 = expression_to_tensors(expr2, dag_depth)
+    target_digits2, V_sign2, O2, G2 = expression_to_tensors(expr2, dag_depth)
 
     print(f"\nExpression: {expr2}")
     print(f"Gate tensor G: {G2.squeeze()}")
@@ -33,7 +33,7 @@ def test_gate_targets_unused_positions():
 
     # Case 3: Two operations
     expr3 = sympy.parse_expr("3 + 5 * 2")  # Should be parsed as 3 + (5 * 2)
-    V_mag3, V_sign3, O3, G3 = expression_to_tensors(expr3, dag_depth)
+    target_digits3, V_sign3, O3, G3 = expression_to_tensors(expr3, dag_depth)
 
     print(f"\nExpression: {expr3}")
     print(f"Gate tensor G: {G3.squeeze()}")
@@ -45,7 +45,7 @@ def test_gate_targets_unused_positions():
     expr4 = sympy.parse_expr(
         "(3 + 5) * (2 - 1)"
     )  # Addition, subtraction, multiplication
-    V_mag4, V_sign4, O4, G4 = expression_to_tensors(expr4, dag_depth)
+    target_digits4, V_sign4, O4, G4 = expression_to_tensors(expr4, dag_depth)
 
     print(f"\nExpression: {expr4}")
     print(f"Gate tensor G: {G4.squeeze()}")
@@ -74,7 +74,7 @@ def test_gate_targets_different_dag_depths():
     expr = sympy.parse_expr("3 + 5")  # Simple expression with 1 operation
 
     for dag_depth in [1, 2, 3, 4, 6]:
-        V_mag, V_sign, O, G = expression_to_tensors(expr, dag_depth)
+        target_digits, V_sign, O, G = expression_to_tensors(expr, dag_depth)
         g_flat = G.squeeze()
         ones_count = (g_flat == 1.0).sum().item()
         total_count = g_flat.numel()

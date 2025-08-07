@@ -68,7 +68,6 @@ enable_digit_loss = True
 enable_vsign_loss = True
 enable_o_loss = True
 enable_g_loss = True
-enable_vmag_loss = False
 enable_exec_loss = False
 exec_loss_weight = 0.01
 g_loss_weight = 100.0

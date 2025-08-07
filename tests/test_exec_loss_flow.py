@@ -16,7 +16,6 @@ class MockConfig:
         self.max_decimal_places = 4
         # Loss component flags (required after removing backwards compatibility)
         self.enable_digit_loss = True
-        self.enable_vmag_loss = True
         self.enable_vsign_loss = True
         self.enable_o_loss = True
         self.enable_g_loss = True
@@ -290,7 +289,6 @@ def test_exec_loss_in_total_loss(test_dag_config, dag_executor, device, test_con
     # Note: exec_loss is already weighted in predictor_utils.py
     expected_total = (
         losses["digit_loss"]
-        + losses["V_mag_loss"]
         + losses["V_sign_loss"]
         + losses["O_loss"]
         + losses["G_loss"]

@@ -23,7 +23,7 @@ from tiktoken import get_encoding
 from data.dagset.generate_expression import (
     GENERATION_OPS,
     _apply_sympy_op,
-    generate_expression,
+    generate_expressions,
     generate_uniform_digit_number,
     string_to_expression,
 )
@@ -92,7 +92,7 @@ class PipelineBenchmark:
 
         def generate_single():
             seed = torch.randint(0, 10000, (1,)).item()
-            return generate_expression(
+            return generate_expressions(
                 depth=depth,
                 seed=seed,
                 max_digits=max_digits,
@@ -291,7 +291,7 @@ class PipelineBenchmark:
         print(f"📊 Benchmarking tensor conversion (depth={depth})...")
 
         # Generate a sample expression first
-        expressions, _, _ = generate_expression(
+        expressions, _, _ = generate_expressions(
             depth=depth,
             seed=42,
             max_digits=max_digits,
@@ -346,7 +346,7 @@ class PipelineBenchmark:
         print(f"⚡ Benchmarking DAG execution (depth={depth})...")
 
         # Generate and convert an expression to tensors
-        expressions, _, _ = generate_expression(
+        expressions, _, _ = generate_expressions(
             depth=depth,
             seed=42,
             max_digits=max_digits,
@@ -407,7 +407,7 @@ class PipelineBenchmark:
         def full_pipeline():
             # Generate expression
             seed = torch.randint(0, 10000, (1,)).item()
-            expressions, _, _ = generate_expression(
+            expressions, _, _ = generate_expressions(
                 depth=depth,
                 seed=seed,
                 max_digits=max_digits,

@@ -14,7 +14,7 @@ sys.path.insert(0, ".")
 
 import tiktoken
 
-from data.dagset.generate_expression import generate_expression
+from data.dagset.generate_expression import generate_expressions
 from data.dagset.streaming import expressions_to_tensors
 
 
@@ -32,7 +32,7 @@ def demo_expression_generation(depth=6, seed=None):
     tokenizer = tiktoken.get_encoding("gpt2")
 
     # Generate expression
-    expressions, substrings, valid_mask = generate_expression(
+    expressions, substrings, valid_mask = generate_expressions(
         depth=depth,
         seed=seed,
         max_digits=3,
@@ -223,7 +223,7 @@ def run_multiple_demos(count=3, depth=6, seed=None):
         tokenizer = tiktoken.get_encoding("gpt2")
 
         # Generate expression
-        expressions, substrings, valid_mask = generate_expression(
+        expressions, substrings, valid_mask = generate_expressions(
             depth=depth,
             seed=run_seed,
             max_digits=3,

@@ -54,7 +54,6 @@ class DAGTrainConfig(BaseConfig):
 
     # Loss component flags
     enable_digit_loss: bool = True
-    enable_vmag_loss: bool = True
     enable_vsign_loss: bool = True
     enable_o_loss: bool = True
     enable_g_loss: bool = True

@@ -22,7 +22,7 @@ from data.dagset.expression_to_english import (
     english_to_expression,
     expression_to_english,
 )
-from data.dagset.generate_expression import generate_expression, string_to_expression
+from data.dagset.generate_expression import generate_expressions, string_to_expression
 
 
 class TestExpressionEquivalence:
@@ -265,7 +265,7 @@ class TestGeneratedExpressions(TestExpressionEquivalence):
 
         # Generate several expressions and test them
         for seed in range(10):
-            expressions, substrings, _ = generate_expression(
+            expressions, substrings, _ = generate_expressions(
                 depth=4,
                 seed=seed + 1000,  # Use different seeds than other tests
                 max_digits=4,

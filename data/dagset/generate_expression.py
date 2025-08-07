@@ -146,7 +146,7 @@ def _apply_sympy_op(op_name: str, second: sympy.Basic, top: sympy.Basic) -> symp
     raise ValueError(f"Unknown operation: {op_name}")
 
 
-def generate_expression(
+def generate_expressions(
     *,
     depth: int,
     seed: int,

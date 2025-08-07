@@ -14,7 +14,7 @@ import torch.distributed as dist
 from data.dagset.heldout_expressions import heldout_segments
 from data.dagset.streaming import (
     digit_onehot_to_float,
-    expression_to_tensors,
+    expressions_to_tensors,
     tensor_to_expression,
 )
 from predictor_utils import compute_dag_loss, tokenize_texts
@@ -49,6 +49,12 @@ def _extract_initial_value(digit_data, sign, cfg, is_target: bool = True) -> flo
         for d, idx in enumerate(digit_indices):
             digit_onehot[d, idx] = 1.0
         sign = 1.0 if sign >= 0 else -1.0
+
+    # Check if this initial node is used (has valid one-hot encoding)
+    row_sums = digit_onehot.sum(dim=-1)
+    if not (row_sums > 0).any():
+        # This initial node is unused, return 0.0
+        return 0.0
 
     return digit_onehot_to_float(
         digit_onehot, sign, cfg.max_digits, cfg.max_decimal_places
@@ -169,7 +175,7 @@ def _print_token_by_token_breakdown(
         print(f"  ... and {padding_count} tokens of padding")
 
 
-def print_and_return_heldout_metrics(model):
+def print_and_return_heldout_metrics(model, device):
     """Evaluate model on heldout expressions and compute accuracy metrics."""
 
     model.eval()
@@ -180,11 +186,10 @@ def print_and_return_heldout_metrics(model):
         "sign_accuracy": 0.0,
         "op_accuracy": 0.0,
         "gate_accuracy": 0.0,
-        "total_expressions": 0,
+        "count": 0,
     }
 
     print("\n=== HELDOUT EXPRESSIONS EVALUATION ===")
-
     with torch.no_grad():
         for segment, expressions in heldout_segments.items():
             segment_metrics[segment] = {
@@ -198,42 +203,48 @@ def print_and_return_heldout_metrics(model):
             print(f"\n--- {segment.upper()} ---")
 
             for str_expr, sympy_expr in expressions:
-                # Get target tensors
-                target_V_mag, target_V_sign, target_O, target_G = expression_to_tensors(
-                    sympy_expr, model.cfg.dag_depth
-                )
+                tokens = tokenize_texts([str_expr], model.config.block_size, device)
 
-                # Create target dict format expected by compute_dag_loss
-                target_dict = {
-                    "target_V_mag": target_V_mag,
-                    "target_V_sign": target_V_sign,
-                    "target_O": target_O,
-                    "target_G": target_G,
-                }
-                target_tensors = [[target_dict]]  # Batch format
+                # Skip expressions that are too long.
+                if len(tokens) >= model.config.block_size:
+                    print(
+                        f"Expression {str_expr} has more tokens than the model block size. Tokens: {len(tokens)}, Block size: {model.config.block_size}"
+                    )
+                    continue
+
+                try:
+                    # Get target tensors for this one expression
+                    target_tensors = expressions_to_tensors(
+                        [sympy_expr],
+                        model.config.block_size,
+                        depth=model.config.dag_depth,
+                        max_digits=model.config.max_digits,
+                        max_decimal_places=model.config.max_decimal_places,
+                    )
+                except Exception as e:
+                    print(f"Error when converting expression: {str_expr}")
+                    raise
 
                 # Get predictions
-                tokens = tokenize_texts([str_expr], model.cfg.block_size, model.device)
                 hidden_states = model.forward_hidden(tokens)
                 pred_digit_logits, pred_V_sign, pred_O, pred_G = model.dag_predictor(
                     hidden_states
                 )
 
-                # Create valid mask (single valid token)
-                valid_mask = torch.tensor(
-                    [[True]], dtype=torch.bool, device=model.device
-                )
+                # Last non-zero token position is the only one we want scored.
+                last_token_position = torch.where(tokens[-1] != 0.0)[0][-1]
+                valid_mask = torch.zeros((1, tokens.shape[-1]), dtype=torch.bool)
+                valid_mask[0, last_token_position] = True
 
-                # Compute accuracies
+                # Compute accuracies on heldout expression
                 losses = compute_dag_loss(
                     pred_digit_logits,
                     pred_V_sign,
                     pred_O,
                     pred_G,
                     target_tensors,
-                    valid_mask,
                     model.dag_executor,
-                    model.cfg,
+                    model.config,
                 )
 
                 # Extract accuracies
@@ -294,10 +305,10 @@ def print_and_return_heldout_metrics(model):
         print(f"Total expressions evaluated: {total_metrics['total_expressions']}")
 
         return {
-            "digit_accuracy": overall_digit,
-            "sign_accuracy": overall_sign,
-            "op_accuracy": overall_op,
-            "gate_accuracy": overall_gate,
+            "heldout/digit_accuracy": overall_digit,
+            "heldout/sign_accuracy": overall_sign,
+            "heldout/op_accuracy": overall_op,
+            "heldout/gate_accuracy": overall_gate,
         }
     else:
         raise ValueError("No expressions evaluated")
@@ -380,16 +391,13 @@ def print_detailed_validation_sample(
     # Sharpen predictions for cleaner expression display and consistent execution
     # Note: V_sign, O, and G are already sharpened by STE in the predictor forward pass
     sharp_digit_logits = _sharpen_digit_predictions(single_digit_logits)
-    sharp_V_sign = single_V_sign
-    sharp_O = single_O
-    sharp_G = single_G
 
     # Convert predicted tensors to expression string with sharpened values
     pred_expr = tensor_to_expression(
         sharp_digit_logits,
-        sharp_V_sign,
-        sharp_O,
-        sharp_G,
+        single_V_sign,
+        single_O,
+        single_G,
         max_digits=cfg.max_digits,
         max_decimal_places=cfg.max_decimal_places,
     )
@@ -401,7 +409,7 @@ def print_detailed_validation_sample(
 
     # Execute predicted DAG
     pred_final_exec = _execute_dag_prediction(
-        dag_executor, sharp_digit_logits, sharp_V_sign, sharp_O, sharp_G
+        dag_executor, sharp_digit_logits, single_V_sign, single_O, single_G
     )
 
     print(f"\n--- Expression Comparison ---")
@@ -428,10 +436,7 @@ def evaluate_dag_model(
     eval_iters: int,
     seed: int,
 ) -> Dict[str, float]:
-    """Run evaluation on *eval_iters* batches and return aggregated metrics.
-
-    This function works with the new per-token streaming.py data format.
-    """
+    """Run evaluation on *eval_iters* batches and return aggregated metrics."""
     model.eval()
     _eval_random.seed(seed)
 
@@ -440,7 +445,6 @@ def evaluate_dag_model(
         for k in (
             "total_loss",
             "digit_loss",
-            "V_mag_loss",
             "V_sign_loss",
             "O_loss",
             "G_loss",
@@ -502,7 +506,6 @@ def evaluate_dag_model(
                 pred_O,
                 pred_G,
                 target_tensors,
-                valid_mask,
                 dag_executor=dag_executor,
                 cfg=cfg,
             )
@@ -579,6 +582,10 @@ def evaluate_dag_model(
 
             if num_batches >= eval_iters:
                 break
+
+        # Run heldout expressions evaluations
+        # NOTE: This is disabled for now because it's not working.
+        # heldout_metrics = print_and_return_heldout_metrics(model, device)
 
     # Average metrics over successful batches
     if num_batches > 0:

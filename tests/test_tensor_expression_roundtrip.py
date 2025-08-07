@@ -43,52 +43,20 @@ class TestTensorExpressionRoundTrip:
         orig_value = float(orig_expr.evalf())
 
         # expression -> tensor
-        V_mag, V_sign, O, G = expression_to_tensors(orig_expr, dag_depth)
+        target_digits, V_sign, O, G = expression_to_tensors(orig_expr, dag_depth)
 
-        # Convert V_mag to digit representation (simulating model predictions)
-        # We need to create digit logits from V_mag values
-        num_initial_nodes = dag_depth + 1
-        D = max_digits + max_decimal_places
-        base = 10
-
-        # Create digit logits by converting V_mag back to digit representation
-        # For testing, we'll create one-hot encodings that represent the exact values
-        digit_logits = torch.zeros(num_initial_nodes, D, base)
-
-        for n in range(num_initial_nodes):
-            mag_value = V_mag[0, 0, n].item()  # Remove batch/time dims
-            sign_value = V_sign[0, 0, n].item()
-            actual_value = mag_value * sign_value
-
-            # Convert to digit representation
-            # Handle the sign separately and work with magnitude
-            abs_value = abs(actual_value)
-
-            # Integer part
-            int_part = int(abs_value)
-            frac_part = abs_value - int_part
-
-            # Encode integer digits (right to left)
-            for d in range(max_digits):
-                if d < len(str(int_part)):
-                    digit_pos = max_digits - 1 - d
-                    if int_part > 0:
-                        digit_val = (int_part // (10**d)) % 10
-                        digit_logits[n, digit_pos, digit_val] = 1.0
-
-            # Encode fractional digits
-            frac_temp = frac_part
-            for d in range(max_decimal_places):
-                frac_temp *= 10
-                digit_val = int(frac_temp) % 10
-                digit_logits[n, max_digits + d, digit_val] = 1.0
+        # Remove batch/time dimensions to get the actual tensors
+        digit_logits = target_digits[0, 0]  # (num_initial_nodes, D, base)
+        V_sign_flat = V_sign[0, 0]  # (total_nodes,)
+        O_flat = O[0, 0]  # (dag_depth, total_nodes)
+        G_flat = G[0, 0]  # (dag_depth,)
 
         # tensor -> expression
         reconstructed_expr = tensor_to_expression(
             digit_logits,
-            V_sign[0, 0],  # Remove batch/time dims
-            O[0, 0],  # Remove batch/time dims
-            G[0, 0],  # Remove batch/time dims
+            V_sign_flat,
+            O_flat,
+            G_flat,
             max_digits=max_digits,
             max_decimal_places=max_decimal_places,
         )

@@ -4,7 +4,7 @@ import pytest
 import tiktoken
 import torch
 
-from data.dagset.generate_expression import generate_expression
+from data.dagset.generate_expression import generate_expressions
 from data.dagset.streaming import expression_to_tensors
 
 
@@ -25,7 +25,7 @@ def test_real_generated_expressions_gate_targets():
     # Generate several expressions and check their gate targets
     for seed in range(10):
         try:
-            expressions, substrings, valid_mask = generate_expression(
+            expressions, substrings, valid_mask = generate_expressions(
                 depth=dag_depth,
                 seed=seed,
                 max_digits=max_digits,
@@ -38,7 +38,9 @@ def test_real_generated_expressions_gate_targets():
                     expr, "args"
                 ):  # Skip string/invalid expressions
                     try:
-                        V_mag, V_sign, O, G = expression_to_tensors(expr, dag_depth)
+                        target_digits, V_sign, O, G = expression_to_tensors(
+                            expr, dag_depth
+                        )
                         g_flat = G.squeeze()
                         all_gates.append(g_flat)
                         valid_expressions.append(str(expr))
@@ -120,7 +122,7 @@ def test_gate_vs_operation_count():
     tokenizer = tiktoken.get_encoding("cl100k_base")
 
     for seed in range(5):
-        expressions, _, valid_mask = generate_expression(
+        expressions, _, valid_mask = generate_expressions(
             depth=dag_depth,
             seed=seed,
             max_digits=4,
@@ -138,7 +140,7 @@ def test_gate_vs_operation_count():
 
                 op_count = count_operations(expr)
 
-                V_mag, V_sign, O, G = expression_to_tensors(expr, dag_depth)
+                target_digits, V_sign, O, G = expression_to_tensors(expr, dag_depth)
                 g_flat = G.squeeze()
 
                 # Find meaningful gate positions (non-default values or actually used)
