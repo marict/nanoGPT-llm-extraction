@@ -584,4 +584,4 @@ def evaluate_dag_model(
                 d[k] /= num_batches
 
     model.train()
-    return {**total_losses, **total_metrics}
+    return {**total_losses, **total_metrics, **heldout_metrics}

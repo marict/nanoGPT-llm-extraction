@@ -287,11 +287,17 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                         "val/time_per_iter_ms": eval_time_ms,
                         # Heldout metrics
                         "heldout/digit_accuracy": eval_metrics.get(
-                            "digit_accuracy", 0.0
+                            "heldout/digit_accuracy", 0.0
                         ),
-                        "heldout/sign_accuracy": eval_metrics.get("sign_accuracy", 0.0),
-                        "heldout/op_accuracy": eval_metrics.get("op_accuracy", 0.0),
-                        "heldout/gate_accuracy": eval_metrics.get("gate_accuracy", 0.0),
+                        "heldout/sign_accuracy": eval_metrics.get(
+                            "heldout/sign_accuracy", 0.0
+                        ),
+                        "heldout/op_accuracy": eval_metrics.get(
+                            "heldout/op_accuracy", 0.0
+                        ),
+                        "heldout/gate_accuracy": eval_metrics.get(
+                            "heldout/gate_accuracy", 0.0
+                        ),
                     }
                     # Store validation metrics for combined logging with training metrics
                     pending_val_metrics = val_log_dict
