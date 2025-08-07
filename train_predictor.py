@@ -324,8 +324,7 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     # Override: always save if always_save_checkpoint is enabled
                     if cfg.always_save_checkpoint or is_new_best:
                         # Always use unique checkpoint names (no backwards compatibility)
-                        rel_name = checkpoint_manager.generate_checkpoint_filename()
-                        checkpoint_filename = f"{safe_run_name}/{rel_name}"
+                        checkpoint_filename = f"{run.id}.pt"
 
                         if is_new_best:
                             print(

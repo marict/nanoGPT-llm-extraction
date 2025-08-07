@@ -641,21 +641,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                                 "config": cfg.__dict__,
                             }
 
-                            # Calculate validation accuracy for filename
-                            val_acc = None
-                            if math_scores:
-                                # Use average of math evaluation scores as validation accuracy
-                                valid_scores = [
-                                    score
-                                    for score in math_scores.values()
-                                    if score >= 0
-                                ]
-                                if valid_scores:
-                                    val_acc = sum(valid_scores) / len(valid_scores)
-
-                            rel_name = checkpoint_manager.generate_checkpoint_filename()
-                            checkpoint_filename = f"{safe_run_name}/{rel_name}"
-
+                            checkpoint_filename = f"{safe_run_name}.pt"
                             if master_process:
                                 print(f"Saving checkpoint: {checkpoint_filename}")
                                 # Clean up previous best checkpoints to save disk space

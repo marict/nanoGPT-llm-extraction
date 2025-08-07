@@ -360,13 +360,6 @@ class CheckpointManager:
                 best_val_loss,
             )
 
-    def generate_checkpoint_filename(
-        self,
-    ) -> str:
-        """Generate checkpoint filename based on parameters."""
-        safe_name = "".join(c for c in wandb.run.id if c.isalnum() or c in ("-", "_"))
-        return f"ckpt_{safe_name}.pt"
-
     def save_checkpoint(
         self, checkpoint_data: Dict, filename: str, retries: int = 1
     ) -> None:
@@ -388,7 +381,7 @@ class CheckpointManager:
                     tmp_path = tmp_file.name
 
                 # Upload to W&B
-                self._save_checkpoint_to_wandb(tmp_path, filename, checkpoint_data)
+                self._save_checkpoint_to_wandb(tmp_path, filename)
 
                 # Clean up temporary file
                 os.unlink(tmp_path)
