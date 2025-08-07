@@ -92,22 +92,27 @@ class TestTensorExpressionRoundTrip:
             orig_value = float(orig_expr.evalf())
 
             # Use expressions_to_tensors (same as training pipeline)
-            tensor_results, valid_mask = expressions_to_tensors(
+            tensor_results = expressions_to_tensors(
                 [orig_expr],
+                max_tokens=1,
                 depth=dag_depth,
                 max_digits=max_digits,
                 max_decimal_places=max_decimal_places,
             )
 
-            assert valid_mask[0], f"Expression {expr_str} should be valid"
+            assert tensor_results["valid_mask"][
+                0, 0
+            ], f"Expression {expr_str} should be valid"
 
-            target_dict = tensor_results[0]
+            target_dict = tensor_results
 
-            # Extract tensors
-            digit_targets = target_dict["target_digits"]  # (num_initial_nodes, D, base)
-            V_sign = target_dict["target_V_sign"]  # (total_nodes,)
-            O = target_dict["target_O"]  # (dag_depth, total_nodes)
-            G = target_dict["target_G"]  # (dag_depth,)
+            # Extract tensors from the first token
+            digit_targets = target_dict["target_digits"][
+                0, 0
+            ]  # (num_initial_nodes, D, base)
+            V_sign = target_dict["target_V_sign"][0, 0]  # (total_nodes,)
+            O = target_dict["target_O"][0, 0]  # (dag_depth, total_nodes)
+            G = target_dict["target_G"][0, 0]  # (dag_depth,)
 
             # Convert digit targets to logits (simulate model predictions)
             # For perfect reconstruction, use the one-hot targets as logits
@@ -151,16 +156,20 @@ class TestTensorExpressionRoundTrip:
                 orig_expr = sympy.sympify(expr_str)
                 orig_value = float(orig_expr.evalf())
 
-                tensor_results, valid_mask = expressions_to_tensors(
-                    [orig_expr], depth=dag_depth, max_digits=4, max_decimal_places=4
+                tensor_results = expressions_to_tensors(
+                    [orig_expr],
+                    max_tokens=1,
+                    depth=dag_depth,
+                    max_digits=4,
+                    max_decimal_places=4,
                 )
 
-                if not valid_mask[0]:
+                if not tensor_results["valid_mask"][0, 0]:
                     print(f"Skipping invalid expression: {expr_str}")
                     continue
 
-                target_dict = tensor_results[0]
-                digit_logits = target_dict["target_digits"].float() * 10.0
+                target_dict = tensor_results
+                digit_logits = target_dict["target_digits"][0, 0].float() * 10.0
 
                 reconstructed_expr = tensor_to_expression(
                     digit_logits,

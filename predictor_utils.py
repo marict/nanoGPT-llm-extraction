@@ -321,6 +321,7 @@ def compute_dag_loss(
         raise ValueError("valid_mask not found in target_tensors")
     valid_mask = target_tensors["valid_mask"]
     b_valid_idx, t_valid_idx = torch.where(valid_mask)  # shapes: [N_valid], [N_valid]
+    num_valid = len(b_valid_idx)
 
     pred_digit_logits_valid = pred_digit_logits[b_valid_idx, t_valid_idx]
     pred_V_sign_valid = pred_V_sign[b_valid_idx, t_valid_idx]
@@ -332,6 +333,21 @@ def compute_dag_loss(
     target_O = target_tensors["target_O"][b_valid_idx, t_valid_idx]
     target_G = target_tensors["target_G"][b_valid_idx, t_valid_idx]
     target_final_exec = target_tensors["target_final_exec"][b_valid_idx, t_valid_idx]
+
+    # If no valid positions, return zero losses
+    if num_valid == 0:
+        return {
+            "total_loss": torch.tensor(0.0, device=device),
+            "digit_loss": torch.tensor(0.0, device=device),
+            "digit_accuracy": torch.tensor(0.0, device=device),
+            "V_sign_loss": torch.tensor(0.0, device=device),
+            "sign_accuracy": torch.tensor(0.0, device=device),
+            "O_loss": torch.tensor(0.0, device=device),
+            "op_accuracy": torch.tensor(0.0, device=device),
+            "G_loss": torch.tensor(0.0, device=device),
+            "gate_accuracy": torch.tensor(0.0, device=device),
+            "exec_loss": torch.tensor(0.0, device=device),
+        }
 
     # Determine node counts from tensor shapes
     total_nodes = pred_V_sign_valid.shape[-1]

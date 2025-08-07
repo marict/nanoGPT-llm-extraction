@@ -197,7 +197,7 @@ def load_checkpoint(checkpoint_path: Path):
     raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
 
 
-def test_dag_examples(model, config):
+def run_dag_examples(model, config):
     """Test the model on various DAG examples."""
     print(f"\n🧪 Testing DAG examples...")
 
@@ -348,7 +348,7 @@ def test_dag_examples(model, config):
             raise
 
 
-def test_model_behavior(model, config):
+def run_model_behavior(model, config):
     """Test basic model behavior and outputs."""
     print(f"\n🧪 Testing model behavior...")
 
@@ -429,10 +429,10 @@ def main():
     model, config, _ = load_checkpoint(checkpoint_path)
 
     # Test DAG examples
-    test_dag_examples(model, config)
+    run_dag_examples(model, config)
 
     # Test model behavior
-    test_model_behavior(model, config)
+    run_model_behavior(model, config)
 
     print(f"\n✅ All tests completed successfully!")
 

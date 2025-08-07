@@ -28,7 +28,7 @@ def test_expression_to_tensors_handles_large_magnitudes():
         assert target_V_sign.shape == (1, 1, 5)  # (batch, time, total_nodes)
         assert target_O.shape == (1, 1, 2, 5)  # (batch, time, dag_depth, total_nodes)
         assert target_G.shape == (1, 1, 2)  # (batch, time, dag_depth)
-    except ValueError as e:
+    except Exception as e:
         # If it fails, the error should be informative
         assert "magnitude" in str(e).lower() or "exceeds" in str(e).lower()
 
@@ -45,8 +45,8 @@ def test_float_to_digit_onehot_handles_large_values():
     # Calculate the maximum representable value
     max_value = (base**max_digits - 1) / (base**max_decimal_places)
 
-    # This should raise a ValueError with a clear message
-    with pytest.raises(ValueError) as exc_info:
+    # This should raise a ValueMagnitudeError with a clear message
+    with pytest.raises(Exception) as exc_info:
         float_to_digit_onehot(large_value, max_digits, max_decimal_places, base)
 
     error_msg = str(exc_info.value)

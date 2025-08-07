@@ -31,17 +31,23 @@ def test_specific_expression_fix():
     expr = sympy.parse_expr(expression_str)
 
     # Convert expression to tensors
-    target_tensors, valid_mask = expressions_to_tensors(
-        [expr], depth=depth, max_digits=8, max_decimal_places=4
+    target_tensors = expressions_to_tensors(
+        [expr], max_tokens=1, depth=depth, max_digits=8, max_decimal_places=4
     )
-    assert valid_mask[0], f"Expression {expr} should be valid"
+    assert target_tensors["valid_mask"][0, 0], f"Expression {expr} should be valid"
 
-    target = target_tensors[0]
+    target = target_tensors
+    # Extract the first token's tensors (remove batch and token dimensions)
+    digit_logits = target["target_digits"][0, 0]  # (num_initial_nodes, D, base)
+    V_sign = target["target_V_sign"][0, 0]  # (total_nodes,)
+    O = target["target_O"][0, 0]  # (dag_depth, total_nodes)
+    G = target["target_G"][0, 0]  # (dag_depth,)
+
     # Add batch/time dimensions for DAGExecutor
-    digit_logits = target["target_digits"].unsqueeze(0).unsqueeze(0)
-    V_sign = target["target_V_sign"].unsqueeze(0).unsqueeze(0)
-    O = target["target_O"].unsqueeze(0).unsqueeze(0)
-    G = target["target_G"].unsqueeze(0).unsqueeze(0)
+    digit_logits = digit_logits.unsqueeze(0).unsqueeze(0)
+    V_sign = V_sign.unsqueeze(0).unsqueeze(0)
+    O = O.unsqueeze(0).unsqueeze(0)
+    G = G.unsqueeze(0).unsqueeze(0)
 
     # Execute DAG
     dag_result = executor.forward(digit_logits, V_sign, O, G)
@@ -73,18 +79,24 @@ def test_dag_executor_simple():
     for expr in simple_expressions:
         try:
             # Convert expression to tensors
-            target_tensors, valid_mask = expressions_to_tensors(
-                [expr], depth=depth, max_digits=4, max_decimal_places=4
+            target_tensors = expressions_to_tensors(
+                [expr], max_tokens=1, depth=depth, max_digits=4, max_decimal_places=4
             )
-            if not valid_mask[0]:
+            if not target_tensors["valid_mask"][0, 0]:
                 raise ValueError(f"Expression {expr} is not valid")
 
-            target = target_tensors[0]
+            target = target_tensors
+            # Extract the first token's tensors (remove batch and token dimensions)
+            digit_logits = target["target_digits"][0, 0]  # (num_initial_nodes, D, base)
+            V_sign = target["target_V_sign"][0, 0]  # (total_nodes,)
+            O = target["target_O"][0, 0]  # (dag_depth, total_nodes)
+            G = target["target_G"][0, 0]  # (dag_depth,)
+
             # Add batch/time dimensions for DAGExecutor
-            digit_logits = target["target_digits"].unsqueeze(0).unsqueeze(0)
-            V_sign = target["target_V_sign"].unsqueeze(0).unsqueeze(0)
-            O = target["target_O"].unsqueeze(0).unsqueeze(0)
-            G = target["target_G"].unsqueeze(0).unsqueeze(0)
+            digit_logits = digit_logits.unsqueeze(0).unsqueeze(0)
+            V_sign = V_sign.unsqueeze(0).unsqueeze(0)
+            O = O.unsqueeze(0).unsqueeze(0)
+            G = G.unsqueeze(0).unsqueeze(0)
 
             # Execute DAG
             dag_result = executor.forward(digit_logits, V_sign, O, G)
@@ -185,21 +197,28 @@ def test_dag_executor_comprehensive():
     ):
         try:
             # Get target state directly in digit tensor format
-            target_tensors, valid_mask = expressions_to_tensors(
+            target_tensors = expressions_to_tensors(
                 [expr],
+                max_tokens=1,
                 depth=depth,
                 max_digits=max_digits,
                 max_decimal_places=max_decimal_places,
             )
-            if not valid_mask[0]:
+            if not target_tensors["valid_mask"][0, 0]:
                 raise ValueError(f"Expression {expr} is not valid")
 
-            target = target_tensors[0]
+            target = target_tensors
+            # Extract the first token's tensors (remove batch and token dimensions)
+            digit_logits = target["target_digits"][0, 0]  # (num_initial_nodes, D, base)
+            V_sign = target["target_V_sign"][0, 0]  # (total_nodes,)
+            O = target["target_O"][0, 0]  # (dag_depth, total_nodes)
+            G = target["target_G"][0, 0]  # (dag_depth,)
+
             # Add batch/time dimensions for DAGExecutor
-            digit_logits = target["target_digits"].unsqueeze(0).unsqueeze(0)
-            V_sign = target["target_V_sign"].unsqueeze(0).unsqueeze(0)
-            O = target["target_O"].unsqueeze(0).unsqueeze(0)
-            G = target["target_G"].unsqueeze(0).unsqueeze(0)
+            digit_logits = digit_logits.unsqueeze(0).unsqueeze(0)
+            V_sign = V_sign.unsqueeze(0).unsqueeze(0)
+            O = O.unsqueeze(0).unsqueeze(0)
+            G = G.unsqueeze(0).unsqueeze(0)
 
             # Get final result from DAGExecutor
             dag_result = executor.forward(digit_logits, V_sign, O, G)

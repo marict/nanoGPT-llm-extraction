@@ -14,6 +14,7 @@ def test_dag_generation_determinism(depth: int, seed: int):
         seed=seed,
         max_digits=4,
         max_decimal_places=6,
+        block_size=25,  # Increased to accommodate more expressions
     )
 
     # Generate two identical dataloaders
@@ -21,30 +22,19 @@ def test_dag_generation_determinism(depth: int, seed: int):
     train_loader2, val_loader2 = create_dag_structure_dataloaders(**kwargs)
 
     # Get first batch from each
-    texts1, target_tensors1, valid_mask1 = next(train_loader1)
-    texts2, target_tensors2, valid_mask2 = next(train_loader2)
+    texts1, target_tensors1 = next(train_loader1)
+    texts2, target_tensors2 = next(train_loader2)
 
     # Check that texts are identical
     assert texts1 == texts2
 
-    # Check that valid masks are identical
-    assert torch.equal(valid_mask1, valid_mask2)
-
-    # Check that target tensors are identical (for valid positions)
-    # target_tensors is now a nested list: [batch][time][dict]
+    # Check that target tensors are identical
     assert len(target_tensors1) == len(target_tensors2)
-    for batch_idx, (batch1, batch2) in enumerate(zip(target_tensors1, target_tensors2)):
-        assert len(batch1) == len(batch2), f"Batch {batch_idx} length mismatch"
-        for time_idx, (target1, target2) in enumerate(zip(batch1, batch2)):
-            for key in target1.keys():
-                assert (
-                    key in target2
-                ), f"Missing key {key} in batch {batch_idx}, time {time_idx}"
-                if isinstance(target1[key], torch.Tensor):
-                    assert torch.equal(
-                        target1[key], target2[key]
-                    ), f"Mismatch in {key} for batch {batch_idx}, time {time_idx}"
-                else:
-                    assert (
-                        target1[key] == target2[key]
-                    ), f"Mismatch in {key} for batch {batch_idx}, time {time_idx}"
+    for key in target_tensors1.keys():
+        assert key in target_tensors2, f"Missing key {key}"
+        if isinstance(target_tensors1[key], torch.Tensor):
+            assert torch.equal(
+                target_tensors1[key], target_tensors2[key]
+            ), f"Mismatch in {key}"
+        else:
+            assert target_tensors1[key] == target_tensors2[key], f"Mismatch in {key}"

@@ -92,7 +92,7 @@ def load_checkpoint_and_model(checkpoint_path: Path):
         return None, None, None
 
 
-def test_simple_dag_examples(model, model_args):
+def run_simple_dag_examples(model, model_args):
     """Test the model on simple DAG examples."""
     print(f"\n🧪 Testing simple DAG examples...")
 
@@ -151,7 +151,7 @@ def test_simple_dag_examples(model, model_args):
         print(f"     - Expected result: {item['result']:.6f}")
 
 
-def test_model_forward_pass(model, model_args):
+def run_model_forward_pass(model, model_args):
     """Test the model's forward pass on sample inputs."""
     print(f"\n🧪 Testing model forward pass...")
 
@@ -269,10 +269,10 @@ def main():
         return
 
     # Test simple DAG examples
-    test_simple_dag_examples(model, model_args)
+    run_simple_dag_examples(model, model_args)
 
     # Test model forward pass
-    test_model_forward_pass(model, model_args)
+    run_model_forward_pass(model, model_args)
 
     # Compare with fresh model
     compare_with_fresh_model(model, model_args)
