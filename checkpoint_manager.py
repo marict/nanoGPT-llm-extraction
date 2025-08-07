@@ -362,26 +362,10 @@ class CheckpointManager:
 
     def generate_checkpoint_filename(
         self,
-        config_name: str,
-        iter_num: int,
-        val_acc: float | None = None,
-        is_best: bool = False,
     ) -> str:
         """Generate checkpoint filename based on parameters."""
-        safe_name = "".join(c for c in config_name if c.isalnum() or c in ("-", "_"))
-
-        if is_best:
-            if val_acc is not None:
-                acc_str = f"{val_acc * 100:.2f}acc"
-                return f"ckpt_{safe_name}_best_{acc_str}.pt"
-            else:
-                return f"ckpt_{safe_name}_best.pt"
-        else:
-            if val_acc is not None:
-                acc_str = f"{val_acc * 100:.2f}acc"
-                return f"ckpt_{safe_name}_{iter_num}_{acc_str}.pt"
-            else:
-                return f"ckpt_{safe_name}_{iter_num}.pt"
+        safe_name = "".join(c for c in wandb.run.id if c.isalnum() or c in ("-", "_"))
+        return f"ckpt_{safe_name}.pt"
 
     def save_checkpoint(
         self, checkpoint_data: Dict, filename: str, retries: int = 1
@@ -428,48 +412,14 @@ class CheckpointManager:
                 )
 
     def _save_checkpoint_to_wandb(
-        self, tmp_path: str, filename: str, checkpoint_data: Dict
+        self,
+        tmp_path: str,
+        filename: str,
     ) -> None:
-        """Save checkpoint as W&B artifact."""
+        """Save checkpoint to W&B."""
         try:
-            # Sanitize run name for artifact naming (only alphanumeric, dashes, underscores, dots)
-            run_name = wandb.run.name if wandb.run.name else "unknown"
-            sanitized_run_name = re.sub(r"[^a-zA-Z0-9._-]", "_", run_name)
-
-            # Create artifact name based on checkpoint type
-            if "best" in filename.lower():
-                artifact_name = f"{sanitized_run_name}-best"
-                artifact_type = "best_model"
-            else:
-                # Extract iteration number for regular checkpoints
-                artifact_name = f"{sanitized_run_name}-iter-{checkpoint_data.get('iter_num', 'unknown')}"
-                artifact_type = "checkpoint"
-
-            # Create artifact
-            artifact = wandb.Artifact(
-                name=artifact_name,
-                type=artifact_type,
-                description=f"Model checkpoint: {filename}",
-                metadata={
-                    "filename": filename,
-                    "iteration": checkpoint_data.get("iter_num", None),
-                    "best_val_loss": checkpoint_data.get("best_val_loss", None),
-                    "model_type": (
-                        type(checkpoint_data.get("model_args", None)).__name__
-                        if checkpoint_data.get("model_args")
-                        else None
-                    ),
-                    "run_name": run_name,
-                    "checkpoint_type": self.checkpoint_type,
-                },
-            )
-
-            # Add the checkpoint file to the artifact
-            artifact.add_file(tmp_path, name=filename)
-
-            # Log the artifact
-            wandb.log_artifact(artifact)
-            print(f"📦 Uploaded checkpoint to W&B as {artifact_name}")
+            wandb.save(tmp_path)
+            print(f"📦 Saved checkpoint to W&B: {filename}")
 
         except Exception as e:
             raise CheckpointSaveError(f"Failed to save checkpoint to W&B: {e}") from e

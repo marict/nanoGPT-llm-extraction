@@ -653,9 +653,7 @@ def train(cfg: TrainConfig, wandb_run_id: str | None = None) -> None:
                                 if valid_scores:
                                     val_acc = sum(valid_scores) / len(valid_scores)
 
-                            rel_name = checkpoint_manager.generate_checkpoint_filename(
-                                cfg.name, iter_num, val_acc=val_acc
-                            )
+                            rel_name = checkpoint_manager.generate_checkpoint_filename()
                             checkpoint_filename = f"{safe_run_name}/{rel_name}"
 
                             if master_process:

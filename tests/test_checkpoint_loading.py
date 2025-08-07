@@ -366,29 +366,6 @@ class TestCheckpointLoading:
             assert latest is not None
             assert latest.name == "ckpt_accuracy_test_300_90.15acc.pt"
 
-    def test_dag_checkpoint_filename_with_accuracy(self):
-        """Test that DAG predictor checkpoint filenames include validation accuracy."""
-
-        checkpoint_manager = CheckpointManager("dag")
-        cfg = DAGTrainConfig()
-        cfg.name = "dag_test"
-        iter_num = 1000
-
-        # Test without validation accuracy
-        filename_no_acc = checkpoint_manager.generate_checkpoint_filename(
-            cfg.name, iter_num
-        )
-        expected_no_acc = "ckpt_dag_test_1000.pt"
-        assert filename_no_acc == expected_no_acc
-
-        # Test with validation accuracy (op_accuracy)
-        val_acc = 0.7823  # 78.23%
-        filename_with_acc = checkpoint_manager.generate_checkpoint_filename(
-            cfg.name, iter_num, val_acc=val_acc
-        )
-        expected_with_acc = "ckpt_dag_test_1000_78.23acc.pt"
-        assert filename_with_acc == expected_with_acc
-
 
 class TestCheckpointLoadingIntegration:
     """Integration tests for checkpoint loading with training configurations."""

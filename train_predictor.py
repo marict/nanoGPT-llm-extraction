@@ -317,15 +317,8 @@ def train_predictor(cfg: DAGTrainConfig, wandb_run_id: str | None = None) -> Non
                     # Default behavior: only save on new best validation loss
                     # Override: always save if always_save_checkpoint is enabled
                     if cfg.always_save_checkpoint or is_new_best:
-                        val_acc = eval_metrics.get("op_accuracy", None)
-
                         # Always use unique checkpoint names (no backwards compatibility)
-                        rel_name = checkpoint_manager.generate_checkpoint_filename(
-                            cfg.name,
-                            iter_num,
-                            val_acc=val_acc,
-                            is_best=is_new_best,
-                        )
+                        rel_name = checkpoint_manager.generate_checkpoint_filename()
                         checkpoint_filename = f"{safe_run_name}/{rel_name}"
 
                         if is_new_best:
