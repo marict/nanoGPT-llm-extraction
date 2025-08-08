@@ -2,7 +2,6 @@ import json
 import shlex
 
 from graphql import parse
-
 from runpod_service import _bash_c_quote, _build_training_command, _create_docker_script
 
 

@@ -10,11 +10,11 @@ import traceback
 from contextlib import nullcontext
 from pathlib import Path
 
+import runpod_service
 import torch
 from torch.distributed import destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-import runpod_service
 import training_utils as _tu
 import wandb
 from checkpoint_manager import CheckpointManager

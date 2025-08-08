@@ -18,12 +18,12 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
+import runpod_service
 import tiktoken
 import torch
 from torch.distributed import destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-import runpod_service
 import wandb
 from checkpoint_manager import CheckpointManager
 from data import prepare_dataset
